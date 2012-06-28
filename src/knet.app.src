@@ -1,0 +1,25 @@
+{application, knet,
+   [
+      {description, "konduit network library"},
+      {vsn,         "0.1.1"},
+      {modules,     [
+         knet,
+         knet_tcp,
+         knet_ssl,
+         knet_http,
+         knet_sup,
+         knet_app
+      ]},
+      {registered,  []},
+      {applications,[
+         kernel,
+         stdlib,
+         kcore,
+         pts,
+         feta
+      ]},
+      {mod, {knet_app, []}},
+      {env, []}
+   ]
+}.  
+
