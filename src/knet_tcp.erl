@@ -87,9 +87,9 @@ free(Reason, S) ->
 %%%
 %%%------------------------------------------------------------------
 'IDLE'({{accept,  _Opts}, _Peer}=Msg, Inet) ->
-   {ok, nil, nil, 'ACCEPT', init(Inet, Msg), 0};
+   {next_state, 'ACCEPT', init(Inet, Msg), 0};
 'IDLE'({{connect, _Opts}, _Peer}=Msg, Inet) ->
-   {ok, nil, nil, 'CONNECT', init(Inet, Msg), 0}.
+   {next_state, 'CONNECT', init(Inet, Msg), 0}.
 
 %%%------------------------------------------------------------------
 %%%
@@ -98,7 +98,7 @@ free(Reason, S) ->
 %%%------------------------------------------------------------------
 'LISTEN'({ctrl, Ctrl}, S) ->
    {Val, NS} = ctrl(Ctrl, S),
-   {ok, Val, nil, 'LISTEN', NS}.
+   {reply, Val, 'LISTEN', NS}.
 
 %%%------------------------------------------------------------------
 %%%
@@ -115,8 +115,7 @@ free(Reason, S) ->
          {ok, Addr} = inet:sockname(Sock),
          lager:info("tcp/ip connected ~p, local addr ~p", [Peer, Addr]),
          pns:register(knet, {iid(S#fsm.inet), established, Addr, Peer}, self()),
-         {ok, 
-            nil,
+         {emit, 
             {tcp, Peer, established},
             'ESTABLISHED', 
             S#fsm{
@@ -128,10 +127,10 @@ free(Reason, S) ->
          };
       {error, Reason} ->
          lager:error("tcp/ip connect ~p, error ~p", [{Host, Port}, Reason]),
-         {ok,
-            nil,
+         {emit,
             {tcp, {Host, Port}, {error, Reason}},
-            'IDLE'
+            'IDLE',
+            S
          }
    end.
    
@@ -148,8 +147,7 @@ free(Reason, S) ->
    {ok, Addr} = inet:sockname(Sock),
    lager:info("tcp/ip accepted ~p, local addr ~p", [Peer, Addr]),
    pns:register(knet, {iid(S#fsm.inet), established, Peer}, self()),
-   {ok, 
-      nil,
+   {emit, 
       {tcp, Peer, established},
       'ESTABLISHED', 
       S#fsm{
@@ -166,53 +164,55 @@ free(Reason, S) ->
 %%%------------------------------------------------------------------
 'ESTABLISHED'({ctrl, Ctrl}, S) ->
    {Val, NS} = ctrl(Ctrl, S),
-   {ok, Val, nil, 'ESTABLISHED', NS};
+   {reply, Val, 'ESTABLISHED', NS};
    
-'ESTABLISHED'({tcp_error, _, Reason}, #fsm{peer=Peer}) ->
+'ESTABLISHED'({tcp_error, _, Reason}, #fsm{peer=Peer}=S) ->
    lager:error("tcp/ip error ~p, peer ~p", [Reason, Peer]),
-   {ok,
-      nil,
+   {emit,
       {tcp, Peer, {error, Reason}},
-      'IDLE'
+      'IDLE',
+      S
    };
    
-'ESTABLISHED'({tcp_closed, _}, #fsm{peer=Peer}) ->
+'ESTABLISHED'({tcp_closed, _}, #fsm{peer=Peer}=S) ->
    lager:info("tcp/ip terminated by peer ~p", [Peer]),
-   {ok,
-      nil,
+   {emit,
       {tcp, Peer, terminated},
-      'IDLE'
+      'IDLE',
+      S
    };
 
-'ESTABLISHED'({tcp, _, Data}, #fsm{peer=Peer} = S) ->
+'ESTABLISHED'({tcp, _, Data}, #fsm{peer=Peer}=S) ->
    lager:debug("tcp/ip recv ~p~n~p~n", [Peer, Data]),
    % TODO: flexible flow control
    inet:setopts(S#fsm.sock, [{active, once}]),
-   {ok, 
-      nil, 
-      {tcp, Peer, {recv, Data}}
+   {emit, 
+      {tcp, Peer, {recv, Data}},
+      'ESTABLISHED',
+      S
    };
    
-'ESTABLISHED'({send, _Peer, Data}, #fsm{peer=Peer} = S) ->
+'ESTABLISHED'({send, _Peer, Data}, #fsm{peer=Peer}=S) ->
    lager:debug("tcp/ip send ~p~n~p~n", [Peer, Data]),
    case gen_tcp:send(S#fsm.sock, Data) of
       ok ->
-         ok;
+         {next_state, 'ESTABLISHED', S};
       {error, Reason} ->
          lager:error("tcp/ip error ~p, peer ~p", [Reason, Peer]),
-         {ok,
+         {reply,
             {tcp, Peer, {error, Reason}},
-            nil,
-            'IDLE'
+            'IDLE',
+            S
          }
    end;
    
-'ESTABLISHED'({terminate, _Peer}, #fsm{peer=Peer}) ->
+'ESTABLISHED'({terminate, _Peer}, #fsm{sock=Sock, peer=Peer}=S) ->
    lager:info("tcp/ip terminated to peer ~p", [Peer]),
-   {ok,
+   gen_tcp:close(Sock),
+   {reply,
       {tcp, Peer, terminated},
-      nil,
-      'IDLE'
+      'IDLE',
+      S
    }.   
    
    

@@ -45,7 +45,6 @@
    response,% active response
 
    iolen,   % expected length of data
-   q,       % unflushed messages
 
    opts,    % http protocol options
    buffer   % I/O buffer
@@ -87,8 +86,7 @@ free(_, _) ->
       check_head_ua(UA, Req0)
    ),
    Peer = peer(Uri, Opts),
-   {ok,
-      nil,
+   {emit, 
       {{connect, []}, Peer},
       'IDLE',
       S#fsm{
@@ -101,16 +99,15 @@ free(_, _) ->
 
 'IDLE'({_Prot, Peer, {error, Reason}}, #fsm{request={_, Uri}}=S) ->
    lager:warning("http couldn't connect to peer ~p, error ~p", [Peer, Reason]),
-   {ok,
-      nil,
-      {http, Uri, {error, Reason}},  % indicate to client
-      'IDLE'
+   {emit,
+      {http, Uri, {error, Reason}},
+      'IDLE',
+      S
    };
    
 'IDLE'({_Prot, Peer, established}, S) ->
-   {ok,
+   {reply,
       {send, Peer, encode_packet(S)},
-      nil,
       'REQUESTED',
       S,
       ?T_SERVER
@@ -132,8 +129,7 @@ free(_, _) ->
       iolen  = 0,
       buffer = <<>>
    },
-   {ok,
-      nil,
+   {emit,
       {send, Peer, encode_packet(NS)},
       'REQUESTED',
       NS,
@@ -152,14 +148,14 @@ free(_, _) ->
    % TODO: error handling policy
    % TODO: {ok, {http_error, ...}}
    case erlang:decode_packet(http_bin, Buf, []) of
-      {more, _}       -> ok;
+      {more, _}       -> {next_state, 'REQUESTED', S, ?T_SERVER};
       {error, Reason} -> {error, Reason};
       {ok, Req, Chunk}-> 'REQUESTED'(Req, S#fsm{buffer=Chunk})
    end;
 
 'REQUESTED'({http_response, _Vsn, Code, Msg}, #fsm{request={{Method, _}, Uri}}=S) ->
    lager:debug("http ~p ~p ~p ~p", [Method, Uri, Code, Msg]), 
-   'RESPONSE'(io, S#fsm{q=[], response={Code, []}}).
+   'RESPONSE'(io, S#fsm{response={Code, []}}).
 
 %%%------------------------------------------------------------------
 %%%
@@ -173,7 +169,7 @@ free(_, _) ->
    % TODO: error handling policy
    % TODO: {ok, {http_error, ...}}  
    case erlang:decode_packet(httph_bin, Buf, []) of
-      {more, _}       -> ok;
+      {more, _}       -> {next_state, 'RESPONSE', S};
       {error, Reason} -> {error, Reason};
       {ok, Req, Rest} -> 'RESPONSE'(Req, S#fsm{buffer=Rest})
    end;
@@ -189,12 +185,23 @@ free(_, _) ->
 
 'RESPONSE'(http_eoh, #fsm{request={_, Uri}, response=Rsp, iolen=0}=S) ->
    % expected length of response is not known, stream it
-   'STREAM'(io, S#fsm{q=[{http, Uri, Rsp}]});
+   {send, 
+      nil,               %% Reply
+      {http, Uri, Rsp},  %% Next
+      io,                %% Self
+      'STREAM',
+      S
+   };
 
 'RESPONSE'(http_eoh, #fsm{request={_, Uri}, response=Rsp}=S) ->
    % exprected length of response is know, receive it
-   'RECV'(io, S#fsm{q=[{http, Uri, Rsp}]}).
-
+   {send,
+      nil,               %% Reply
+      {http, Uri, Rsp},  %% Next
+      io,                %% Self 
+      'RECV', 
+      S
+   }.
 
 
 %%%------------------------------------------------------------------
@@ -205,29 +212,24 @@ free(_, _) ->
 'RECV'({_Prot, _Peer, {recv, Data}}, #fsm{buffer=Buf}=S) ->
    'RECV'(io, S#fsm{buffer = <<Buf/binary, Data/binary>>});
 
-'RECV'(io, #fsm{q=[], buffer = <<>>}) ->
-   ok;
-'RECV'(io, #fsm{q=Q, buffer = <<>>}=S) ->
-   {ok, nil, lists:reverse(Q), 'RECV', S#fsm{q=[]}};
-'RECV'(io, #fsm{request={_, Uri}, response=Rsp, iolen=Len, buffer=Chunk, q=Q}=S) ->
+'RECV'(io, #fsm{buffer = <<>>}=S) ->
+   {next_state, 'RECV', S};
+'RECV'(io, #fsm{request={_, Uri}, response=Rsp, iolen=Len, buffer=Chunk}=S) ->
    case size(Chunk) of
       Size when Size >= Len ->
          <<Chnk:Len/binary, _/binary>> = Chunk,
-         {ok, 
-            nil, 
-            lists:reverse([{http, Uri, eof}, {http, Uri, {recv, Chnk}} | Q]), 
+         {emit, 
+            [{http, Uri, {recv, Chnk}}, {http, Uri, eof}],
             'CONNECTED', 
-            S#fsm{q=[]}
+            S#fsm{buffer= <<>>}
          };
       Size when Size < Len ->
-         {ok, 
-            nil,
-            lists:reverse([{http, Uri, {recv, Chunk}} | Q]),
+         {emit, 
+            {http, Uri, {recv, Chunk}},
             'RECV',
             S#fsm{
                iolen = Len - size(Chunk), 
-               buffer= <<>>, 
-               q     = []
+               buffer= <<>>
             }
          }
    end.
@@ -235,26 +237,24 @@ free(_, _) ->
 
 %%%------------------------------------------------------------------
 %%%
-%%% RESPONSE
+%%% STREAM
 %%%
-% %%%------------------------------------------------------------------ 
+%%%------------------------------------------------------------------ 
 'STREAM'({_Prot, _Peer, {recv, Data}}, #fsm{buffer=Buf}=S) ->
    'STREAM'(io, S#fsm{buffer = <<Buf/binary, Data/binary>>});
 
-'STREAM'(io, #fsm{q=[], buffer = <<>>}) ->
-   ok;
-'STREAM'(io, #fsm{q=Q, buffer = <<>>}=S) ->
-   {ok, nil, lists:reverse(Q), 'STREAM', S#fsm{q=[]}};
-'STREAM'(io, #fsm{request={_, Uri}, buffer=Buf, q=Q}=S) ->
+'STREAM'(io, #fsm{buffer = <<>>}=S) ->
+   {next_state, 'STREAM', S};
+'STREAM'(io, #fsm{request={_, Uri}, buffer=Buf}=S) ->
    case binary:split(Buf, <<"\r\n">>) of  
       [_]          -> 
-         ok;
+         {next_state, 'STREAM', S};
       [Head, Data] -> 
          [L |_] = binary:split(Head, [<<" ">>, <<";">>]),
          Len    = list_to_integer(binary_to_list(L), 16),
          if
             Len =:= 0 ->
-               {ok, nil, lists:reverse([{http, Uri, eof} | Q]), 'CONNECTED', S#fsm{q=[]}};
+               {emit, {http, Uri, eof}, 'CONNECTED', S};
             true      ->
                'CHUNK'(io, S#fsm{iolen=Len, buffer=Data})
          end
@@ -264,21 +264,27 @@ free(_, _) ->
 'CHUNK'({_Prot, _Peer, {recv, Data}}, #fsm{buffer=Buf}=S) ->
    'CHUNK'(io, S#fsm{buffer = <<Buf/binary, Data/binary>>});
 
-'CHUNK'(io, #fsm{q=[], buffer = <<>>}) ->
-   ok;
-'CHUNK'(io, #fsm{q=Q, buffer = <<>>}=S) ->
-   {ok, nil, lists:reverse(Q), 'CHUNK', S#fsm{q=[]}};
-'CHUNK'(io, #fsm{request={_, Uri}, response=Rsp, iolen=Len, buffer=Chunk, q=Q}=S) ->
+'CHUNK'(io, #fsm{buffer = <<>>}=S) ->
+   {next_state, 'CHUNK', S};
+'CHUNK'(io, #fsm{request={_, Uri}, response=Rsp, iolen=Len, buffer=Chunk}=S) ->
    case size(Chunk) of
       Size when Size >= Len ->
          <<Chnk:Len/binary, $\r, $\n, Rest/binary>> = Chunk,
-         'STREAM'(io, S#fsm{buffer=Rest, q=[{http, Uri, {recv, Chnk}} | Q]});
+         {send,
+            nil,                       %% Reply
+            {http, Uri, {recv, Chnk}}, %% Next
+            io,                        %% Self
+            'STREAM',
+            S#fsm{buffer = Rest}
+         };
       Size when Size < Len ->
-         {ok, 
-            nil, 
-            lists:reverse([{http, Uri, {recv, Chunk}} | Q]), 
+         {emit, 
+            {http, Uri, {recv, Chunk}}, 
             'CHUNK', 
-            S#fsm{iolen=Len - size(Chunk), buffer= <<>>, q=[]}
+            S#fsm{
+               iolen=Len - size(Chunk), 
+               buffer= <<>>
+            }
          }
    end.
  
