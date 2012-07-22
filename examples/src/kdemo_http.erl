@@ -14,27 +14,47 @@
 %%   See the License for the specific language governing permissions and
 %%   limitations under the License.
 %%
--module(kdemo_tcp).
+-module(kdemo_http).
 -author('Dmitry Kolesnikov <dmkolesnikov@gmail.com>').
 -author('Mario Cardona <marioxcardona@gmail.com>').
 
 %%
 %% console api
--export([server/1]).
+-export([server/1, get/1]).
 %% fsm api
 -export([init/1, free/2, 'IDLE'/2, 'ECHO'/2]).
+
+-define(APP, kdemo).
 
 %%
 %%
 server(Port) ->
-   kdemo_util:start(),
-   % start listener chain
-   konduit:start_link([
-      [{knet_tcp, [inet, {listen, Port, []}]}]
-   ]),
+   lager:start(),
+   knet:start(),
+   lager:set_loglevel(lager_console_backend, debug),
+   % start listener
+   {ok, _} = konduit:start_link({fabric, nil, nil, [
+      {knet_tcp, [inet, {{listen, []}, {any, Port}}]}
+   ]}),
    % spawn acceptor pool
    [ acceptor(Port) || _ <- lists:seq(1,2) ],
    ok.
+
+%%
+%%
+get(Uri) ->
+   lager:start(),
+   knet:start(),
+   lager:set_loglevel(lager_console_backend, debug),
+   {ok, Pid} = konduit:start_link({fabric, undefined, self(),
+      [
+         {knet_tcp,   [inet]}, 
+         {knet_httpc, [[]]}  
+      ]
+   }),
+   UA = <<"curl/7.21.4 (universal-apple-darwin11.0) libcurl/7.21.4 OpenSSL/0.9.8r zlib/1.2.5">>,
+   konduit:send(Pid, {{'GET', [{'User-Agent', UA}, {'Accept', <<"*/*">>}]}, Uri}).
+
 
 %%%------------------------------------------------------------------
 %%%
@@ -42,12 +62,13 @@ server(Port) ->
 %%%
 %%%------------------------------------------------------------------
 acceptor(Port) ->
-   konduit:start_link([
+   konduit:start({fabric, nil, nil,
       [
          {knet_tcp, [inet]}, % TCP/IP fsm
+         {knet_httpd, [[]]}, % HTTP   fsm
          {?MODULE,  [Port]}  % ECHO   fsm
       ]
-   ]).
+   }).
 
 
 %%%------------------------------------------------------------------
@@ -57,7 +78,7 @@ acceptor(Port) ->
 %%%------------------------------------------------------------------
 init([Port]) ->
    % initialize echo process
-   io:format('echo ~p: new ~p~n', [self(), Port]),
+   lager:info("echo new process ~p, port ~p", [self(), Port]),
    {ok, 
       'IDLE',     % initial state is idle
       {Port, 0},  % state is {Port, Counter}
@@ -69,31 +90,40 @@ free(_, _) ->
 
 'IDLE'(timeout, {Port, _}) ->
    {ok, 
-      {accept, Port, []},  % issue accept request to TCP/IP
+      {{accept, []}, Port},  % issue accept request to HTTP
       nil,
       'ECHO'
    }.
 
-'ECHO'({tcp, established, Peer}, {Port, _}) ->
-   io:format('echo ~p: established ~p~n', [self(), Peer]),
+'ECHO'({http, Uri, {Method, H}}, {Port, Cnt}) ->
+   lager:info("echo ~p: ~p ~p", [self(), Method, Uri]),
    %% acceptor is consumed run a new one
    acceptor(Port),
-   ok;
-
-'ECHO'({tcp, recv, Peer, Data}, {Port, Cnt}) ->
-   io:format('echo ~p: ~p data ~p~n', [self(), Peer, Data]),
    {ok, 
-      {tcp, send, Peer, Data},   %% echo received data
-      nil,            %% message to emit on sideB
-      'ECHO',         %% name of next state
-      {Port, Cnt + 1},%% pdate internal state
-      5000            %% fire timeout event after 
+      {{200, H}, Uri},   % echo received header
+      nil,               %
+      'ECHO',            % 
+      {Port, Cnt + 1},   % 
+      5000               % 
+   };
+
+'ECHO'({http, Uri, {recv, Msg}}, S) ->
+   lager:info("echo ~p: ~p data ~p", [self(), Uri, Msg]),
+   {ok,
+      {send, Uri, Msg},   
+      nil,
+      'ECHO',
+      S,
+      5000
    };
 
 'ECHO'(timeout, {_, Cnt}) ->
-   io:format('echo ~p: processed ~p~n', [self(), Cnt]),
-   stop;              %% terminate fsm 
+   lager:info("echo ~p: processed ~p", [self(), Cnt]),
+   stop.
 
-'ECHO'(M, _) ->
-   io:format('mmmm: ~p~n', [M]),
-   ok.
+
+
+
+
+
+

@@ -14,21 +14,14 @@
 %%   See the License for the specific language governing permissions and
 %%   limitations under the License.
 %%
-%%  @description
-%%     
+%%   @description
+%%      tcp/ip client/server konduit  
 %%
 -module(knet_tcp).
 -author('Dmitry Kolesnikov <dmkolesnikov@gmail.com>').
 -author('Mario Cardona <marioxcardona@gmail.com>').
 
-%%
-%% client/server tcp/ip konduit
-%%
-%-define(DEBUG, true).
-
 -behaviour(konduit).
--include("knet.hrl").
-
 
 -export([init/1, free/2]).
 -export(['IDLE'/2, 'LISTEN'/2, 'CONNECT'/2, 'ACCEPT'/2, 'ESTABLISHED'/2]).
@@ -64,13 +57,13 @@
 
 %%
 %%
-init([Inet, {listen, _, _}=Msg]) ->
+init([Inet, {{listen, _Opts}, _Peer}=Msg]) ->
    {ok, 'LISTEN', init(Inet, Msg)}; 
 
-init([Inet, {accept, _, _}=Msg]) ->
+init([Inet, {{accept, _Opts}, _Peer}=Msg]) ->
    {ok, 'ACCEPT', init(Inet, Msg), 0};
 
-init([Inet, {connect, _, _}=Msg]) ->
+init([Inet, {{connect, _Opts}, _Peer}=Msg]) ->
    {ok, 'CONNECT', init(Inet, Msg), 0};
 
 init([Inet]) ->
@@ -79,18 +72,23 @@ init([Inet]) ->
 %%
 %%
 free(Reason, S) ->
-   ?DEBUG([{terminated, S#fsm.peer}, {reason, Reason}]),
-   gen_tcp:close(S#fsm.sock),
-   ok.
-
+   case erlang:port_info(S#fsm.sock) of
+      undefined -> 
+         % socket is not active
+         ok;
+      _ ->
+         lager:info("tcp/ip terminated ~p, reason ~p", [S#fsm.peer, Reason]),
+         gen_tcp:close(S#fsm.sock)
+   end.
+  
 %%%------------------------------------------------------------------
 %%%
 %%% IDLE: allows to chain TCP/IP konduit
 %%%
 %%%------------------------------------------------------------------
-'IDLE'({accept, _, _}=Msg, Inet) ->
+'IDLE'({{accept,  _Opts}, _Peer}=Msg, Inet) ->
    {ok, nil, nil, 'ACCEPT', init(Inet, Msg), 0};
-'IDLE'({connect, _, _}=Msg, Inet) ->
+'IDLE'({{connect, _Opts}, _Peer}=Msg, Inet) ->
    {ok, nil, nil, 'CONNECT', init(Inet, Msg), 0}.
 
 %%%------------------------------------------------------------------
@@ -100,28 +98,26 @@ free(Reason, S) ->
 %%%------------------------------------------------------------------
 'LISTEN'({ctrl, Ctrl}, S) ->
    {Val, NS} = ctrl(Ctrl, S),
-   {ok, Val, nil, 'LISTEN', NS};
-'LISTEN'(_, _) ->
-   ok.
+   {ok, Val, nil, 'LISTEN', NS}.
 
 %%%------------------------------------------------------------------
 %%%
 %%% CONNECT
 %%%
 %%%------------------------------------------------------------------
-'CONNECT'(timeout, #fsm{peer = {IP, Port}, opts = Opts} = S) ->
-   % connect socket
+'CONNECT'(timeout, #fsm{peer={Host, Port}, opts=Opts} = S) ->
+   % socket connect timeout
    T = proplists:get_value(timeout, S#fsm.opts, ?T_CONNECT),    
    % TODO: overwrite default sock opts with user 
-   case gen_tcp:connect(IP, Port, ?SOCK_OPTS ++ Opts, T) of
+   case gen_tcp:connect(check_host(Host), Port, ?SOCK_OPTS ++ Opts, T) of
       {ok, Sock} ->
          {ok, Peer} = inet:peername(Sock),
          {ok, Addr} = inet:sockname(Sock),
-         ?DEBUG([connected, {addr, Addr}, {peer, Peer}]),
+         lager:info("tcp/ip connected ~p, local addr ~p", [Peer, Addr]),
          pns:register(knet, {iid(S#fsm.inet), established, Addr, Peer}, self()),
          {ok, 
             nil,
-            {tcp, established, Peer},
+            {tcp, Peer, established},
             'ESTABLISHED', 
             S#fsm{
                role = client,
@@ -131,7 +127,12 @@ free(Reason, S) ->
             }
          };
       {error, Reason} ->
-         {error, Reason}
+         lager:error("tcp/ip connect ~p, error ~p", [{Host, Port}, Reason]),
+         {ok,
+            nil,
+            {tcp, {Host, Port}, {error, Reason}},
+            'IDLE'
+         }
    end.
    
 
@@ -145,11 +146,11 @@ free(Reason, S) ->
    {ok, Sock} = gen_tcp:accept(LSock),
    {ok, Peer} = inet:peername(Sock),
    {ok, Addr} = inet:sockname(Sock),
-   ?DEBUG([acceped, {addr, Addr}, {peer, Peer}]),
+   lager:info("tcp/ip accepted ~p, local addr ~p", [Peer, Addr]),
    pns:register(knet, {iid(S#fsm.inet), established, Peer}, self()),
    {ok, 
       nil,
-      {tcp, established, Peer},
+      {tcp, Peer, established},
       'ESTABLISHED', 
       S#fsm{
          sock = Sock,
@@ -167,30 +168,52 @@ free(Reason, S) ->
    {Val, NS} = ctrl(Ctrl, S),
    {ok, Val, nil, 'ESTABLISHED', NS};
    
-'ESTABLISHED'({tcp_error, _, Err}, #fsm{peer = Peer} = S) ->
-   ?DEBUG([Peer, {error, Err}]),
-   %konduit:emit(Kpid, {tcp, {error, Err}, Peer}, Sink),
-   {error, Err};
+'ESTABLISHED'({tcp_error, _, Reason}, #fsm{peer=Peer}) ->
+   lager:error("tcp/ip error ~p, peer ~p", [Reason, Peer]),
+   {ok,
+      nil,
+      {tcp, Peer, {error, Reason}},
+      'IDLE'
+   };
    
-'ESTABLISHED'({tcp_closed, _}, #fsm{peer = Peer} = S) ->
-   ?DEBUG([Peer, terminated]),
-   %{stop, konduit:emit(Kpid, {tcp, terminated, Peer}, Sink)};
-   stop;
+'ESTABLISHED'({tcp_closed, _}, #fsm{peer=Peer}) ->
+   lager:info("tcp/ip terminated by peer ~p", [Peer]),
+   {ok,
+      nil,
+      {tcp, Peer, terminated},
+      'IDLE'
+   };
 
-'ESTABLISHED'({tcp, _, Data}, #fsm{peer = Peer} = S) ->
-   ?DEBUG([Peer, {recv, Data}]),
+'ESTABLISHED'({tcp, _, Data}, #fsm{peer=Peer} = S) ->
+   lager:debug("tcp/ip recv ~p~n~p~n", [Peer, Data]),
    % TODO: flexible flow control
    inet:setopts(S#fsm.sock, [{active, once}]),
-   {ok, nil, {tcp, recv, Peer, Data}};
+   {ok, 
+      nil, 
+      {tcp, Peer, {recv, Data}}
+   };
    
-'ESTABLISHED'({tcp, send, _Peer, Data}, S) ->
-   ?DEBUG([S#fsm.peer, {send, Data}]),
-   % gen_tcp:send(...) -> ok | {error, Reason} 
-   % if socket cannot send data then whole machine is terminated
-   gen_tcp:send(S#fsm.sock, Data);
+'ESTABLISHED'({send, _Peer, Data}, #fsm{peer=Peer} = S) ->
+   lager:debug("tcp/ip send ~p~n~p~n", [Peer, Data]),
+   case gen_tcp:send(S#fsm.sock, Data) of
+      ok ->
+         ok;
+      {error, Reason} ->
+         lager:error("tcp/ip error ~p, peer ~p", [Reason, Peer]),
+         {ok,
+            {tcp, Peer, {error, Reason}},
+            nil,
+            'IDLE'
+         }
+   end;
    
-'ESTABLISHED'(terminate, _S) ->
-   stop.   
+'ESTABLISHED'({terminate, _Peer}, #fsm{peer=Peer}) ->
+   lager:info("tcp/ip terminated to peer ~p", [Peer]),
+   {ok,
+      {tcp, Peer, terminated},
+      nil,
+      'IDLE'
+   }.   
    
    
 %%%------------------------------------------------------------------
@@ -201,9 +224,9 @@ free(Reason, S) ->
 
 %%
 %% initializes konduit
-init(Inet, {listen, Addr, Opts}) when is_integer(Addr) ->
-   init(Inet, {listen, {any, Addr}, Opts}); 
-init(Inet, {listen, Addr, Opts}) ->
+init(Inet, {{listen, Opts}, Addr}) when is_integer(Addr) ->
+   init(Inet, {{listen, Opts}, {any, Addr}}); 
+init(Inet, {{listen, Opts}, Addr}) ->
    % start tcp/ip listener
    {IP, Port}  = Addr,
    {ok, LSock} = gen_tcp:listen(Port, [
@@ -212,7 +235,7 @@ init(Inet, {listen, Addr, Opts}) ->
       {reuseaddr, true} | ?SOCK_OPTS
    ]),
    pns:register(knet, {iid(Inet), listen, Addr}, self()),
-   ?DEBUG([{listen, Addr}]),
+   lager:info("tcp/ip listen on ~p", [Addr]),
    #fsm{
       role = server,
       inet = Inet,
@@ -221,13 +244,13 @@ init(Inet, {listen, Addr, Opts}) ->
       opts = Opts
    };
 
-init(Inet, {accept, Addr, Opts}) when is_integer(Addr) ->
-   init(Inet, {accept, {any, Addr}, Opts}); 
-init(Inet, {accept, Addr, Opts}) ->
+init(Inet, {{accept, Opts}, Addr}) when is_integer(Addr) ->
+   init(Inet, {{accept, Opts}, {any, Addr}}); 
+init(Inet, {{accept, Opts}, Addr}) ->
    % start tcp/ip acceptor
    LPid = pns:whereis(knet, {iid(Inet), listen, Addr}),
-   {ok, LSock} = knet:ctrl(LPid, socket),  
-   ?DEBUG([{accept, Addr}, {sock, LSock}]),
+   {ok, LSock} = knet:ctrl(LPid, socket),
+   lager:info("tcp/ip accepting ~p (~p)", [Addr, LSock]),
    #fsm{
       role = server,
       inet = Inet,
@@ -236,7 +259,7 @@ init(Inet, {accept, Addr, Opts}) ->
       opts = Opts
    };
 
-init(Inet, {connect, Peer, Opts}) ->
+init(Inet, {{connect, Opts}, Peer}) ->
    % start tcp/ip client
    #fsm{
       role = client,
@@ -251,13 +274,21 @@ init(Inet, {connect, Peer, Opts}) ->
 iid(inet)  -> tcp4;
 iid(inet6) -> tcp6. 
 
-   
+%%
+%% 
+check_host(Host) when is_binary(Host) ->
+   binary_to_list(Host);
+check_host(Host) ->
+   Host.   
+
 %%%------------------------------------------------------------------   
 %%%
 %%% ctrl
 %%%
 %%%------------------------------------------------------------------
 
+%%
+%% konduit ioctrl
 ctrl(address, S) ->
    {{S#fsm.addr, S#fsm.peer}, S};
 
@@ -267,6 +298,4 @@ ctrl(socket, S) ->
 ctrl(_, S) ->
    {nil, S}.
    
-%epoch() ->
-%   {Mega, Sec, Micro} = erlang:now(),
-%   (Mega * 1000000 + Sec) * 1000000 + Micro.   
+

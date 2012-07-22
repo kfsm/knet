@@ -1,13 +1,16 @@
 {application, knet,
    [
       {description, "konduit network library"},
-      {vsn,         "0.2.0"},
+      {vsn,         "0.3.0"},
       {modules,     [
          knet,
          knet_tcp,
-         knet_ssl,
-         knet_http,
-         knet_sup,
+         % knet_ssl,
+         knet_uri,
+         knet_http_io,
+         knet_httpc,
+         knet_httpd,
+         % knet_sup,
          knet_app
       ]},
       {registered,  []},
@@ -15,7 +18,6 @@
          kernel,
          stdlib,
          pts,
-         feta,
          konduit
       ]},
       {mod, {knet_app, []}},

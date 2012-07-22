@@ -1,28 +1,33 @@
-%% @author     Dmitry Kolesnikov, <dmkolesnikov@gmail.com>
-%% @copyright  (c) 2012 Dmitry Kolesnikov. All Rights Reserved
 %%
-%%    Licensed under the 3-clause BSD License (the "License");
-%%    you may not use this file except in compliance with the License.
-%%    You may obtain a copy of the License at
+%%   Copyright 2012 Dmitry Kolesnikov, All Rights Reserved
+%%   Copyright 2012 Mario Cardona, All Rights Reserved
 %%
-%%         http://www.opensource.org/licenses/BSD-3-Clause
+%%   Licensed under the Apache License, Version 2.0 (the "License");
+%%   you may not use this file except in compliance with the License.
+%%   You may obtain a copy of the License at
 %%
-%%    Unless required by applicable law or agreed to in writing, software
-%%    distributed under the License is distributed on an "AS IS" BASIS,
-%%    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-%%    See the License for the specific language governing permissions and
-%%    limitations under the License
+%%       http://www.apache.org/licenses/LICENSE-2.0
 %%
-%% @description
-%%    http i/o stream utility 
+%%   Unless required by applicable law or agreed to in writing, software
+%%   distributed under the License is distributed on an "AS IS" BASIS,
+%%   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%%   See the License for the specific language governing permissions and
+%%   limitations under the License.
 %%
-%%    filter(Stream, Filter, Event) -> ok | {ok, Rest} | {error, ...}    
-%%
+%%  @description
+%%     common http I/O routines
 -module(knet_http_io).
--author("Dmitry Kolesnikov <dmkolesnikov@gmail.com>").
--include("knet.hrl").
+-author('Dmitry Kolesnikov <dmkolesnikov@gmail.com>').
+-author('Mario Cardona <marioxcardona@gmail.com>').
 
--export([identity/0, buffer/1, chunked/0, filter/3]).
+%-export([identity/0, buffer/1, chunked/0, filter/3]).
+
+%%
+%%
+%buffer(Len) ->
+
+
+
 
 %%
 %%

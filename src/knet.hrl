@@ -16,6 +16,7 @@
 %%  USA or retrieve online http://www.opensource.org/licenses/xxx
 %%
 
+-define(DEBUG, true).
 
 %%
 %%

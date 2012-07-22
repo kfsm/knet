@@ -3,11 +3,9 @@
       {description, "konduit demo"},
       {vsn,         "0.1.0"},
       {modules,     [
-         kdemo_tcp,
-         kdemo_ssl,
-         kdemo_http,
-         kdemo_util,
-         kdemo_app
+         kdemo_tcp
+         % kdemo_ssl,
+         % kdemo_http,
       ]},
       {registered,  []},
       {applications,[
@@ -15,7 +13,7 @@
          stdlib,
          pts, 
          feta,
-         kcore,
+         konduit,
          knet
       ]},
       {mod, {kdemo_app, []}},

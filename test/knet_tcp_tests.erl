@@ -22,27 +22,42 @@
 
 -define(DATA, <<"0123456789abcdef">>).
 
-%%%------------------------------------------------------------------
-%%%
-%%% tcp/ip server test
-%%%
-%%%------------------------------------------------------------------
-ksrv(init, []) -> 
+%%
+%% tcp/ip loop
+loop(init, []) -> 
    {ok, undefined};
-ksrv({tcp, recv, Peer, Data}, _) ->
+loop({tcp, Peer, {recv, Data}}, _) ->
    {stop,
-      {tcp, send, Peer, Data},
+      {send, Peer, Data},
       nil
    };
-ksrv(_, _) ->
+loop(_, _) ->
    ok.
 
+%%
+%% spawn tcp/ip server
+tcp_srv(Addr) ->
+   knet:start(),
+   % start listener konduit
+   {ok, _} = case pns:whereis(knet, {tcp4, listen, Addr}) of
+      undefined ->
+         konduit:start_link({fabric, nil, nil, [
+            {knet_tcp, [inet, {{listen, []}, Addr}]}
+         ]});   
+      Pid -> 
+         {ok, Pid}
+   end,
+   % start acceptor
+   {ok, _} = konduit:start_link({fabric, nil, nil, [
+      {knet_tcp,   [inet, {{accept, []}, Addr}]},
+      {fun loop/2, []}
+   ]}).
 
-server_test() ->
-   application:start(pts),
-   application:start(kcore),
-   application:start(knet),
-   knet:listen({tcp4, {any, 8080}}, [{handler, fun ksrv/2}]),
+%%
+%%
+server_fsm_test() ->
+   tcp_srv({any, 8080}),
+   % start client-side test 
    {ok, Sock} = gen_tcp:connect(
    	{127,0,0,1}, 
    	8080, 
@@ -52,22 +67,17 @@ server_test() ->
    {ok, ?DATA} = gen_tcp:recv(Sock, 0),
    gen_tcp:close(Sock).
 
-client_test() ->
-   application:start(pts),
-   application:start(kcore),
-   application:start(knet),
-   knet:listen({tcp4, {any, 8080}}, [{handler, fun ksrv/2}]),
-   Self = self(),
-   {ok, Pid} = knet:connect({tcp4, {{127,0,0,1}, 8080}}, [
-   	{handler, fun(init, _) -> {ok, Self}; (X, Pid) -> erlang:send(Pid, X), ok end}
-   ]),
-   receive
-   	{tcp, established, _} -> ok
-   end,
-   erlang:send(Pid, {tcp, send, nil, ?DATA}),
-   receive
-   	{tcp, recv, _, ?DATA} -> ok
-   end,
+
+client_fsm_test() ->
+   tcp_srv({any, 8080}),
+   Peer = {{127,0,0,1}, 8080},
+   {ok, Pid} = konduit:start_link({fabric, nil, self(), [
+      {knet_tcp, [inet, {{connect, []}, Peer}]}
+   ]}),
+   {tcp, Peer, established} = konduit:recv(Pid),
+   konduit:send(Pid, {send, Peer, ?DATA}),
+   {tcp, Peer, {recv, ?DATA}} = konduit:recv(Pid),
+   {tcp, Peer, terminated} = konduit:recv(Pid),
    ok.
 
 
