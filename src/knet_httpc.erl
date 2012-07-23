@@ -31,7 +31,6 @@
    'REQUESTED'/2,  %% server is requested
    'RESPONSE'/2,   %% server is responding
    'STREAM'/2,     %% payload is streamed (chunked)
-   'CHUNK'/2,      %% receive chunk
    'RECV'/2        %% payload is received
 ]). 
 
@@ -45,6 +44,7 @@
    response,% active response
 
    iolen,   % expected length of data
+   pckt,    % number of processed payload chunks
 
    opts,    % http protocol options
    buffer   % I/O buffer
@@ -142,20 +142,7 @@ free(_, _) ->
 %%%
 %%%------------------------------------------------------------------ 
 'REQUESTED'({_Prot, _Peer, {recv, Chunk}}, #fsm{buffer=Buf}=S) ->
-   'REQUESTED'(io, S#fsm{buffer = <<Buf/binary, Chunk/binary>>});
-
-'REQUESTED'(io, #fsm{buffer=Buf}=S) ->   
-   % TODO: error handling policy
-   % TODO: {ok, {http_error, ...}}
-   case erlang:decode_packet(http_bin, Buf, []) of
-      {more, _}       -> {next_state, 'REQUESTED', S, ?T_SERVER};
-      {error, Reason} -> {error, Reason};
-      {ok, Req, Chunk}-> 'REQUESTED'(Req, S#fsm{buffer=Chunk})
-   end;
-
-'REQUESTED'({http_response, _Vsn, Code, Msg}, #fsm{request={{Method, _}, Uri}}=S) ->
-   lager:debug("http ~p ~p ~p ~p", [Method, Uri, Code, Msg]), 
-   'RESPONSE'(io, S#fsm{response={Code, []}}).
+   parse_status_line(S#fsm{buffer = <<Buf/binary, Chunk/binary>>}).
 
 %%%------------------------------------------------------------------
 %%%
@@ -163,46 +150,7 @@ free(_, _) ->
 %%%
 %%%------------------------------------------------------------------ 
 'RESPONSE'({_Prot, _Peer, {recv, Chunk}}, #fsm{buffer=Buf}=S) ->
-   'RESPONSE'(io, S#fsm{buffer = <<Buf/binary, Chunk/binary>>});
-
-'RESPONSE'(io, #fsm{buffer=Buf}=S) -> 
-   % TODO: error handling policy
-   % TODO: {ok, {http_error, ...}}  
-   case erlang:decode_packet(httph_bin, Buf, []) of
-      {more, _}       -> {next_state, 'RESPONSE', S};
-      {error, Reason} -> {error, Reason};
-      {ok, Req, Rest} -> 'RESPONSE'(Req, S#fsm{buffer=Rest})
-   end;
-
-'RESPONSE'({http_header, _I, 'Content-Length'=Head, _R, Val}, 
-           #fsm{response={Code, Heads}}=S) ->
-   Len = list_to_integer(binary_to_list(Val)),
-   'RESPONSE'(io, S#fsm{response={Code, [{Head, Len} | Heads]}, iolen=Len});
-
-'RESPONSE'({http_header, _I, Head, _R, Val},
-           #fsm{response={Code, Heads}}=S) ->
-   'RESPONSE'(io, S#fsm{response={Code, [{Head, Val} | Heads]}});
-
-'RESPONSE'(http_eoh, #fsm{request={_, Uri}, response=Rsp, iolen=0}=S) ->
-   % expected length of response is not known, stream it
-   {send, 
-      nil,               %% Reply
-      {http, Uri, Rsp},  %% Next
-      io,                %% Self
-      'STREAM',
-      S
-   };
-
-'RESPONSE'(http_eoh, #fsm{request={_, Uri}, response=Rsp}=S) ->
-   % exprected length of response is know, receive it
-   {send,
-      nil,               %% Reply
-      {http, Uri, Rsp},  %% Next
-      io,                %% Self 
-      'RECV', 
-      S
-   }.
-
+   parse_header(S#fsm{buffer = <<Buf/binary, Chunk/binary>>}).
 
 %%%------------------------------------------------------------------
 %%%
@@ -210,29 +158,7 @@ free(_, _) ->
 %%%
 %%%------------------------------------------------------------------ 
 'RECV'({_Prot, _Peer, {recv, Data}}, #fsm{buffer=Buf}=S) ->
-   'RECV'(io, S#fsm{buffer = <<Buf/binary, Data/binary>>});
-
-'RECV'(io, #fsm{buffer = <<>>}=S) ->
-   {next_state, 'RECV', S};
-'RECV'(io, #fsm{request={_, Uri}, response=Rsp, iolen=Len, buffer=Chunk}=S) ->
-   case size(Chunk) of
-      Size when Size >= Len ->
-         <<Chnk:Len/binary, _/binary>> = Chunk,
-         {emit, 
-            [{http, Uri, {recv, Chnk}}, {http, Uri, eof}],
-            'CONNECTED', 
-            S#fsm{buffer= <<>>}
-         };
-      Size when Size < Len ->
-         {emit, 
-            {http, Uri, {recv, Chunk}},
-            'RECV',
-            S#fsm{
-               iolen = Len - size(Chunk), 
-               buffer= <<>>
-            }
-         }
-   end.
+   parse_payload(S#fsm{buffer = <<Buf/binary, Data/binary>>}).
 
 
 %%%------------------------------------------------------------------
@@ -241,53 +167,148 @@ free(_, _) ->
 %%%
 %%%------------------------------------------------------------------ 
 'STREAM'({_Prot, _Peer, {recv, Data}}, #fsm{buffer=Buf}=S) ->
-   'STREAM'(io, S#fsm{buffer = <<Buf/binary, Data/binary>>});
+   parse_chunk(S#fsm{buffer = <<Buf/binary, Data/binary>>});
 
-'STREAM'(io, #fsm{buffer = <<>>}=S) ->
-   {next_state, 'STREAM', S};
-'STREAM'(io, #fsm{request={_, Uri}, buffer=Buf}=S) ->
-   case binary:split(Buf, <<"\r\n">>) of  
+'STREAM'(timeout, S) ->
+   parse_chunk(S).
+
+%%%------------------------------------------------------------------
+%%%
+%%% http response parser 
+%%%
+%%%------------------------------------------------------------------   
+
+%%
+%%
+parse_status_line(#fsm{buffer=Buffer}=S) ->   
+   % TODO: error handling policy
+   % TODO: {ok, {http_error, ...}}
+   case erlang:decode_packet(http_bin, Buffer, []) of
+      {more, _}       -> {next_state, 'REQUESTED', S, ?T_SERVER};
+      {error, Reason} -> {error, Reason};
+      {ok, Req,Chunk} -> parse_status_line(Req, S#fsm{buffer=Chunk})
+   end.
+
+parse_status_line({http_response, _Vsn, Code, Msg}, 
+                  #fsm{request={{Method, _}, Uri}}=S) ->
+   lager:debug("http ~p ~p ~p ~p", [Method, Uri, Code, Msg]), 
+   parse_header(S#fsm{response={Code, []}});
+
+parse_status_line({http_error, Msg}, S) ->
+   {error, Msg}.
+
+%%
+%%
+parse_header(#fsm{buffer=Buffer}=S) -> 
+   % TODO: error handling policy
+   % TODO: {ok, {http_error, ...}}  
+   case erlang:decode_packet(httph_bin, Buffer, []) of
+      {more, _}       -> {next_state, 'RESPONSE', S};
+      {error, Reason} -> {error, Reason};
+      {ok, Req,Chunk} -> parse_header(Req, S#fsm{buffer=Chunk})
+   end.
+
+parse_header({http_header, _I, 'Content-Length'=Head, _R, Val}, 
+             #fsm{response={Code, Heads}}=S) ->
+   Len = list_to_integer(binary_to_list(Val)),
+   parse_header(S#fsm{response={Code, [{Head, Len} | Heads]}, iolen=Len});
+
+parse_header({http_header, _I, Head, _R, Val},
+           #fsm{response={Code, Heads}}=S) ->
+   parse_header(S#fsm{response={Code, [{Head, Val} | Heads]}});
+
+parse_header(http_eoh, #fsm{request={_, Uri}, response=Rsp, iolen=0}=S) ->
+   % expected length of response is not known, stream it
+   parse_chunk(S#fsm{pckt=0});
+
+parse_header(http_eoh, #fsm{request={_, Uri}, response=Rsp}=S) ->
+   % exprected length of response is know, receive it
+   parse_payload(S#fsm{pckt=0}).
+
+%%
+%%
+parse_payload(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=Len, buffer=Buffer}=S) ->
+   case size(Buffer) of
+      % buffer equals or exceed expected payload size
+      % end of data stream is reached.
+      Size when Size >= Len ->
+         <<Chunk:Len/binary, _/binary>> = Buffer,
+         Msg = if
+            Pckt =:= 0 -> [{http, Uri, Rsp}, {http, Uri, {recv, Chunk}}, {http, Uri, eof}];
+            true       -> [{http, Uri, {recv, Chunk}}, {http, Uri, eof}]
+         end,
+         {emit, Msg, 'CONNECTED', 
+            S#fsm{
+               pckt  = Pckt + 1,
+               buffer= <<>>
+            }
+         };
+      Size when Size < Len ->
+         Msg = if
+            Pckt =:= 0 -> [{http, Uri, Rsp}, {http, Uri, {recv, Buffer}}];
+            true       -> {http, Uri, {recv, Buffer}}
+         end,
+         {emit, Msg, 'RECV',
+            S#fsm{
+               pckt  = Pckt + 1,
+               iolen = Len - size(Buffer), 
+               buffer= <<>>
+            }
+         }
+   end.
+
+%%
+%%
+parse_chunk(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=0, buffer=Buffer}=S) ->
+   case binary:split(Buffer, <<"\r\n">>) of  
       [_]          -> 
          {next_state, 'STREAM', S};
       [Head, Data] -> 
          [L |_] = binary:split(Head, [<<" ">>, <<";">>]),
          Len    = list_to_integer(binary_to_list(L), 16),
          if
+            % chunk with length 0 is last chunk is stream
             Len =:= 0 ->
-               {emit, {http, Uri, eof}, 'CONNECTED', S};
+               Msg = if
+                  Pckt =:= 0 -> [{http, Uri, Rsp}, {http, Uri, eof}];
+                  true       -> {http, Uri, eof}
+               end,
+               {emit, Msg, 'CONNECTED', S};
             true      ->
-               'CHUNK'(io, S#fsm{iolen=Len, buffer=Data})
+               parse_chunk(S#fsm{iolen=Len, buffer=Data})
          end
-   end.
+   end;
 
-
-'CHUNK'({_Prot, _Peer, {recv, Data}}, #fsm{buffer=Buf}=S) ->
-   'CHUNK'(io, S#fsm{buffer = <<Buf/binary, Data/binary>>});
-
-'CHUNK'(io, #fsm{buffer = <<>>}=S) ->
-   {next_state, 'CHUNK', S};
-'CHUNK'(io, #fsm{request={_, Uri}, response=Rsp, iolen=Len, buffer=Chunk}=S) ->
-   case size(Chunk) of
+parse_chunk(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=Len, buffer=Buffer}=S) ->
+   case size(Buffer) of
       Size when Size >= Len ->
-         <<Chnk:Len/binary, $\r, $\n, Rest/binary>> = Chunk,
-         {send,
-            nil,                       %% Reply
-            {http, Uri, {recv, Chnk}}, %% Next
-            io,                        %% Self
-            'STREAM',
-            S#fsm{buffer = Rest}
+         <<Chunk:Len/binary, $\r, $\n, Rest/binary>> = Buffer,
+         Msg = if
+            Pckt =:= 0 -> [{http, Uri, Rsp}, {http, Uri, {recv, Chunk}}];
+            true       -> {http, Uri, {recv, Chunk}}
+         end,
+         {emit, Msg, 'STREAM',
+            S#fsm{
+               iolen = 0, 
+               buffer= Rest,
+               pckt  = Pckt + 1
+            },
+            0    %re-sched via timeout
          };
       Size when Size < Len ->
-         {emit, 
-            {http, Uri, {recv, Chunk}}, 
-            'CHUNK', 
+         Msg = if
+            Pckt =:= 0 -> [{http, Uri, Rsp}, {http, Uri, {recv, Buffer}}];
+            true       -> {http, Uri, {recv, Buffer}}
+         end,
+         {emit, Msg, 'STREAM', 
             S#fsm{
-               iolen=Len - size(Chunk), 
-               buffer= <<>>
+               iolen = Len - size(Buffer), 
+               buffer= <<>>,
+               pckt  = Pckt + 1
             }
          }
    end.
- 
+
 
 %%%------------------------------------------------------------------
 %%%
@@ -358,7 +379,5 @@ encode_header({Key, Val}) when is_atom(Key), is_integer(Val) ->
 encode_header({'Host', {Host, Port}}) ->
    <<"Host", ": ", Host/binary, ":", (list_to_binary(integer_to_list(Port)))/binary>>.
    
-
-
 
 
