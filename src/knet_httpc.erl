@@ -40,6 +40,7 @@
 -record(fsm, {
    ua,      % default user agent
    peer,    % transport protocol peer
+   method,  % default method
    uri,     % default uri
 
    request, % active request   {{Method, Head}, Uri}
@@ -67,12 +68,35 @@ init([Opts]) ->
       #fsm{
          ua     = default_ua(),
          uri    = proplists:get_value(uri, Opts),
+         method = proplists:get_value(method, Opts),
          opts   = [{vsn, <<"1.1">>} | Opts]
       }
    }.
 
 free(_, _) ->
    ok.   
+
+%%
+%%
+ioctl({method, IOCtl}, S) ->
+   % set default method
+   S#fsm{method=IOCtl};
+
+ioctl(method, #fsm{method=IOCtl}) ->
+   % get default method
+   IOCtl;
+
+ioctl({Head, _}=IOCtl, #fsm{opts=Opts}=S) ->
+   % set header
+   S#fsm{
+      opts = lists:keystore(heads, 1, Opts, 
+         {heads, lists:keystore(Head, 1, proplists:get_value(heads, Opts, []), IOCtl)}
+      )
+   };
+
+ioctl(Head, #fsm{opts=Opts}) ->   
+   % get header
+   proplists:get_value(Head, proplists:get_value(heads, Opts, []));
 
 ioctl(_, _) ->
    undefined.
@@ -83,12 +107,8 @@ ioctl(_, _) ->
 %%% IDLE
 %%%
 %%%------------------------------------------------------------------   
-'IDLE'(Method, #fsm{uri=Uri}=S)
- when is_atom(Method) ->
-   'IDLE'({{Method, []}, Uri, <<>>}, S);
-
-'IDLE'({Method, Payload}, #fsm{uri=Uri}=S)
- when is_atom(Method), is_binary(Payload) ->
+'IDLE'(Payload, #fsm{method=Method, uri=Uri}=S)
+ when is_binary(Payload) ->
    'IDLE'({{Method, []}, Uri, Payload}, S);
 
 'IDLE'({{Method, Req}, Uri}, S)
@@ -98,7 +118,7 @@ ioctl(_, _) ->
 'IDLE'({{Method, Req0}, Uri, Payload}, #fsm{ua=UA, opts=Opts}=S)
  when is_atom(Method), is_binary(Payload) ->
    Req = check_head_host(Uri, 
-      check_head_ua(UA, Req0)
+      check_head_ua(UA, Req0 ++ proplists:get_value(heads, Opts, []))
    ),
    Peer = peer(Uri, Opts),
    {emit, 
@@ -124,22 +144,18 @@ ioctl(_, _) ->
 %%% CONNECTED
 %%%
 %%%------------------------------------------------------------------   
-'CONNECTED'(Method, #fsm{uri=Uri}=S)
- when is_atom(Method) ->
-   'CONNECTED'({{Method, []}, Uri, <<>>}, S);
-
-'CONNECTED'({Method, Payload}, #fsm{uri=Uri}=S)
- when is_atom(Method), is_binary(Payload) ->
+'CONNECTED'(Payload, #fsm{method=Method, uri=Uri}=S)
+ when is_binary(Payload) ->
    'CONNECTED'({{Method, []}, Uri, Payload}, S);
 
 'CONNECTED'({{Method, Req0}, Uri}, S)
  when is_atom(Method) ->
    'CONNECTED'({{Method, Req0}, Uri, <<>>}, S);
 
-'CONNECTED'({{Method, Req0}, Uri, Payload}, #fsm{peer=Peer, ua=UA}=S0)
+'CONNECTED'({{Method, Req0}, Uri, Payload}, #fsm{peer=Peer, ua=UA, opts=Opts}=S0)
  when is_atom(Method), is_binary(Payload) ->
    Req = check_head_host(Uri,
-      check_head_ua(UA, Req0)
+      check_head_ua(UA, Req0 ++ proplists:get_value(heads, Opts, []))
    ),
    S = S0#fsm{
       request={{Method, Req}, Uri},

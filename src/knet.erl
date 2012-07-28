@@ -34,7 +34,7 @@
 
 -export([start/0, stop/0]).
 -export([connect/1, connect/2, close/1]).% listen/1, listen/2, close/1]).
--export([ctrl/3, ctrl/2, send/2, recv/1]).
+-export([ioctl/2, send/2, recv/1]).
 -export([route/2, ifget/1, ifget/2]).
 
 %%%------------------------------------------------------------------
@@ -106,7 +106,7 @@ connect({uri, http, _}=Uri, Opts) ->
    {ok, Pid} = konduit:start_link({fabric, undefined, self(),
       [
          {knet_tcp,   [inet, {{connect, Opts}, uri:get(authority, Uri)}]}, 
-         {knet_httpc, [[{uri, Uri} | Opts]]}  
+         {knet_httpc, [[{uri, Uri}, {method, 'GET'} | Opts]]}  
       ]
    }),
    {http, Pid};
@@ -187,20 +187,12 @@ connect(Uri, Opts)
 %% send data to Uri
 send({tcp,  Pid}, Chunk)
  when is_pid(Pid), is_binary(Chunk) ->
-   case erlang:is_process_alive(Pid) of
-      true  -> konduit:send(Pid, {send, default, Chunk});
-      false -> throw(noproc)
-   end;
+   konduit:send(Pid, {send, default, Chunk});
 
 send({http, Pid}, Chunk)
  when is_pid(Pid), is_binary(Chunk) ->
-   case erlang:is_process_alive(Pid) of
-      true  -> 
-         konduit:send(Pid, {'POST', Chunk}),
-         recv_http(Pid);
-      false ->
-         throw(noproc)
-   end;
+   konduit:send(Pid, Chunk),
+   recv_http(Pid);
 
 send(_,_) ->
    throw(badarg).
@@ -210,59 +202,33 @@ send(_,_) ->
 %%
 %% recv data from Uri
 recv({tcp, Pid}) when is_pid(Pid) ->
-   case is_process_alive(Pid) of
-      true  -> recv_tcp(Pid); 
-      false -> throw(noproc)
+   case konduit:recv(Pid) of
+      {tcp, _Peer, {recv,   Chunk}} -> Chunk;
+      {tcp, _Peer, {error, Reason}} -> throw(Reason)
    end;
 
 recv({http, Pid}) when is_pid(Pid) ->
-   case is_process_alive(Pid) of
-      true  ->
-         konduit:send(Pid, 'GET'),
-         recv_http(Pid);
-      false -> 
-         throw(noproc)
-   end;
+   konduit:send(Pid, <<>>),
+   recv_http(Pid);
 
 recv(_) ->
    throw(badarg).
    
 
-
-
-
-
 %%
-%% ctrl(Link, Opt) -> {ok, Val} | {error, ...}
-%% ctrl(Link, Opt, Val} -> ok | {error, ...}
-%% 
-%% TODO: list of Opts
-ctrl(Pid, Opt) when is_pid(Pid) ->
-   case erlang:is_process_alive(Pid) of
-      true  -> konduit:ctrl(Pid, undefined, {ctrl, Opt});
-      false -> {error, unknown}
-   end;
-ctrl({kid, Pid, _} = Kid, Opt) ->
-   case erlang:is_process_alive(Pid) of
-      true  -> konduit:ctrl(Kid, {ctrl, Opt});
-      false -> {error, unknown}
-   end;
-ctrl(_,_) ->
-   throw(badarg).      
-   
-ctrl(Link, Opt, Val) when is_pid(Link) ->
-   case erlang:is_process_alive(Link) of
-      true  -> konduit:ctrl(Link, {ctrl, {Opt, Val}});
-      false -> {error, no_konduit}
-   end;
-ctrl({kid, Pid, _} = Kid, Opt, Val) ->
-   case erlang:is_process_alive(Pid) of
-      true  -> konduit:ctrl(Kid, {ctrl, {Opt, Val}});
-      false -> {error, unknown}
-   end;   
-ctrl(_,_,_) ->
-   throw(badarg).         
-   
+%% ioctl(IOCtl, Link) -> Val
+%% ioctl(IOCtl, Val, Link) -> ok
+%%
+ioctl(IOCtl, {tcp, Pid}) -> 
+   {ok, Val} = konduit:ioctl(IOCtl, knet_tcp, Pid),
+   Val;
+
+ioctl(IOCtl, {http, Pid}) -> 
+   {ok, Val} = konduit:ioctl(IOCtl, knet_httpc, Pid),
+   Val;
+
+ioctl(_, _) ->
+   throw(badarg).
 
    
 %%
@@ -348,14 +314,6 @@ route(IP, Family) when is_tuple(IP) ->
 %%%  private 
 %%%
 %%%------------------------------------------------------------------   
-
-%%
-%%
-recv_tcp(Pid) ->
-   case konduit:recv(Pid) of
-      {tcp, _Peer, {recv,   Chunk}} -> Chunk;
-      {tcp, _Peer, {error, Reason}} -> throw(Reason)
-   end.
 
 %%
 %% receive http 
