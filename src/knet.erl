@@ -30,9 +30,11 @@
 %%      Iid = atom(), protocol id
 %%      
 
+%% TODO: handler function
+
 -export([start/0, stop/0]).
--export([connect/1, connect/2, listen/1, listen/2, close/1]).
--export([ctrl/3, ctrl/2, send/2]).
+-export([connect/1, connect/2, close/1]).% listen/1, listen/2, close/1]).
+-export([ctrl/3, ctrl/2, send/2, recv/1]).
 -export([route/2, ifget/1, ifget/2]).
 
 %%%------------------------------------------------------------------
@@ -77,45 +79,44 @@ stop() ->
 %%%------------------------------------------------------------------
 
 %%
-%% connect({Iid, Peer}, Opts} -> {ok, Link} | {error, ...}
-%%    Iid  = atom(), interface id
-%%    Peer = term(), remote peer address
-%% 
-%% Instantiates a konduit for interface Iid and asynchronously
-%% connects it to remote peer, the connection is indicated:
-%%    {Iid, established,     Peer} 
-%%    {Iid, terminated,      Peer}
-%%    {Iid, {error, Reason}, Peer}
-connect(Peer) ->
-   connect(Peer, []).
-connect({tcp4, Peer}, Opts) ->
-   case lists:keyfind(handler, 1, Opts) of
-      % TODO: opts filtering
-      {handler, Fun} when is_function(Fun) ->
-         kfabric:start_link([
-            {knet_tcp, [inet,  {connect, Peer, lists:keydelete(handler, 1, Opts)}]},
-            {Fun, []}
-         ]);
-      _ ->
-         kfabric:start_link([
-            {knet_tcp, [inet,  {connect, Peer, lists:keydelete(handler, 1, Opts)}]}
-         ])
-   end;
-connect({tcp6, Peer}, Opts) ->
-   case lists:keyfind(handler, 1, Opts) of
-      {handler, Fun} when is_function(Fun) ->
-         kfabric:start_link([
-            {knet_tcp, [inet6,  {connect, Peer, lists:keydelete(handler, 1, Opts)}]},
-            {Fun, []}
-         ]);
-      _ ->
-         kfabric:start_link([
-            {knet_tcp, [inet6,  {connect, Peer, lists:keydelete(handler, 1, Opts)}]}
-         ])
-   end;
-connect(_, _) ->
-   throw(badarg).
+%% connect(Uri, Opts} -> Link
+%%
+%% returns a process that represents a connection to the remote peer
+%% referred to by the Uri
+connect(Uri) ->
+   connect(Uri, []).
+
+connect({uri, tcp4, _}=Uri, Opts) ->
+   {ok, Pid} = kfabric:start_link({fabric, undefined, self(),
+      [
+         {knet_tcp,   [inet, {{connect, Opts}, uri:get(authority, Uri)}]}
+      ]
+   }),
+   {tcp, Pid};
+
+connect({uri, tcp6, _}=Uri, Opts) ->
+   {ok, Pid} = kfabric:start_link({fabric, undefined, self(),
+      [
+         {knet_tcp,   [inet6, {{connect, Opts}, uri:get(authority, Uri)}]}
+      ]
+   }),
+   {tcp, Pid};
+
+connect({uri, http, _}=Uri, Opts) ->
+   {ok, Pid} = konduit:start_link({fabric, undefined, self(),
+      [
+         {knet_tcp,   [inet, {{connect, Opts}, uri:get(authority, Uri)}]}, 
+         {knet_httpc, [[{uri, Uri} | Opts]]}  
+      ]
+   }),
+   {http, Pid};
+
+connect({uri, _, _}, _) ->
+   throw(badarg);
    
+connect(Uri, Opts)
+ when is_list(Uri) orelse is_binary(Uri) ->
+   connect(uri:new(Uri), Opts).
 
 %%
 %% listen({Iid, Addr}, Opts) -> {ok, Link} | {error, ...}
@@ -128,74 +129,109 @@ connect(_, _) ->
 %%   {Iid, established, Peer} - each accepted connection
 %%   {Iid, terminated,  Peer} 
 %%   {Iid, {error, Reason}, Peer}
-listen(Addr) ->
-   listen(Addr, []).
-listen({tcp4, Addr}, Opts) when is_tuple(Addr) ->
-   % start listener process
-   {ok, LPid} = case pns:whereis(knet, {tcp4, listen, Addr}) of
-      undefined ->
-         kfabric:start_link([
-            {knet_tcp, [inet, {listen, Addr, Opts}]}
-         ]);
-      Pid -> 
-         {ok, Pid}
-   end,
-   % start acceptor process
-   case lists:keyfind(handler, 1, Opts) of
-      {handler, Fun} when is_function(Fun) ->
-         kfabric:start_link([
-            {knet_tcp, [inet, {accept, Addr, Opts}]},
-            {Fun, []}
-         ]);
-      _ ->
-         kfabric:start_link([
-            {knet_tcp, [inet, {accept, Addr, Opts}]}
-         ])
-   end,
-   {ok, LPid};
+% listen(Addr) ->
+%    listen(Addr, []).
+% listen({tcp4, Addr}, Opts) when is_tuple(Addr) ->
+%    % start listener process
+%    {ok, LPid} = case pns:whereis(knet, {tcp4, listen, Addr}) of
+%       undefined ->
+%          kfabric:start_link([
+%             {knet_tcp, [inet, {listen, Addr, Opts}]}
+%          ]);
+%       Pid -> 
+%          {ok, Pid}
+%    end,
+%    % start acceptor process
+%    case lists:keyfind(handler, 1, Opts) of
+%       {handler, Fun} when is_function(Fun) ->
+%          kfabric:start_link([
+%             {knet_tcp, [inet, {accept, Addr, Opts}]},
+%             {Fun, []}
+%          ]);
+%       _ ->
+%          kfabric:start_link([
+%             {knet_tcp, [inet, {accept, Addr, Opts}]}
+%          ])
+%    end,
+%    {ok, LPid};
 
-listen({tcp6, Addr}, Opts) when is_tuple(Addr) ->
-   % start listener process
-   {ok, LPid} = case pns:whereis(knet, {tcp6, listen, Addr}) of
-      undefined ->
-         kfabric:start_link([
-            {knet_tcp, [inet6, {listen, Addr, Opts}]}
-         ]);
-      Pid -> 
-         {ok, Pid}
-   end,
-   % start acceptor process
-   case lists:keyfind(handler, 1, Opts) of
-      {handler, Fun} when is_function(Fun) ->
-         kfabric:start_link([
-            {knet_tcp, [inet6, {accept, Addr, Opts}]},
-            {Fun, []}
-         ]);
-      _ ->
-         kfabric:start_link([
-            {knet_tcp, [inet6, {accept, Addr, Opts}]}
-         ])
-   end,
-   {ok, LPid};
-listen(_, _) ->
-   throw(badarg).
+% listen({tcp6, Addr}, Opts) when is_tuple(Addr) ->
+%    % start listener process
+%    {ok, LPid} = case pns:whereis(knet, {tcp6, listen, Addr}) of
+%       undefined ->
+%          kfabric:start_link([
+%             {knet_tcp, [inet6, {listen, Addr, Opts}]}
+%          ]);
+%       Pid -> 
+%          {ok, Pid}
+%    end,
+%    % start acceptor process
+%    case lists:keyfind(handler, 1, Opts) of
+%       {handler, Fun} when is_function(Fun) ->
+%          kfabric:start_link([
+%             {knet_tcp, [inet6, {accept, Addr, Opts}]},
+%             {Fun, []}
+%          ]);
+%       _ ->
+%          kfabric:start_link([
+%             {knet_tcp, [inet6, {accept, Addr, Opts}]}
+%          ])
+%    end,
+%    {ok, LPid};
+% listen(_, _) ->
+%    throw(badarg).
    
 %%
-%% send(Link, Data) -> ok.
+%% send(Link, Data) -> ...
 %%
-%% Asynchronously sends data throught konduit to remote peer, received
-%% data is indicated by
-%% {Iid, recv, Peer, Data}
-%%
-send(Link, Data) when is_pid(Link) ->
-   case erlang:is_process_alive(Link) of
-      true  -> konduit:send(Link, {send, Data});
-      false -> {error, no_konduit}
+%% send data to Uri
+send({tcp,  Pid}, Chunk)
+ when is_pid(Pid), is_binary(Chunk) ->
+   case erlang:is_process_alive(Pid) of
+      true  -> konduit:send(Pid, {send, default, Chunk});
+      false -> throw(noproc)
    end;
+
+send({http, Pid}, Chunk)
+ when is_pid(Pid), is_binary(Chunk) ->
+   case erlang:is_process_alive(Pid) of
+      true  -> 
+         konduit:send(Pid, {'POST', Chunk}),
+         recv_http(Pid);
+      false ->
+         throw(noproc)
+   end;
+
 send(_,_) ->
    throw(badarg).
    
+%%
+%% recv(Pid) -> {ok, Chunk} | {error, Reason} 
+%%
+%% recv data from Uri
+recv({tcp, Pid}) when is_pid(Pid) ->
+   case is_process_alive(Pid) of
+      true  -> recv_tcp(Pid); 
+      false -> throw(noproc)
+   end;
+
+recv({http, Pid}) when is_pid(Pid) ->
+   case is_process_alive(Pid) of
+      true  ->
+         konduit:send(Pid, 'GET'),
+         recv_http(Pid);
+      false -> 
+         throw(noproc)
+   end;
+
+recv(_) ->
+   throw(badarg).
    
+
+
+
+
+
 %%
 %% ctrl(Link, Opt) -> {ok, Val} | {error, ...}
 %% ctrl(Link, Opt, Val} -> ok | {error, ...}
@@ -203,7 +239,7 @@ send(_,_) ->
 %% TODO: list of Opts
 ctrl(Pid, Opt) when is_pid(Pid) ->
    case erlang:is_process_alive(Pid) of
-      true  -> konduit:ctrl(Pid, {ctrl, Opt});
+      true  -> konduit:ctrl(Pid, undefined, {ctrl, Opt});
       false -> {error, unknown}
    end;
 ctrl({kid, Pid, _} = Kid, Opt) ->
@@ -232,10 +268,10 @@ ctrl(_,_,_) ->
 %%
 %% close(Link) -> ok | {error, ...}
 %%
-close(Link) when is_pid(Link) ->
-   case erlang:is_process_alive(Link) of
-      true  -> konduit:sync(Link, terminate);
-      false -> {error, no_konduit}
+close({_, Pid}) when is_pid(Pid) ->
+   case erlang:is_process_alive(Pid) of
+      true  -> erlang:exit(Pid, kill); % TODO: fix it (message to fabric)
+      false -> throw(noproc)
    end;
 close(_) ->
    throw(badarg).
@@ -312,6 +348,38 @@ route(IP, Family) when is_tuple(IP) ->
 %%%  private 
 %%%
 %%%------------------------------------------------------------------   
+
+%%
+%%
+recv_tcp(Pid) ->
+   case konduit:recv(Pid) of
+      {tcp, _Peer, {recv,   Chunk}} -> Chunk;
+      {tcp, _Peer, {error, Reason}} -> throw(Reason)
+   end.
+
+%%
+%% receive http 
+recv_http(Pid) ->
+   recv_http(Pid, undefined, undefined, undefined).
+
+recv_http(Pid, Code0, Head0, Buffer) ->
+   case konduit:recv(Pid) of
+      {http, _Uri, {error, Reason}} ->
+         throw(Reason);
+      {http, _Uri, {recv, Chnk}} ->
+         recv_http(Pid, Code0, Head0, <<Buffer/binary, Chnk/binary>>);
+      {http, _Uri, {Code, Head}} -> 
+         recv_http(Pid, Code, Head,   <<>>);
+      {http, _Uri, eof} ->
+         {Code0, Head0, Buffer}
+   end.
+
+
+
+
+
+
+
 
 filter_opts(Target, List) ->
    Family = case proplists:is_defined(inet6, Target) of

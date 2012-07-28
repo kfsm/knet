@@ -6,7 +6,6 @@
          knet,
          knet_tcp,
          % knet_ssl,
-         knet_uri,
          knet_http_io,
          knet_httpc,
          knet_httpd,
@@ -17,6 +16,9 @@
       {applications,[
          kernel,
          stdlib,
+         compiler,
+         syntax_tools,
+         lager,
          pts,
          konduit
       ]},

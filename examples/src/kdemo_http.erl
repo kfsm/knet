@@ -53,7 +53,10 @@ get(Uri) ->
       ]
    }),
    UA = <<"curl/7.21.4 (universal-apple-darwin11.0) libcurl/7.21.4 OpenSSL/0.9.8r zlib/1.2.5">>,
-   konduit:send(Pid, {{'GET', [{'User-Agent', UA}, {'Accept', <<"*/*">>}]}, Uri}).
+   konduit:send(Pid, {{'GET', [{'User-Agent', UA}, {'Accept', <<"*/*">>}]}, Uri}),
+   timer:sleep(1000),
+   R = konduit:ioctl(latency, Pid),
+   error_logger:error_report([{r, R}]).
 
 
 %%%------------------------------------------------------------------

@@ -137,7 +137,7 @@ free(_, _) ->
 %% TODO: Connection header
 
 'REQUEST'(http_eoh, #fsm{method=Method, uri=Uri, hreq=Head, iobuf = <<>>}=S) ->
-   PUri = knet_uri:to_binary(Uri),
+   PUri = uri:to_binary(Uri),
    lager:debug("http headers ~p", [Head]),
    {ok, 
       nil, 
@@ -149,7 +149,7 @@ free(_, _) ->
    };
 
 'REQUEST'(http_eoh, #fsm{method=Method, uri=Uri, hreq=Head, iobuf=Buf}=S) ->
-   PUri = knet_uri:to_binary(Uri),
+   PUri = uri:to_binary(Uri),
    lager:debug("http headers ~p", [Head]),
    {ok, 
       nil, 
@@ -171,7 +171,7 @@ free(_, _) ->
    % output web log
    {Addr, _} = Peer,
    UA = proplists:get_value('User-Agent', Hreq),
-   lager:notice("~s ~p ~p ~p", [inet_parse:ntoa(Addr), Method, knet_uri:to_binary(Uri), UA]),
+   lager:notice("~s ~p ~p ~p", [inet_parse:ntoa(Addr), Method, uri:to_binary(Uri), UA]),
    {ok,
       nil,
       {send, Peer, encode_packet(S#fsm{status=Code, hrsp=Hrsp})}
@@ -185,7 +185,7 @@ free(_, _) ->
    };
 
 'PROCESS'({_Prot, _Peer, {recv, Chunk}}, #fsm{uri=Uri}) ->
-   PUri = knet_uri:to_binary(Uri),
+   PUri = uri:to_binary(Uri),
    {ok,
       nil,
       {http, PUri, {recv, Chunk}}
@@ -205,14 +205,14 @@ free(_, _) ->
 
 %%
 resource({absoluteURI, Scheme, Host, Port, Path}) ->
-   knet_uri:set(path, Path, 
-   	knet_uri:set(authority, {Host, Port},
-   		knet_uri:new(Scheme)
+   uri:set(path, Path, 
+   	uri:set(authority, {Host, Port},
+   		uri:new(Scheme)
    	)
    );
 %uri({scheme, Scheme, Uri}=E) ->
 resource({abs_path, Path}) ->
-   knet_uri:set(path, Path, knet_uri:new(http)). %TODO: ssl support
+   uri:set(path, Path, uri:new(http)). %TODO: ssl support
 %uri('*') ->
 %uri(Uri) ->
 

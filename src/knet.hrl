@@ -16,6 +16,8 @@
 %%  USA or retrieve online http://www.opensource.org/licenses/xxx
 %%
 
+%% TODO: flag to disable lager
+
 -define(DEBUG, true).
 
 %%

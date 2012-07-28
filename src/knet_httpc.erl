@@ -24,7 +24,7 @@
 
 %%
 %%
--export([init/1, free/2]).
+-export([init/1, free/2, ioctl/2]).
 -export([
    'IDLE'/2,       %% idle
    'CONNECTED'/2,  %% connected to peer 
@@ -39,9 +39,11 @@
 %% internal state
 -record(fsm, {
    ua,      % default user agent
-   peer,    % tranport protocol peer
-   request, % active request
-   response,% active response
+   peer,    % transport protocol peer
+   uri,     % default uri
+
+   request, % active request   {{Method, Head}, Uri}
+   response,% active response  {{Status, Head}, Uri}
 
    iolen,   % expected length of data
    pckt,    % number of processed payload chunks
@@ -59,14 +61,12 @@
 %%%
 %%%------------------------------------------------------------------   
 init([Opts]) ->
-   % discover library name
-   {ok,   Lib} = application:get_application(?MODULE),
-   {_, _, Vsn} = lists:keyfind(Lib, 1, application:which_applications()),
-   UserAgent   = <<(atom_to_binary(Lib, utf8))/binary, $/, (list_to_binary(Vsn))/binary>>,
+   % konduit is reusable to call many Uri
    {ok,
       'IDLE',
       #fsm{
-         ua     = UserAgent,
+         ua     = default_ua(),
+         uri    = proplists:get_value(uri, Opts),
          opts   = [{vsn, <<"1.1">>} | Opts]
       }
    }.
@@ -74,67 +74,90 @@ init([Opts]) ->
 free(_, _) ->
    ok.   
 
+ioctl(_, _) ->
+   undefined.
+
 
 %%%------------------------------------------------------------------
 %%%
 %%% IDLE
 %%%
 %%%------------------------------------------------------------------   
-'IDLE'({{Method, Req0}, Uri}, #fsm{ua=UA, opts=Opts}=S)
- when is_binary(Uri) orelse is_list(Uri) ->
-   Req = check_head_host(Uri,
+'IDLE'(Method, #fsm{uri=Uri}=S)
+ when is_atom(Method) ->
+   'IDLE'({{Method, []}, Uri, <<>>}, S);
+
+'IDLE'({Method, Payload}, #fsm{uri=Uri}=S)
+ when is_atom(Method), is_binary(Payload) ->
+   'IDLE'({{Method, []}, Uri, Payload}, S);
+
+'IDLE'({{Method, Req}, Uri}, S)
+ when is_atom(Method) ->
+   'IDLE'({{Method, Req}, Uri, <<>>}, S);
+
+'IDLE'({{Method, Req0}, Uri, Payload}, #fsm{ua=UA, opts=Opts}=S)
+ when is_atom(Method), is_binary(Payload) ->
+   Req = check_head_host(Uri, 
       check_head_ua(UA, Req0)
    ),
    Peer = peer(Uri, Opts),
    {emit, 
       {{connect, []}, Peer},
-      'IDLE',
+      'REQUESTED',
       S#fsm{
          peer    = Peer,
          request = {{Method, Req}, Uri},
-         iolen   = 0,
-         buffer  = <<>> 
+         iolen   = undefined,
+         buffer  = Payload 
       }
    };
 
-'IDLE'({_Prot, Peer, {error, Reason}}, #fsm{request={_, Uri}}=S) ->
-   lager:warning("http couldn't connect to peer ~p, error ~p", [Peer, Reason]),
-   {emit,
-      {http, Uri, {error, Reason}},
-      'IDLE',
-      S
-   };
+'IDLE'({_Prot, Peer, {error, Reason}}, _S) ->
+   lager:error("http couldn't connect to peer ~p, error ~p", [Peer, Reason]),
+   {error, Reason};
    
-'IDLE'({_Prot, Peer, established}, S) ->
-   {reply,
-      {send, Peer, encode_packet(S)},
-      'REQUESTED',
-      S,
-      ?T_SERVER
-   }.
-
+'IDLE'({_Prot, _Peer, established}, S) ->
+   {next_state, 'CONNECTED', S}.
 
 %%%------------------------------------------------------------------
 %%%
-%%% IDLE
+%%% CONNECTED
 %%%
 %%%------------------------------------------------------------------   
-'CONNECTED'({{Method, Req0}, Uri}, #fsm{peer=Peer, ua=UA, opts=Opts}=S)
- when is_binary(Uri) orelse is_list(Uri) ->
+'CONNECTED'(Method, #fsm{uri=Uri}=S)
+ when is_atom(Method) ->
+   'CONNECTED'({{Method, []}, Uri, <<>>}, S);
+
+'CONNECTED'({Method, Payload}, #fsm{uri=Uri}=S)
+ when is_atom(Method), is_binary(Payload) ->
+   'CONNECTED'({{Method, []}, Uri, Payload}, S);
+
+'CONNECTED'({{Method, Req0}, Uri}, S)
+ when is_atom(Method) ->
+   'CONNECTED'({{Method, Req0}, Uri, <<>>}, S);
+
+'CONNECTED'({{Method, Req0}, Uri, Payload}, #fsm{peer=Peer, ua=UA}=S0)
+ when is_atom(Method), is_binary(Payload) ->
    Req = check_head_host(Uri,
       check_head_ua(UA, Req0)
    ),
-   NS  = S#fsm{
+   S = S0#fsm{
       request={{Method, Req}, Uri},
-      iolen  = 0,
-      buffer = <<>>
+      iolen  = undefined,
+      buffer = Payload
    },
    {emit,
-      {send, Peer, encode_packet(NS)},
+      {send, Peer, encode_packet(S)},
       'REQUESTED',
-      NS,
+      S#fsm{buffer = <<>>},
       ?T_SERVER
-   }.
+   };
+
+'CONNECTED'({_Prot, _Peer, terminated}, S) ->
+   {next_state, 'IDLE', S};
+
+'CONNECTED'({_Prot, _Peer, {error, _Reason}}, S) ->
+   {next_state, 'IDLE', S}.
 
 %%%------------------------------------------------------------------
 %%%
@@ -142,7 +165,23 @@ free(_, _) ->
 %%%
 %%%------------------------------------------------------------------ 
 'REQUESTED'({_Prot, _Peer, {recv, Chunk}}, #fsm{buffer=Buf}=S) ->
-   parse_status_line(S#fsm{buffer = <<Buf/binary, Chunk/binary>>}).
+   parse_status_line(S#fsm{buffer = <<Buf/binary, Chunk/binary>>});
+
+'REQUESTED'({_Prot, Peer, {error, Reason}}, #fsm{request={_, Uri}}=S) ->
+   lager:warning("http couldn't connect to peer ~p, error ~p", [Peer, Reason]),
+   {emit,
+      {http, Uri, {error, Reason}},
+      'IDLE',
+      S
+   };
+   
+'REQUESTED'({_Prot, Peer, established}, S) ->
+   {reply,
+      {send, Peer, encode_packet(S)},
+      'REQUESTED',
+      S#fsm{buffer = <<>>},
+      ?T_SERVER
+   }.
 
 %%%------------------------------------------------------------------
 %%%
@@ -150,17 +189,26 @@ free(_, _) ->
 %%%
 %%%------------------------------------------------------------------ 
 'RESPONSE'({_Prot, _Peer, {recv, Chunk}}, #fsm{buffer=Buf}=S) ->
-   parse_header(S#fsm{buffer = <<Buf/binary, Chunk/binary>>}).
+   parse_header(S#fsm{buffer = <<Buf/binary, Chunk/binary>>});
 
+'RESPONSE'({_Prot, _Peer, terminated}, S) ->
+   {next_state, 'IDLE', S};
+
+'RESPONSE'({_Prot, _Peer, {error, _Reason}}, S) ->
+   {next_state, 'IDLE', S}.
 %%%------------------------------------------------------------------
 %%%
 %%% RECV: receive response payload
 %%%
 %%%------------------------------------------------------------------ 
 'RECV'({_Prot, _Peer, {recv, Data}}, #fsm{buffer=Buf}=S) ->
-   parse_payload(S#fsm{buffer = <<Buf/binary, Data/binary>>}).
+   parse_payload(S#fsm{buffer = <<Buf/binary, Data/binary>>});
 
+'RECV'({_Prot, _Peer, terminated}, S) ->
+   {next_state, 'IDLE', S};
 
+'RECV'({_Prot, _Peer, {error, _Reason}}, S) ->
+   {next_state, 'IDLE', S}.
 %%%------------------------------------------------------------------
 %%%
 %%% STREAM
@@ -170,7 +218,13 @@ free(_, _) ->
    parse_chunk(S#fsm{buffer = <<Buf/binary, Data/binary>>});
 
 'STREAM'(timeout, S) ->
-   parse_chunk(S).
+   parse_chunk(S);
+
+'STREAM'({_Prot, _Peer, terminated}, S) ->
+   {next_state, 'IDLE', S};
+
+'STREAM'({_Prot, _Peer, {error, _Reason}}, S) ->
+   {next_state, 'IDLE', S}.
 
 %%%------------------------------------------------------------------
 %%%
@@ -194,7 +248,7 @@ parse_status_line({http_response, _Vsn, Code, Msg},
    lager:debug("http ~p ~p ~p ~p", [Method, Uri, Code, Msg]), 
    parse_header(S#fsm{response={Code, []}});
 
-parse_status_line({http_error, Msg}, S) ->
+parse_status_line({http_error, Msg}, _S) ->
    {error, Msg}.
 
 %%
@@ -217,11 +271,21 @@ parse_header({http_header, _I, Head, _R, Val},
            #fsm{response={Code, Heads}}=S) ->
    parse_header(S#fsm{response={Code, [{Head, Val} | Heads]}});
 
-parse_header(http_eoh, #fsm{request={_, Uri}, response=Rsp, iolen=0}=S) ->
+parse_header(http_eoh, #fsm{iolen=undefined}=S) ->
    % expected length of response is not known, stream it
    parse_chunk(S#fsm{pckt=0});
 
-parse_header(http_eoh, #fsm{request={_, Uri}, response=Rsp}=S) ->
+parse_header(http_eoh, #fsm{iolen=0, request={_, Uri}, response=Rsp}=S) ->
+   % nothing to receive
+   {emit, 
+      [{http, Uri, Rsp}, {http, Uri, eof}],
+      'CONNECTED', 
+      S#fsm{
+         buffer= <<>>
+      }
+   };
+
+parse_header(http_eoh, S) ->
    % exprected length of response is know, receive it
    parse_payload(S#fsm{pckt=0}).
 
@@ -259,7 +323,7 @@ parse_payload(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=Len, buffer=
 
 %%
 %%
-parse_chunk(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=0, buffer=Buffer}=S) ->
+parse_chunk(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=undefined, buffer=Buffer}=S) ->
    case binary:split(Buffer, <<"\r\n">>) of  
       [_]          -> 
          {next_state, 'STREAM', S};
@@ -289,7 +353,7 @@ parse_chunk(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=Len, buffer=Bu
          end,
          {emit, Msg, 'STREAM',
             S#fsm{
-               iolen = 0, 
+               iolen = undefined, 
                buffer= Rest,
                pckt  = Pckt + 1
             },
@@ -317,6 +381,15 @@ parse_chunk(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=Len, buffer=Bu
 %%%------------------------------------------------------------------   
 
 %%
+%% return default user agent
+default_ua() ->
+   % discover library name
+   {ok,   Lib} = application:get_application(?MODULE),
+   {_, _, Vsn} = lists:keyfind(Lib, 1, application:which_applications()),
+   <<(atom_to_binary(Lib, utf8))/binary, $/, (list_to_binary(Vsn))/binary>>.
+
+
+%%
 %% check user-agent header
 check_head_ua(UA, Req) ->
    case lists:keyfind('User-Agent', 1, Req) of
@@ -328,7 +401,7 @@ check_head_ua(UA, Req) ->
 %% check host header
 check_head_host(Uri, Req) ->
    case lists:keyfind('Host', 1, Req) of
-      false -> [{'Host', knet_uri:get(authority, Uri)} | Req];
+      false -> [{'Host', uri:get(authority, Uri)} | Req];
       _     -> Req
    end.
 
@@ -336,15 +409,13 @@ check_head_host(Uri, Req) ->
 %% resolve a transport peer to establish tcp/ip: proxy or host
 peer(Uri, Opts) ->
    case lists:keyfind(proxy, 1, Opts) of
-      false          -> knet_uri:get(authority, Uri);
+      false          -> uri:get(authority, Uri);
       {proxy, Proxy} -> Proxy
    end. 
 
 %%
 %%
-resource(Uri, Opts) when is_list(Uri) ->
-   resource(list_to_binary(Uri), Opts);
-resource(Uri, Opts) when is_binary(Uri) ->
+resource(Uri, Opts) ->
    case lists:keyfind(proxy, 1, Opts) of
       false           -> uri:get(path, Uri);
       {proxy, _Proxy} -> Uri
@@ -355,7 +426,7 @@ resource(Uri, Opts) when is_binary(Uri) ->
 %% encode(Req, Opts) -> binary()
 %%
 %% encode http request
-encode_packet(#fsm{request={{Method, Req}, Uri}, opts=Opts}) ->
+encode_packet(#fsm{request={{Method, Req}, Uri}, opts=Opts, buffer = <<>>}) ->
    % protocol version
    {vsn, VSN}  = lists:keyfind(vsn, 1, Opts),
    % Host header
@@ -363,7 +434,19 @@ encode_packet(#fsm{request={{Method, Req}, Uri}, opts=Opts}) ->
       <<(atom_to_binary(Method, utf8))/binary, 32, (resource(Uri, Opts))/binary, 32, "HTTP/", VSN/binary, $\r, $\n>>,
       encode_header(Req),
       <<$\r, $\n>>
+   ];
+
+encode_packet(#fsm{request={{Method, Req}, Uri}, opts=Opts, buffer=Payload}) ->
+   % protocol version
+   {vsn, VSN}  = lists:keyfind(vsn, 1, Opts),
+   % Host header
+   [
+      <<(atom_to_binary(Method, utf8))/binary, 32, (resource(Uri, Opts))/binary, 32, "HTTP/", VSN/binary, $\r, $\n>>,
+      encode_header([{'Content-Length', size(Payload)} | Req]),
+      <<$\r, $\n>>,
+      Payload
    ].
+
 
 %%
 %%
