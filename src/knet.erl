@@ -220,12 +220,16 @@ recv(_) ->
 %% ioctl(IOCtl, Val, Link) -> ok
 %%
 ioctl(IOCtl, {tcp, Pid}) -> 
-   {ok, Val} = konduit:ioctl(IOCtl, knet_tcp, Pid),
-   Val;
+   case konduit:ioctl(IOCtl, knet_tcp, Pid) of
+      {ok, Val} -> Val;
+      ok        -> ok;
+   end;
 
 ioctl(IOCtl, {http, Pid}) -> 
-   {ok, Val} = konduit:ioctl(IOCtl, knet_httpc, Pid),
-   Val;
+   case konduit:ioctl(IOCtl, knet_httpc, Pid) of
+      {ok, Val} -> Val;
+      ok        -> ok
+   end;
 
 ioctl(_, _) ->
    throw(badarg).
