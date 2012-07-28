@@ -222,7 +222,7 @@ recv(_) ->
 ioctl(IOCtl, {tcp, Pid}) -> 
    case konduit:ioctl(IOCtl, knet_tcp, Pid) of
       {ok, Val} -> Val;
-      ok        -> ok;
+      ok        -> ok
    end;
 
 ioctl(IOCtl, {http, Pid}) -> 
