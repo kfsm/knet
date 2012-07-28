@@ -70,7 +70,7 @@ init([Inet, {{connect, _Opts}, _Peer}=Msg]) ->
    {ok, 'CONNECT', init(Inet, Msg), 0};
 
 init([Inet]) ->
-   {ok, 'IDLE', Inet}.
+   {ok, 'IDLE', #fsm{inet = Inet}}.
 
 %%
 %%
