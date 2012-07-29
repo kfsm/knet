@@ -272,6 +272,9 @@ encode_packet(#fsm{lib=Lib, status=Code, hrsp=Hrsp}) ->
 encode_header(Headers) when is_list(Headers) ->
    [ <<(encode_header(X))/binary, "\r\n">> || X <- Headers ];
 
+encode_header({Key, Val}) when is_atom(Key), is_atom(Val) ->
+   <<(atom_to_binary(Key, utf8))/binary, ": ", (atom_to_binary(Val, utf8))/binary>>;
+
 encode_header({Key, Val}) when is_atom(Key), is_binary(Val) ->
    <<(atom_to_binary(Key, utf8))/binary, ": ", Val/binary>>;
 

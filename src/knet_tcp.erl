@@ -271,7 +271,7 @@ init(Inet, {{accept, Opts}, Addr}) when is_integer(Addr) ->
 init(Inet, {{accept, Opts}, Addr}) ->
    % start tcp/ip acceptor
    LPid = pns:whereis(knet, {iid(Inet), listen, Addr}),
-   {ok, LSock} = konduit:ioctl(socket, LPid), %% TODO: FIXME
+   {ok, LSock} = konduit:ioctl(socket, knet_tcp, LPid),
    lager:info("tcp/ip accepting ~p (~p)", [Addr, LSock]),
    #fsm{
       role = server,
