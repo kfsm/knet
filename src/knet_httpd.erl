@@ -15,28 +15,34 @@
 %%   limitations under the License.
 %%
 %%  @description
-%%     
+%%      http server-side konduit   
 -module(knet_httpd).
 -author('Dmitry Kolesnikov <dmkolesnikov@gmail.com>').
 -author('Mario Cardona <marioxcardona@gmail.com>').
 
 -behaviour(konduit).
 
--export([init/1, free/2]).
--export(['IDLE'/2, 'LISTEN'/2, 'REQUEST'/2, 'PROCESS'/2]).
+-export([init/1, free/2, ioctl/2]).
+-export([
+   'IDLE'/2,    %% idle
+   'LISTEN'/2,  %% listen for incoming requests
+   'REQUEST'/2, %% receiveing request
+   'SERV'/2     %% request is received and serving by app
+]).
 
 %% internal state
 -record(fsm, {
-   peer,    % transport peer
-   lib,     % stack version
-   method,  % request method
-   uri,     % requested resource
-   hreq,    % request  headers
-   hrsp,    % response headers
-   status,
+   lib,     % default server identity
+
+   peer,
+   request, % active request {{Method, Head}, Uri}
+   response,% active response 
+
+   iolen,   % expected length of data
+   pckt,    %
 
    opts,    % http protocol options
-   iobuf    % I/O buffer
+   buffer   % I/O buffer
 }).
 
 
@@ -45,34 +51,42 @@
 %%% Factory
 %%%
 %%%------------------------------------------------------------------   
-
 init([Opts]) ->
-   % check lib version
-   {ok, Lib}   = application:get_application(?MODULE),
-   {_, _, Vsn} = lists:keyfind(Lib, 1, application:which_applications()),
-   LibName = <<(atom_to_binary(Lib, utf8))/binary, $/, (list_to_binary(Vsn))/binary>>,
    {ok,
       'IDLE',
       #fsm{
-         lib  = LibName,
-         opts = Opts,
-         iobuf= <<>>
+         lib  = default_httpd(),
+         opts = Opts
       }
    }.
 
 free(_, _) ->
    ok.
 
+%%
+%%
+ioctl(_, _) ->
+   undefined.
+
 %%%------------------------------------------------------------------
 %%%
 %%% IDLE
 %%%
 %%%------------------------------------------------------------------   
-'IDLE'({{accept, _Opts}, Addr}, _S) ->
-   {ok, 
-      nil,
+'IDLE'({{accept, _Opts}, Addr}, S) ->
+   {emit, 
       {{accept, []}, Addr}, 
-      'LISTEN'
+      'IDLE',
+      S
+   };
+
+'IDLE'({_Prot, Peer, established}, S) ->
+   {next_state, 
+      'LISTEN', 
+      S#fsm{
+         peer   = Peer,
+         buffer = <<>>
+      }
    }.
 
 %%%------------------------------------------------------------------
@@ -80,85 +94,17 @@ free(_, _) ->
 %%% LISTEN
 %%%
 %%%------------------------------------------------------------------   
-'LISTEN'({_Prot, Peer, established}, S) ->
-   {ok,
-      nil,
-      nil,
-      'LISTEN',
-      S#fsm{
-         peer = Peer
-      }
-   };
-
-'LISTEN'({_Prot, _Peer, {recv, Data}}, #fsm{iobuf=Buf}=S) ->
-   'LISTEN'(iohandle, S#fsm{iobuf = <<Buf/binary, Data/binary>>});
-
-'LISTEN'(iohandle, #fsm{iobuf=Buf}=S) ->   
-   % TODO: error handling policy
-   % TODO: {ok, {http_error, ...}}
-   case erlang:decode_packet(http_bin, Buf, []) of
-      {more, _}       -> ok;
-      {error, Reason} -> {error, Reason};
-      {ok, Req, Rest} -> 'LISTEN'(Req, S#fsm{iobuf=Rest})
-   end;
-
-'LISTEN'({http_request, Method, Uri, _Vsn}, S) ->
-   'REQUEST'(
-      iohandle, 
-      S#fsm{
-         method = Method,
-         uri    = resource(Uri),
-         hreq   = [],
-         hrsp   = []
-      }
-   ).
+'LISTEN'({_Prot, _Peer, {recv, Chunk}}, #fsm{buffer=Buf}=S) ->
+   parse_request_line(S#fsm{buffer = <<Buf/binary, Chunk/binary>>}).
 
 %%%------------------------------------------------------------------
 %%%
 %%% REQUEST
 %%%
 %%%------------------------------------------------------------------   
-'REQUEST'({_Prot, _Peer, {recv, Data}}, #fsm{iobuf=Buf}=S) ->
-   'REQUEST'(iohandle, S#fsm{iobuf = <<Buf/binary, Data/binary>>});
+'REQUEST'({_Prot, _Peer, {recv, Chunk}}, #fsm{buffer=Buf}=S) ->
+   parse_header(S#fsm{buffer = <<Buf/binary, Chunk/binary>>}).
 
-'REQUEST'(iohandle, #fsm{iobuf=Buf}=S) ->   
-   case erlang:decode_packet(httph_bin, Buf, []) of
-      {more, _}       -> ok;
-      {error, Reason} -> {error, Reason};
-      {ok, Req, Rest} -> 'REQUEST'(Req, S#fsm{iobuf=Rest})
-   end;
-
-'REQUEST'({http_header, _I, 'Content-Length', _R, Val}, #fsm{hreq=Hreq}=S) ->
-   'REQUEST'(iohandle, S#fsm{hreq=[{'Content-Length', list_to_integer(binary_to_list(Val))} | Hreq]});
-
-'REQUEST'({http_header, _I, Head, _R, Val}, #fsm{hreq=Hreq}=S) ->
-   'REQUEST'(iohandle, S#fsm{hreq=[{Head, Val} | Hreq]});
-%%
-%% TODO: Connection header
-
-'REQUEST'(http_eoh, #fsm{method=Method, uri=Uri, hreq=Head, iobuf = <<>>}=S) ->
-   PUri = uri:to_binary(Uri),
-   lager:debug("http headers ~p", [Head]),
-   {ok, 
-      nil, 
-      {http, PUri, {Method, Head}}, 
-      'PROCESS',
-      S#fsm{
-         iobuf = <<>>
-      }
-   };
-
-'REQUEST'(http_eoh, #fsm{method=Method, uri=Uri, hreq=Head, iobuf=Buf}=S) ->
-   PUri = uri:to_binary(Uri),
-   lager:debug("http headers ~p", [Head]),
-   {ok, 
-      nil, 
-      [{http, PUri, {Method, Head}}, {http, PUri, {recv, Buf}}],
-      'PROCESS',
-      S#fsm{
-         iobuf = <<>>
-      }
-   }.
 
 %%%------------------------------------------------------------------
 %%%
@@ -166,34 +112,190 @@ free(_, _) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'PROCESS'({{Code, Hrsp}, _Uri}, #fsm{method=Method, uri=Uri, hreq=Hreq, peer=Peer}=S)
+'SERV'({{Code, Rsp}, _Uri}=R, #fsm{request={{Mthd, Req}, Uri}, peer=Peer}=S0)
  when is_integer(Code) ->
    % output web log
-   {Addr, _} = Peer,
-   UA = proplists:get_value('User-Agent', Hreq),
-   lager:notice("~s ~p ~p ~p", [inet_parse:ntoa(Addr), Method, uri:to_binary(Uri), UA]),
-   {ok,
-      nil,
-      {send, Peer, encode_packet(S#fsm{status=Code, hrsp=Hrsp})}
+   UA = proplists:get_value('User-Agent', Req),
+   lager:notice("~p ~p ~p ~p", [Peer, Mthd, uri:to_binary(Uri), UA]),
+   S = S0#fsm{
+      response = {{Code, Rsp}, Uri},
+      iolen    = undefined,
+      buffer   = <<>>
+   },
+   {emit,
+      {send, Peer, encode_packet(S)},
+      'SERV',
+      S
    };
 
 
-'PROCESS'({send, _Uri, Data}, #fsm{peer=Peer}) ->
-   {ok,
-      nil,
-      {send, Peer, Data}
+'SERV'(timeout, S) ->
+   parse_chunk(S);
+
+'SERV'({send, _Uri, Data}, #fsm{peer=Peer}=S) ->
+   {emit,
+      {send, Peer, Data},
+      'SERV',
+      S
    };
 
-'PROCESS'({_Prot, _Peer, {recv, Chunk}}, #fsm{uri=Uri}) ->
-   PUri = uri:to_binary(Uri),
-   {ok,
-      nil,
-      {http, PUri, {recv, Chunk}}
+'SERV'({_Prot, _Peer, {recv, Chunk}}, #fsm{request={_, Uri}}=S) ->
+   {emit,
+      {http, Uri, {recv, Chunk}},
+      'SERV',
+      S
    }.
 
 
+%%%------------------------------------------------------------------
+%%%
+%%% http request parser 
+%%%
+%%%------------------------------------------------------------------   
+
+%%
+%%
+parse_request_line(#fsm{buffer=Buffer}=S) ->
+   % TODO: error handling policy
+   % TODO: {ok, {http_error, ...}}
+   case erlang:decode_packet(http_bin, Buffer, []) of
+      {more, _}       -> ok;
+      {error, Reason} -> {error, Reason};
+      {ok, Req,Chunk} -> parse_request_line(Req, S#fsm{buffer=Chunk})
+   end.
+
+parse_request_line({http_request, Method, Uri, _Vsn}, S) ->
+   % request line received
+   lager:debug("httpd ~p ~p", [Method, Uri]),
+   parse_header(S#fsm{request={{Method, []}, resource(Uri)}});
+
+parse_request_line({http_error, Msg}, _S) ->
+   {error, Msg}.
+
+%%
+%%
+parse_header(#fsm{buffer=Buffer}=S) -> 
+   % TODO: error handling policy
+   % TODO: {ok, {http_error, ...}}  
+   case erlang:decode_packet(httph_bin, Buffer, []) of
+      {more, _}       -> {next_state, 'REQUEST', S};
+      {error, Reason} -> {error, Reason};
+      {ok, Req,Chunk} -> parse_header(Req, S#fsm{buffer=Chunk})
+   end.
+
+parse_header({http_header, _I, 'Content-Length'=Head, _R, Val}, 
+             #fsm{request={{Mthd, Heads}, Uri}}=S) ->
+   Len = list_to_integer(binary_to_list(Val)),
+   parse_header(S#fsm{request={{Mthd, [{Head, Len} | Heads]}, Uri}, iolen=Len});
+
+parse_header({http_header, _I, 'Transfer-Encoding'=Head, _R, <<"chunked">>=Val},
+             #fsm{request={{Mthd, Heads}, Uri}}=S) ->
+   parse_header(S#fsm{request={{Mthd, [{Head, Val} | Heads]}, Uri}, iolen=chunk}); %% TODO: fix
+
+parse_header({http_header, _I, Head, _R, Val},
+           #fsm{request={{Mthd, Heads}, Uri}}=S) ->
+   parse_header(S#fsm{request={{Mthd, [{Head, Val} | Heads]}, Uri}});
+
+parse_header(http_eoh, #fsm{request={Req, Uri}, iolen=undefined}=S) ->
+   % nothing to receive
+   {emit, 
+      [{http, Uri, Req}, {http, Uri, eof}],
+      'SERV',
+      S#fsm{pckt=0}
+   };
+
+parse_header(http_eoh, #fsm{iolen=chunk}=S) ->
+   % expected length of response is not known, stream it
+   parse_chunk(S#fsm{pckt=0});
+
+parse_header(http_eoh, S) ->
+   % exprected length of response is know, receive it
+   parse_payload(S#fsm{pckt=0}).
 
 
+%%
+%%
+parse_payload(#fsm{request={Req, Uri}, pckt=Pckt, iolen=Len, buffer=Buffer}=S) ->
+   case size(Buffer) of
+      % buffer equals or exceed expected payload size
+      % end of data stream is reached.
+      Size when Size >= Len ->
+         <<Chunk:Len/binary, _/binary>> = Buffer,
+         Msg = if
+            Pckt =:= 0 -> [{http, Uri, Req}, {http, Uri, {recv, Chunk}}, {http, Uri, eof}];
+            true       -> [{http, Uri, {recv, Chunk}}, {http, Uri, eof}]
+         end,
+         {emit, Msg, 'SERV', 
+            S#fsm{
+               pckt  = Pckt + 1,
+               buffer= <<>>
+            }
+         };
+      Size when Size < Len ->
+         Msg = if
+            Pckt =:= 0 -> [{http, Uri, Req}, {http, Uri, {recv, Buffer}}];
+            true       -> {http, Uri, {recv, Buffer}}
+         end,
+         {emit, Msg, 'SERV',
+            S#fsm{
+               pckt  = Pckt + 1,
+               iolen = Len - size(Buffer), 
+               buffer= <<>>
+            }
+         }
+   end.
+
+%%
+%%
+parse_chunk(#fsm{request={Req, Uri}, pckt=Pckt, iolen=chunk, buffer=Buffer}=S) ->
+   case binary:split(Buffer, <<"\r\n">>) of  
+      [_]          -> 
+         {next_state, 'SERV', S};
+      [Head, Data] -> 
+         [L |_] = binary:split(Head, [<<" ">>, <<";">>]),
+         Len    = list_to_integer(binary_to_list(L), 16),
+         if
+            % chunk with length 0 is last chunk is stream
+            Len =:= 0 ->
+               Msg = if
+                  Pckt =:= 0 -> [{http, Uri, Req}, {http, Uri, eof}];
+                  true       -> {http, Uri, eof}
+               end,
+               {emit, Msg, 'SERV', S};
+            true      ->
+               parse_chunk(S#fsm{iolen=Len, buffer=Data})
+         end
+   end;
+
+parse_chunk(#fsm{request={Req, Uri}, pckt=Pckt, iolen=Len, buffer=Buffer}=S) ->
+   case size(Buffer) of
+      Size when Size >= Len ->
+         <<Chunk:Len/binary, $\r, $\n, Rest/binary>> = Buffer,
+         Msg = if
+            Pckt =:= 0 -> [{http, Uri, Req}, {http, Uri, {recv, Chunk}}];
+            true       -> {http, Uri, {recv, Chunk}}
+         end,
+         {emit, Msg, 'SERV',
+            S#fsm{
+               iolen = chunk, 
+               buffer= Rest,
+               pckt  = Pckt + 1
+            },
+            0    %re-sched via timeout
+         };
+      Size when Size < Len ->
+         Msg = if
+            Pckt =:= 0 -> [{http, Uri, Req}, {http, Uri, {recv, Buffer}}];
+            true       -> {http, Uri, {recv, Buffer}}
+         end,
+         {emit, Msg, 'SERV', 
+            S#fsm{
+               iolen = Len - size(Buffer), 
+               buffer= <<>>,
+               pckt  = Pckt + 1
+            }
+         }
+   end.
 
 
 %%%------------------------------------------------------------------
@@ -204,6 +306,18 @@ free(_, _) ->
 
 
 %%
+%% return default server identity
+default_httpd() ->
+   % discover library name
+   {ok,   Lib} = application:get_application(?MODULE),
+   {_, _, Vsn} = lists:keyfind(Lib, 1, application:which_applications()),
+   <<(atom_to_binary(Lib, utf8))/binary, $/, (list_to_binary(Vsn))/binary>>.
+
+
+
+
+%%
+%% 
 resource({absoluteURI, Scheme, Host, Port, Path}) ->
    uri:set(path, Path, 
    	uri:set(authority, {Host, Port},
@@ -260,10 +374,10 @@ htcode(504) -> <<"504 Gateway Timeout">>;
 htcode(505) -> <<"505 HTTP Version Not Supported">>.
 
 
-encode_packet(#fsm{lib=Lib, status=Code, hrsp=Hrsp}) ->
+encode_packet(#fsm{lib=Lib, response={{Code, Rsp}, _}}) ->
    [
      <<"HTTP/1.1 ", (htcode(Code))/binary, "\r\n">>,
-     encode_header([{'Server', Lib} | Hrsp]),
+     encode_header([{'Server', Lib} | Rsp]),
      <<$\r, $\n>>
    ].
 

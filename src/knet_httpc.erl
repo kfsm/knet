@@ -261,8 +261,10 @@ parse_status_line(#fsm{buffer=Buffer}=S) ->
 
 parse_status_line({http_response, _Vsn, Code, Msg}, 
                   #fsm{request={{Method, _}, Uri}}=S) ->
-   lager:debug("http ~p ~p ~p ~p", [Method, Uri, Code, Msg]), 
+   lager:debug("httpc ~p ~p ~p ~p", [Method, Uri, Code, Msg]), 
    parse_header(S#fsm{response={Code, []}});
+   % TODOD: fix response signature
+   %parse_header(S#fsm{response={Code, []}, Uri});
 
 parse_status_line({http_error, Msg}, _S) ->
    {error, Msg}.

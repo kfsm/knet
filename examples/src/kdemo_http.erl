@@ -98,27 +98,30 @@ free(_, _) ->
       'ECHO'
    }.
 
+'ECHO'({http, Uri, {recv, Msg}}, S) ->
+   lager:info("echo ~p: ~p data ~p", [self(), Uri, Msg]),
+   {reply,
+      {send, Uri, Msg},   
+      'ECHO',
+      S,
+      5000
+   };
+
 'ECHO'({http, Uri, {Method, H}}, {Port, Cnt}) ->
    lager:info("echo ~p: ~p ~p", [self(), Method, Uri]),
    %% acceptor is consumed run a new one
    acceptor(Port),
-   {ok, 
+   {reply, 
       {{200, H}, Uri},   % echo received header
-      nil,               %
       'ECHO',            % 
       {Port, Cnt + 1},   % 
       5000               % 
    };
 
-'ECHO'({http, Uri, {recv, Msg}}, S) ->
-   lager:info("echo ~p: ~p data ~p", [self(), Uri, Msg]),
-   {ok,
-      {send, Uri, Msg},   
-      nil,
-      'ECHO',
-      S,
-      5000
-   };
+
+'ECHO'({http, Uri, eof}, {_, Cnt}=S) ->   
+   lager:info("echo ~p: processed ~p", [self(), Cnt]),
+   {next_state, 'ECHO', S, 5000};
 
 'ECHO'(timeout, {_, Cnt}) ->
    lager:info("echo ~p: processed ~p", [self(), Cnt]),
