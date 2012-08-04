@@ -20,8 +20,11 @@
 -module(knet_http_tests).
 -include_lib("eunit/include/eunit.hrl").
 
--define(DATA, <<"0123456789abcdef">>).
--define(ATAD, <<"fedcba9876543210">>).
+-define(DATA,   <<"0123456789abcdef">>).
+-define(CHUNK1, <<"0123">>).
+-define(CHUNK2,     <<"4567">>).
+-define(CHUNK3,         <<"89ab">>).
+-define(CHUNK4,             <<"cdef">>).
 
 %%
 %% http loop
@@ -34,10 +37,10 @@ loop({http, Uri, {'GET', _}}, S) ->
    	<<"/stream">> ->
    	   [
    	      {{200, [{'Content-Type', 'text/plain'}]}, Uri},
-   	      {send, Uri, binary:part(S, 0, 4)},
-   	      {send, Uri, binary:part(S, 4, 4)},
-   	      {send, Uri, binary:part(S, 8, 4)},
-   	      {send, Uri, binary:part(S,12, 4)},
+   	      {send, Uri, ?CHUNK1},
+   	      {send, Uri, ?CHUNK2},
+   	      {send, Uri, ?CHUNK3},
+   	      {send, Uri, ?CHUNK4},
    	      {eof,  Uri}
    	   ];
    	_ ->
@@ -59,6 +62,7 @@ loop({http, Uri, eof}, S) ->
 http_srv(Addr) ->
    inets:start(),
    knet:start(),
+   %lager:set_loglevel(lager_console_backend, debug),
    % start listener konduit
    {ok, _} = case pns:whereis(knet, {tcp4, listen, Addr}) of
       undefined ->
@@ -100,12 +104,41 @@ server_get_3_test() ->
 server_post_test() ->
    http_srv({any, 8081}),
    {ok,
-      {{_, 201, _}, _, ?ATAD}
-   } = httpc:request(post, {"http://localhost:8081/data", [], "text/plain", ?ATAD}, [], [{body_format, binary}]).
+      {{_, 201, _}, _, ?DATA}
+   } = httpc:request(post, {"http://localhost:8081/data", [], "text/plain", ?DATA}, [], [{body_format, binary}]).
 
 server_put_test() ->
    http_srv({any, 8081}),
    {ok,
       {{_, 201, _}, _, ?DATA}
-   } = httpc:request(post, {"http://localhost:8081/data", [], "text/plain", ?DATA}, [], [{body_format, binary}]).
+   } = httpc:request(put, {"http://localhost:8081/data", [], "text/plain", ?DATA}, [], [{body_format, binary}]).
+
+
+client_get_1_test() ->
+   http_srv({any, 8081}),
+   {ok, Pid} = konduit:start_link({fabric, nil, self(), [
+      {knet_tcp,  [inet]},
+      {knet_httpc,[[]]}
+   ]}),
+   konduit:send(Pid, {{'GET', []}, "http://localhost:8081/data"}),
+   {http, _, {200, _}} = konduit:recv(Pid),
+   {http, _, {recv, ?DATA}} = konduit:recv(Pid),
+   {http, _, eof}      = konduit:recv(Pid),
+   ok.
+
+client_get_2_test() ->
+   http_srv({any, 8081}),
+   {ok, Pid} = konduit:start_link({fabric, nil, self(), [
+      {knet_tcp,  [inet]},
+      {knet_httpc,[[]]}
+   ]}),
+   konduit:send(Pid, {{'GET', []}, "http://localhost:8081/stream"}),
+   {http, _, {200, _}} = konduit:recv(Pid),
+   {http, _, {recv, ?CHUNK1}} = konduit:recv(Pid),
+   {http, _, {recv, ?CHUNK2}} = konduit:recv(Pid),
+   {http, _, {recv, ?CHUNK3}} = konduit:recv(Pid),
+   {http, _, {recv, ?CHUNK4}} = konduit:recv(Pid),  
+   {http, _, eof}      = konduit:recv(Pid),
+   ok.
+
 
