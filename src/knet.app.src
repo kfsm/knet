@@ -6,7 +6,7 @@
          knet,
          knet_tcp,
          % knet_ssl,
-         knet_http_io,
+         knet_http,
          knet_httpc,
          knet_httpd,
          % knet_sup,

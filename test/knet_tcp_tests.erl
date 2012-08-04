@@ -26,13 +26,10 @@
 %% tcp/ip loop
 loop(init, []) -> 
    {ok, undefined};
-loop({tcp, Peer, {recv, Data}}, _) ->
-   {stop,
-      {send, Peer, Data},
-      nil
-   };
-loop(_, _) ->
-   ok.
+loop({tcp, Peer, {recv, Data}}, S) ->
+   {stop, normal, {send, Peer, Data}, S};
+loop(_, S) ->
+   {next_state, loop, S}.
 
 %%
 %% spawn tcp/ip server

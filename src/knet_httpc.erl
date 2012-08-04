@@ -62,14 +62,13 @@
 %%%
 %%%------------------------------------------------------------------   
 init([Opts]) ->
-   % konduit is reusable to call many Uri
    {ok,
       'IDLE',
       #fsm{
          ua     = default_ua(),
          uri    = proplists:get_value(uri, Opts),
          method = proplists:get_value(method, Opts),
-         opts   = [{vsn, <<"1.1">>} | Opts]
+         opts   = Opts
       }
    }.
 
@@ -111,30 +110,41 @@ ioctl(_, _) ->
  when is_binary(Payload) ->
    'IDLE'({{Method, []}, Uri, Payload}, S);
 
-'IDLE'({{Method, Req}, Uri}, S)
- when is_atom(Method) ->
-   'IDLE'({{Method, Req}, Uri, <<>>}, S);
+'IDLE'({Req, Uri}, S)
+ when is_binary(Uri) orelse is_list(Uri) ->
+   'IDLE'({Req, uri:new(Uri)}, S);
 
-'IDLE'({{Method, Req0}, Uri, Payload}, #fsm{ua=UA, opts=Opts}=S)
- when is_atom(Method), is_binary(Payload) ->
-   Req = check_head_host(Uri, 
-      check_head_ua(UA, Req0 ++ proplists:get_value(heads, Opts, []))
-   ),
+'IDLE'({_, Uri} = Req, #fsm{opts=Opts}=S) ->
    Peer = peer(Uri, Opts),
    {emit, 
       {{connect, []}, Peer},
       'REQUESTED',
       S#fsm{
          peer    = Peer,
-         request = {{Method, Req}, Uri},
-         iolen   = undefined,
-         buffer  = Payload 
+         request = Req,
+         iolen   = undefined
       }
    };
 
-'IDLE'({_Prot, Peer, {error, Reason}}, _S) ->
+'IDLE'({Req, Uri, Payload}, S)
+ when is_binary(Uri) orelse is_list(Uri) ->
+   'IDLE'({Req, uri:new(Uri), Payload}, S);
+
+'IDLE'({_, Uri, _} = Req, #fsm{opts=Opts}=S) ->
+   Peer = peer(Uri, Opts),
+   {emit, 
+      {{connect, []}, Peer},
+      'REQUESTED',
+      S#fsm{
+         peer    = Peer,
+         request = Req,
+         iolen   = undefined
+      }
+   };
+
+'IDLE'({_Prot, Peer, {error, Reason}}, S) ->
    lager:error("http couldn't connect to peer ~p, error ~p", [Peer, Reason]),
-   {error, Reason};
+   {next_state, 'IDLE',  S};
    
 'IDLE'({_Prot, _Peer, established}, S) ->
    {next_state, 'CONNECTED', S}.
@@ -148,26 +158,19 @@ ioctl(_, _) ->
  when is_binary(Payload) ->
    'CONNECTED'({{Method, []}, Uri, Payload}, S);
 
-'CONNECTED'({{Method, Req0}, Uri}, S)
- when is_atom(Method) ->
-   'CONNECTED'({{Method, Req0}, Uri, <<>>}, S);
+'CONNECTED'({Req, Uri}, S)
+ when is_binary(Uri) orelse is_list(Uri) ->
+   'CONNECTED'({Req, uri:new(Uri)}, S);
 
-'CONNECTED'({{Method, Req0}, Uri, Payload}, #fsm{peer=Peer, ua=UA, opts=Opts}=S0)
- when is_atom(Method), is_binary(Payload) ->
-   Req = check_head_host(Uri,
-      check_head_ua(UA, Req0 ++ proplists:get_value(heads, Opts, []))
-   ),
-   S = S0#fsm{
-      request={{Method, Req}, Uri},
-      iolen  = undefined,
-      buffer = Payload
-   },
-   {emit,
-      {send, Peer, encode_packet(S)},
-      'REQUESTED',
-      S#fsm{buffer = <<>>},
-      ?T_SERVER
-   };
+'CONNECTED'({{_,_}, _}=Req, S) ->
+   http_request(Req, S);
+
+'CONNECTED'({Req, Uri, Payload}, S)
+ when is_binary(Uri) orelse is_list(Uri) ->
+   'CONNECTED'({Req, uri:new(Uri), Payload}, S);
+
+'CONNECTED'({{_,_}, _, _}=Req, S) ->
+   http_request(Req, S);
 
 'CONNECTED'({_Prot, _Peer, terminated}, S) ->
    {next_state, 'IDLE', S};
@@ -181,7 +184,11 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------ 
 'REQUESTED'({_Prot, _Peer, {recv, Chunk}}, #fsm{buffer=Buf}=S) ->
-   parse_status_line(S#fsm{buffer = <<Buf/binary, Chunk/binary>>});
+   parse_status_line(
+      S#fsm{
+         buffer = <<Buf/binary, Chunk/binary>>
+      }
+   );
 
 'REQUESTED'({_Prot, Peer, {error, Reason}}, #fsm{request={_, Uri}}=S) ->
    lager:warning("http couldn't connect to peer ~p, error ~p", [Peer, Reason]),
@@ -191,13 +198,8 @@ ioctl(_, _) ->
       S
    };
    
-'REQUESTED'({_Prot, Peer, established}, S) ->
-   {reply,
-      {send, Peer, encode_packet(S)},
-      'REQUESTED',
-      S#fsm{buffer = <<>>},
-      ?T_SERVER
-   }.
+'REQUESTED'({_Prot, Peer, established}, #fsm{request=Req}=S) ->
+   http_request(Req, S).
 
 %%%------------------------------------------------------------------
 %%%
@@ -205,7 +207,11 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------ 
 'RESPONSE'({_Prot, _Peer, {recv, Chunk}}, #fsm{buffer=Buf}=S) ->
-   parse_header(S#fsm{buffer = <<Buf/binary, Chunk/binary>>});
+   parse_header(
+      S#fsm{
+         buffer = <<Buf/binary, Chunk/binary>>
+      }
+   );
 
 'RESPONSE'({_Prot, _Peer, terminated}, S) ->
    {next_state, 'IDLE', S};
@@ -218,7 +224,11 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------ 
 'RECV'({_Prot, _Peer, {recv, Data}}, #fsm{buffer=Buf}=S) ->
-   parse_payload(S#fsm{buffer = <<Buf/binary, Data/binary>>});
+   parse_payload(
+      S#fsm{
+         buffer = <<Buf/binary, Data/binary>>
+      }
+   );
 
 'RECV'({_Prot, _Peer, terminated}, S) ->
    {next_state, 'IDLE', S};
@@ -231,7 +241,11 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------ 
 'STREAM'({_Prot, _Peer, {recv, Data}}, #fsm{buffer=Buf}=S) ->
-   parse_chunk(S#fsm{buffer = <<Buf/binary, Data/binary>>});
+   parse_chunk(
+      S#fsm{
+         buffer = <<Buf/binary, Data/binary>>
+      }
+   );
 
 'STREAM'(timeout, S) ->
    parse_chunk(S);
@@ -251,11 +265,9 @@ ioctl(_, _) ->
 %%
 %%
 parse_status_line(#fsm{buffer=Buffer}=S) ->   
-   % TODO: error handling policy
-   % TODO: {ok, {http_error, ...}}
    case erlang:decode_packet(http_bin, Buffer, []) of
       {more, _}       -> {next_state, 'REQUESTED', S, ?T_SERVER};
-      {error, Reason} -> {error, Reason};
+      {error, Reason} -> {stop, Reason, S};
       {ok, Req,Chunk} -> parse_status_line(Req, S#fsm{buffer=Chunk})
    end.
 
@@ -266,19 +278,20 @@ parse_status_line({http_response, _Vsn, Code, Msg},
    % TODOD: fix response signature
    %parse_header(S#fsm{response={Code, []}, Uri});
 
-parse_status_line({http_error, Msg}, _S) ->
-   {error, Msg}.
+parse_status_line({http_error, Msg}, S) ->
+   {stop, Msg, S}.
 
 %%
 %%
 parse_header(#fsm{buffer=Buffer}=S) -> 
-   % TODO: error handling policy
-   % TODO: {ok, {http_error, ...}}  
    case erlang:decode_packet(httph_bin, Buffer, []) of
       {more, _}       -> {next_state, 'RESPONSE', S};
-      {error, Reason} -> {error, Reason};
+      {error, Reason} -> {stop, Reason, S};
       {ok, Req,Chunk} -> parse_header(Req, S#fsm{buffer=Chunk})
    end.
+
+parse_header({http_error, Msg}, S) ->
+   {stop, Msg, S};
 
 parse_header({http_header, _I, 'Content-Length'=Head, _R, Val}, 
              #fsm{response={Code, Heads}}=S) ->
@@ -441,47 +454,39 @@ resource(Uri, Opts) ->
 
 
 %%
-%% encode(Req, Opts) -> binary()
-%%
-%% encode http request
-encode_packet(#fsm{request={{Method, Req}, Uri}, opts=Opts, buffer = <<>>}) ->
-   % protocol version
-   {vsn, VSN}  = lists:keyfind(vsn, 1, Opts),
-   % Host header
-   [
-      <<(atom_to_binary(Method, utf8))/binary, 32, (resource(Uri, Opts))/binary, 32, "HTTP/", VSN/binary, $\r, $\n>>,
-      encode_header(Req),
-      <<$\r, $\n>>
-   ];
+%% send http request
+http_request({{Method, Head0}, Uri}, #fsm{peer=Peer, ua=UA, opts=Opts}=S) ->
+   % http request w/o payload
+   Head = check_head_host(Uri,
+      check_head_ua(UA, Head0 ++ proplists:get_value(heads, Opts, []))
+   ),
+   Req = knet_http:encode_req(Method, uri:to_binary(Uri), Head),
+   {reply,
+      {send, Peer, Req},
+      'REQUESTED',
+      S#fsm{
+         iolen  = undefined,
+         buffer = <<>>
+      },
+      ?T_SERVER
+   };
 
-encode_packet(#fsm{request={{Method, Req}, Uri}, opts=Opts, buffer=Payload}) ->
-   % protocol version
-   {vsn, VSN}  = lists:keyfind(vsn, 1, Opts),
-   % Host header
-   [
-      <<(atom_to_binary(Method, utf8))/binary, 32, (resource(Uri, Opts))/binary, 32, "HTTP/", VSN/binary, $\r, $\n>>,
-      encode_header([{'Content-Length', size(Payload)} | Req]),
-      <<$\r, $\n>>,
-      Payload
-   ].
-
-
-%%
-%%
-encode_header(Headers) when is_list(Headers) ->
-   [ <<(encode_header(X))/binary, "\r\n">> || X <- Headers ];
-
-encode_header({Key, Val}) when is_atom(Key), is_atom(Val) ->
-   <<(atom_to_binary(Key, utf8))/binary, ": ", (atom_to_binary(Val, utf8))/binary>>;
-
-encode_header({Key, Val}) when is_atom(Key), is_binary(Val) ->
-   <<(atom_to_binary(Key, utf8))/binary, ": ", Val/binary>>;
-
-encode_header({Key, Val}) when is_atom(Key), is_integer(Val) ->
-   <<(atom_to_binary(Key, utf8))/binary, ": ", (list_to_binary(integer_to_list(Val)))/binary>>;
-
-encode_header({'Host', {Host, Port}}) ->
-   <<"Host", ": ", Host/binary, ":", (list_to_binary(integer_to_list(Port)))/binary>>.
-   
-
-
+http_request({{Method, Head0}, Uri, Payload}, #fsm{peer=Peer, ua=UA, opts=Opts}=S) ->
+   % http request with payload
+   Head = check_head_host(Uri,
+      check_head_ua(UA, Head0 ++ proplists:get_value(heads, Opts, []))
+   ),
+   Req = knet_http:encode_req(
+      Method, 
+      uri:to_binary(Uri), 
+      [{'Content-Length', knet:size(Payload)} | Head]
+   ),
+   {emit,
+      [{send, Peer, Req}, {send, Peer, Payload}],
+      'REQUESTED',
+      S#fsm{
+         iolen  = undefined,
+         buffer = <<>>
+      },
+      ?T_SERVER
+   }.

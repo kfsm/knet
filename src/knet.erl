@@ -36,6 +36,7 @@
 -export([connect/1, connect/2, close/1]).% listen/1, listen/2, close/1]).
 -export([ioctl/2, send/2, recv/1]).
 -export([route/2, ifget/1, ifget/2]).
+-export([size/1]).
 
 %%%------------------------------------------------------------------
 %%%
@@ -71,6 +72,12 @@ stop() ->
       lists:reverse(lists:delete(kernel, lists:delete(stdlib, Apps)))
    ).
 
+size(Data)
+ when is_binary(Data) ->
+   erlang:size(Data);
+size(Data)
+ when is_list(Data) ->
+   lists:foldl(fun(X, Acc) -> Acc + knet:size(X) end, 0, Data). 
    
 %%%------------------------------------------------------------------
 %%%

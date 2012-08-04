@@ -36,14 +36,19 @@
 
    peer,
    request, % active request {{Method, Head}, Uri}
-   response,% active response 
-
+  
    iolen,   % expected length of data
-   pckt,    %
+   pckt,    % number of received packets
 
    opts,    % http protocol options
    buffer   % I/O buffer
 }).
+
+%
+-define(URL_LEN,    2048). % max allowed size of request line
+-define(REQ_LEN,    4096). % max allowed size of headers
+
+%% TODO: no eof for GET
 
 
 %%%------------------------------------------------------------------
@@ -95,7 +100,21 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------   
 'LISTEN'({_Prot, _Peer, {recv, Chunk}}, #fsm{buffer=Buf}=S) ->
-   parse_request_line(S#fsm{buffer = <<Buf/binary, Chunk/binary>>}).
+   try 
+      parse_request_line(
+         S#fsm{
+            buffer = assert_io(?URL_LEN, <<Buf/binary, Chunk/binary>>)
+         }
+      )
+   catch
+      {http_error, Code} -> http_error(Code, S)
+   end;
+
+'LISTEN'({_Prot, _Peer, terminated}, S) ->
+   {stop, normal, S};
+
+'LISTEN'({_Prot, _Peer, {error, Reason}}, S) ->
+   {stop, Reason, S}.
 
 %%%------------------------------------------------------------------
 %%%
@@ -103,8 +122,22 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------   
 'REQUEST'({_Prot, _Peer, {recv, Chunk}}, #fsm{buffer=Buf}=S) ->
-   parse_header(S#fsm{buffer = <<Buf/binary, Chunk/binary>>}).
+   try
+      parse_header(
+         S#fsm{
+            buffer = assert_io(?REQ_LEN, <<Buf/binary, Chunk/binary>>)
+         }
+      )
+   catch
+      {http_error, Code} -> http_error(Code, S)
+   end;
 
+
+'REQUEST'({_Prot, _Peer, terminated}, S) ->
+   {stop, normal, S};
+
+'REQUEST'({_Prot, _Peer, {error, Reason}}, S) ->
+   {stop, Reason, S}.
 
 %%%------------------------------------------------------------------
 %%%
@@ -112,39 +145,77 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'SERV'({{Code, Rsp}, _Uri}=R, #fsm{request={{Mthd, Req}, Uri}, peer=Peer}=S0)
- when is_integer(Code) ->
-   % output web log
-   UA = proplists:get_value('User-Agent', Req),
-   lager:notice("~p ~p ~p ~p", [Peer, Mthd, uri:to_binary(Uri), UA]),
-   S = S0#fsm{
-      response = {{Code, Rsp}, Uri},
-      iolen    = undefined,
-      buffer   = <<>>
-   },
+'SERV'({{Code, Head0}, _Uri}, #fsm{lib=Lib, peer=Peer, opts=Opts}=S) ->
+   % response chunked
+   Head = check_head_srv(Lib, 
+      Head0 ++ proplists:get_value(heads, Opts, [])
+   ),
+   Rsp  = knet_http:encode_rsp(
+      Code, 
+      [{'Transfer-Encoding', <<"chunked">>} | Head]
+   ),
    {emit,
-      {send, Peer, encode_packet(S)},
+      {send, Peer, Rsp},
+      'SERV',
+      S#fsm{
+         iolen = undefined,
+         buffer= <<>>
+      }
+   };
+
+'SERV'({{Code, Head0}, _Uri, Payload}, #fsm{lib=Lib, peer=Peer, opts=Opts}=S) ->
+   % response with payload
+   Head = check_head_srv(Lib, 
+      Head0 ++ proplists:get_value(heads, Opts, [])
+   ),
+   Rsp  = knet_http:encode_rsp(
+      Code, 
+      [{'Content-Length', knet:size(Payload)} | Head]
+   ),
+   {emit,
+      [{send, Peer, Rsp}, {send, Peer, Payload}],
+      'LISTEN',
+      S#fsm{
+         iolen = undefined,
+         buffer= <<>>
+      }
+   };
+
+'SERV'({send, _Uri, Data}, #fsm{peer=Peer}=S) ->
+   % response with chunk
+   {emit,
+      {send, Peer, knet_http:encode_chunk(Data)},
       'SERV',
       S
    };
 
+'SERV'({eof, _Uri}, #fsm{peer=Peer}=S) ->
+   % response with end-of-file
+   {emit,
+      {send, Peer, knet_http:encode_chunk(<<>>)},
+      'LISTEN',
+      S#fsm{
+         iolen = undefined,
+         buffer= <<>>
+      }
+   };
 
 'SERV'(timeout, S) ->
    parse_chunk(S);
 
-'SERV'({send, _Uri, Data}, #fsm{peer=Peer}=S) ->
-   {emit,
-      {send, Peer, Data},
-      'SERV',
-      S
-   };
-
 'SERV'({_Prot, _Peer, {recv, Chunk}}, #fsm{request={_, Uri}}=S) ->
+   % TODO: parse chunk here
    {emit,
       {http, Uri, {recv, Chunk}},
       'SERV',
       S
-   }.
+   };
+
+'SERV'({_Prot, _Peer, terminated}, S) ->
+   {stop, normal, S};
+
+'SERV'({_Prot, _Peer, {error, Reason}}, S) ->
+   {stop, Reason, S}.
 
 
 %%%------------------------------------------------------------------
@@ -154,34 +225,37 @@ ioctl(_, _) ->
 %%%------------------------------------------------------------------   
 
 %%
-%%
+%% parses request line
 parse_request_line(#fsm{buffer=Buffer}=S) ->
-   % TODO: error handling policy
-   % TODO: {ok, {http_error, ...}}
    case erlang:decode_packet(http_bin, Buffer, []) of
-      {more, _}       -> ok;
-      {error, Reason} -> {error, Reason};
-      {ok, Req,Chunk} -> parse_request_line(Req, S#fsm{buffer=Chunk})
+      {more, _}        -> {next_state, 'LISTEN', S};
+      {error, _Reason} -> http_error(400, S); 
+      {ok, Req, Chunk} -> parse_request_line(Req, S#fsm{buffer=Chunk})
    end.
 
-parse_request_line({http_request, Method, Uri, _Vsn}, S) ->
+parse_request_line({http_error, Msg}, S) ->
+   http_error(400, S);
+
+parse_request_line({http_request, Mthd, Uri, _Vsn}, S) ->
    % request line received
-   lager:debug("httpd ~p ~p", [Method, Uri]),
-   parse_header(S#fsm{request={{Method, []}, resource(Uri)}});
-
-parse_request_line({http_error, Msg}, _S) ->
-   {error, Msg}.
+   lager:debug("httpd ~p ~p", [Mthd, Uri]),
+   parse_header(
+      S#fsm{
+         request={{assert_method(Mthd), []}, assert_uri(Uri)}
+      }
+   ).
 
 %%
-%%
+%% parses headers
 parse_header(#fsm{buffer=Buffer}=S) -> 
-   % TODO: error handling policy
-   % TODO: {ok, {http_error, ...}}  
    case erlang:decode_packet(httph_bin, Buffer, []) of
-      {more, _}       -> {next_state, 'REQUEST', S};
-      {error, Reason} -> {error, Reason};
-      {ok, Req,Chunk} -> parse_header(Req, S#fsm{buffer=Chunk})
+      {more, _}        -> {next_state, 'REQUEST', S};
+      {error, _Reason} -> http_error(400, S);
+      {ok, Req, Chunk} -> parse_header(Req, S#fsm{buffer=Chunk})
    end.
+
+parse_header({http_error, Msg}, S) ->
+   http_error(400, S);
 
 parse_header({http_header, _I, 'Content-Length'=Head, _R, Val}, 
              #fsm{request={{Mthd, Heads}, Uri}}=S) ->
@@ -197,9 +271,9 @@ parse_header({http_header, _I, Head, _R, Val},
    parse_header(S#fsm{request={{Mthd, [{Head, Val} | Heads]}, Uri}});
 
 parse_header(http_eoh, #fsm{request={Req, Uri}, iolen=undefined}=S) ->
-   % nothing to receive
+   % nothing to receive, Content-Length, Transfer-Encoding is not present
    {emit, 
-      [{http, Uri, Req}, {http, Uri, eof}],
+      {http, Uri, Req}, % Note: eof is not sent for req w/o content
       'SERV',
       S#fsm{pckt=0}
    };
@@ -304,7 +378,6 @@ parse_chunk(#fsm{request={Req, Uri}, pckt=Pckt, iolen=Len, buffer=Buffer}=S) ->
 %%%
 %%%------------------------------------------------------------------
 
-
 %%
 %% return default server identity
 default_httpd() ->
@@ -313,92 +386,60 @@ default_httpd() ->
    {_, _, Vsn} = lists:keyfind(Lib, 1, application:which_applications()),
    <<(atom_to_binary(Lib, utf8))/binary, $/, (list_to_binary(Vsn))/binary>>.
 
-
+%%
+%% check server header
+check_head_srv(Srv, Heads) ->
+   case lists:keyfind('Server', 1, Heads) of
+      false -> [{'Server', Srv} | Heads];
+      _     -> Heads
+   end.
 
 
 %%
-%% 
-resource({absoluteURI, Scheme, Host, Port, Path}) ->
+%% http request validator
+%%
+assert_io(Len, Buf)
+ when size(Buf) < Len -> Buf;
+assert_io(_, _)   -> throw({http_error, 414}).
+
+assert_method('HEAD')  -> 'HEAD';
+assert_method('GET')   -> 'GET';
+assert_method('POST')  -> 'POST';
+assert_method('PUT')   -> 'PUT';
+assert_method('DELETE')-> 'DELETE';
+assert_method(<<"PATCH">>) -> 'PATCH';
+assert_method('TRACE') -> 'TRACE';
+assert_method('OPTIONS') -> 'OPTIONS';
+assert_method(<<"CONNECT">>) -> 'CONNECT';
+assert_method(_)     -> throw({http_error, 501}).
+
+assert_uri({absoluteURI, Scheme, Host, Port, Path}) ->
    uri:set(path, Path, 
    	uri:set(authority, {Host, Port},
    		uri:new(Scheme)
    	)
    );
 %uri({scheme, Scheme, Uri}=E) ->
-resource({abs_path, Path}) ->
-   uri:set(path, Path, uri:new(http)). %TODO: ssl support
+assert_uri({abs_path, Path}) ->
+   uri:set(path, Path, uri:new(http)); %TODO: ssl support
 %uri('*') ->
 %uri(Uri) ->
+assert_uri(_) -> throw({http_error, 400}).
+
 
 %%
-%% http status code response
-htcode(100) -> <<"100 Continue">>;
-htcode(101) -> <<"101 Switching Protocols">>;
-htcode(200) -> <<"200 OK">>;
-htcode(201) -> <<"201 Created">>;
-htcode(202) -> <<"202 Accepted">>;
-htcode(203) -> <<"203 Non-Authoritative Information">>;
-htcode(204) -> <<"204 No Content">>;
-htcode(205) -> <<"205 Reset Content">>;
-htcode(206) -> <<"206 Partial Content">>;
-htcode(300) -> <<"300 Multiple Choices">>;
-htcode(301) -> <<"301 Moved Permanently">>;
-htcode(302) -> <<"302 Found">>;
-htcode(303) -> <<"303 See Other">>;
-htcode(304) -> <<"304 Not Modified">>;
-htcode(307) -> <<"307 Temporary Redirect">>;
-htcode(400) -> <<"400 Bad Request">>;
-htcode(401) -> <<"401 Unauthorized">>;
-htcode(402) -> <<"402 Payment Required">>;
-htcode(403) -> <<"403 Forbidden">>;
-htcode(404) -> <<"404 Not Found">>;
-htcode(405) -> <<"405 Method Not Allowed">>;
-htcode(406) -> <<"406 Not Acceptable">>;
-htcode(407) -> <<"407 Proxy Authentication Required">>;
-htcode(408) -> <<"408 Request Timeout">>;
-htcode(409) -> <<"409 Conflict">>;
-htcode(410) -> <<"410 Gone">>;
-htcode(411) -> <<"411 Length Required">>;
-htcode(412) -> <<"412 Precondition Failed">>;
-htcode(413) -> <<"413 Request Entity Too Large">>;
-htcode(414) -> <<"414 Request-URI Too Long">>;
-htcode(415) -> <<"415 Unsupported Media Type">>;
-htcode(416) -> <<"416 Requested Range Not Satisfiable">>;
-htcode(417) -> <<"417 Expectation Failed">>;
-htcode(422) -> <<"422 Unprocessable Entity">>;
-htcode(500) -> <<"500 Internal Server Error">>;
-htcode(501) -> <<"501 Not Implemented">>;
-htcode(502) -> <<"502 Bad Gateway">>;
-htcode(503) -> <<"503 Service Unavailable">>;
-htcode(504) -> <<"504 Gateway Timeout">>;
-htcode(505) -> <<"505 HTTP Version Not Supported">>.
-
-
-encode_packet(#fsm{lib=Lib, response={{Code, Rsp}, _}}) ->
-   [
-     <<"HTTP/1.1 ", (htcode(Code))/binary, "\r\n">>,
-     encode_header([{'Server', Lib} | Rsp]),
-     <<$\r, $\n>>
-   ].
-
-%%
-%%
-encode_header(Headers) when is_list(Headers) ->
-   [ <<(encode_header(X))/binary, "\r\n">> || X <- Headers ];
-
-encode_header({Key, Val}) when is_atom(Key), is_atom(Val) ->
-   <<(atom_to_binary(Key, utf8))/binary, ": ", (atom_to_binary(Val, utf8))/binary>>;
-
-encode_header({Key, Val}) when is_atom(Key), is_binary(Val) ->
-   <<(atom_to_binary(Key, utf8))/binary, ": ", Val/binary>>;
-
-encode_header({Key, Val}) when is_atom(Key), is_integer(Val) ->
-   <<(atom_to_binary(Key, utf8))/binary, ": ", (list_to_binary(integer_to_list(Val)))/binary>>;
-
-encode_header({'Host', {Host, Port}}) ->
-   <<"Host", ": ", Host/binary, ":", (list_to_binary(integer_to_list(Port)))/binary>>.
-   
-
-
+%% handles http error
+http_error(Code, #fsm{lib=Lib, peer=Peer}=S) ->
+   %% TODO: error log
+   Msg  = knet_http:status(Code),
+   Pckt = knet_http:encode_rsp(
+      Code,
+      [{'Server', Lib}, {'Content-Length', size(Msg) + 2}, {'Content-Type', 'text/plain'}]
+   ),
+   {reply,  
+      {send, Peer, [Pckt, Msg, <<$\r, $\n>>]},
+      'LISTEN',
+      S#fsm{buffer= <<>>}
+   }.
 
 

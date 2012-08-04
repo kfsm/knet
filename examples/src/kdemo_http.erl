@@ -54,7 +54,7 @@ get(Uri) ->
    }),
    UA = <<"curl/7.21.4 (universal-apple-darwin11.0) libcurl/7.21.4 OpenSSL/0.9.8r zlib/1.2.5">>,
    konduit:send(Pid, {{'GET', [{'User-Agent', UA}, {'Accept', <<"*/*">>}]}, Uri}),
-   timer:sleep(1000),
+   timer:sleep(5000),
    R = konduit:ioctl(latency, Pid),
    error_logger:error_report([{r, R}]).
 
@@ -91,11 +91,11 @@ init([Port]) ->
 free(_, _) ->
    ok.
 
-'IDLE'(timeout, {Port, _}) ->
-   {ok, 
+'IDLE'(timeout, {Port, _}=S) ->
+   {reply, 
       {{accept, []}, Port},  % issue accept request to HTTP
-      nil,
-      'ECHO'
+      'ECHO',
+      S
    }.
 
 'ECHO'({http, Uri, {recv, Msg}}, S) ->
@@ -107,12 +107,12 @@ free(_, _) ->
       5000
    };
 
-'ECHO'({http, Uri, {Method, H}}, {Port, Cnt}) ->
-   lager:info("echo ~p: ~p ~p", [self(), Method, Uri]),
+'ECHO'({http, Uri, {Mthd, H}}, {Port, Cnt}) ->
+   lager:info("echo ~p: ~p ~p", [self(), Mthd, Uri]),
    %% acceptor is consumed run a new one
    acceptor(Port),
    {reply, 
-      {{200, H}, Uri},   % echo received header
+      [{{200, []}, Uri}, {send, Uri, knet_http:encode_req(Mthd, uri:to_binary(Uri), H)}],  % echo received header
       'ECHO',            % 
       {Port, Cnt + 1},   % 
       5000               % 
@@ -121,11 +121,11 @@ free(_, _) ->
 
 'ECHO'({http, Uri, eof}, {_, Cnt}=S) ->   
    lager:info("echo ~p: processed ~p", [self(), Cnt]),
-   {next_state, 'ECHO', S, 5000};
+   {reply, {eof, Uri}, 'ECHO', S, 5000};
 
-'ECHO'(timeout, {_, Cnt}) ->
+'ECHO'(timeout, {_, Cnt}=S) ->
    lager:info("echo ~p: processed ~p", [self(), Cnt]),
-   stop.
+   {stop, normal, S}.
 
 
 

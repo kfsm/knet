@@ -67,29 +67,31 @@ init([Port]) ->
 free(_, _) ->
    ok.
 
-'IDLE'(timeout, {Port, _}) ->
-   {ok, 
+'IDLE'(timeout, {Port, _}=S) ->
+   {reply, 
       {{accept, []}, Port},  % issue accept request to TCP/IP
-      nil,
-      'ECHO'                 % new echo state
+      'ECHO',                % new echo state
+      S
    }.
 
-'ECHO'({tcp, Peer, established}, {Port, _}) ->
+'ECHO'({tcp, Peer, established}, {Port, _}=S) ->
    lager:info("echo ~p: established ~p", [self(), Peer]),
    %% acceptor is consumed run a new one
    acceptor(Port),
-   ok;
+   {next_state, 'ECHO', S};
 
 'ECHO'({tcp, Peer, {recv, Msg}}, {Port, Cnt}) ->
    lager:info("echo ~p: ~p data ~p", [self(), Peer, Msg]),
-   {ok, 
+   {reply, 
       {send, Peer, Msg}, %% echo received message
-      nil,               %% message to emit on sideB
       'ECHO',            %% next state, not changed
       {Port, Cnt + 1},   %% update internal echo state
       5000               %% timeout event after 
    };
 
-'ECHO'(timeout, {_, Cnt}) ->
+'ECHO'(timeout, {_, Cnt}=S) ->
    lager:info("echo ~p: processed ~p", [self(), Cnt]),
-   stop.                  %% terminate acceptor process 
+   {stop, normal, S}.                %% terminate acceptor process 
+
+
+
