@@ -112,9 +112,8 @@ ioctl(_, _) ->
 %%% LISTEN: holder of listen socket
 %%%
 %%%------------------------------------------------------------------
-'LISTEN'({ctrl, Ctrl}, S) ->
-   {Val, NS} = ioctrl(Ctrl, S),
-   {reply, Val, 'LISTEN', NS}.
+'LISTEN'(_, S) ->
+   {next_state, 'LISTEN', S}.
 
 %%%------------------------------------------------------------------
 %%%
@@ -184,10 +183,6 @@ ioctl(_, _) ->
 %%% ESTABLISHED
 %%%
 %%%------------------------------------------------------------------
-'ESTABLISHED'({ctrl, Ctrl}, S) ->
-   {Val, NS} = ioctrl(Ctrl, S),
-   {reply, Val, 'ESTABLISHED', NS};
-   
 'ESTABLISHED'({tcp_error, _, Reason}, #fsm{peer=Peer}=S) ->
    lager:error("tcp/ip error ~p, peer ~p", [Reason, Peer]),
    {emit,

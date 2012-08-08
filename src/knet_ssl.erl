@@ -29,7 +29,7 @@
 -include("knet.hrl").
 
 
--export([init/1, free/2]).
+-export([init/1, free/2, ioctl/2]).
 -export(['IDLE'/2, 'LISTEN'/2, 'CONNECT'/2, 'ACCEPT'/2, 'ESTABLISHED'/2]).
 
 
@@ -64,13 +64,13 @@
 
 %%
 %%
-init([Inet, {listen, _, _}=Msg]) ->
+init([Inet, {{listen, _Opts}, _Peer}=Msg]) ->
    {ok, 'LISTEN', init(Inet, Msg)}; 
 
-init([Inet, {accept, _, _}=Msg]) ->
+init([Inet, {{accept, _Opts}, _Peer}=Msg]) ->
    {ok, 'ACCEPT', init(Inet, Msg), 0};
 
-init([Inet, {connect, _, _}=Msg]) ->
+init([Inet, {{connect, _Opts}, _}=Msg]) ->
    {ok, 'CONNECT', init(Inet, Msg), 0};
 
 init([Inet]) ->
@@ -78,50 +78,53 @@ init([Inet]) ->
 
 %%
 %%
-free(Reason, S) ->
-   ?DEBUG([{terminated, S#fsm.peer}, {reason, Reason}]),
-   %gen_tcp:close(S#fsm.sock),
+free(Reason, #fsm{peer=Peer, sock=Sock}) ->
+   lager:info("ssl terminated ~p, reason ~p", [Peer, Reason]),
+   ssl:close(Sock),
    ok.
+
+%%
+%%  
+ioctl(socket, #fsm{sock=Sock}) ->
+   Sock;
+ioctl(_, _) ->
+   undefined.
 
 %%%------------------------------------------------------------------
 %%%
 %%% IDLE: allows to chain TCP/IP konduit
 %%%
 %%%------------------------------------------------------------------
-'IDLE'({accept, _, _}=Msg, Inet) ->
-   {ok, nil, nil, 'ACCEPT', init(Inet, Msg), 0};
-'IDLE'({connect, _, _}=Msg, Inet) ->
-   {ok, nil, nil, 'CONNECT', init(Inet, Msg), 0}.
+'IDLE'({{accept, _Opts}, _}=Msg, Inet) ->
+   {next_state, 'ACCEPT', init(Inet, Msg), 0};
+'IDLE'({{connect, _Opts}, _}=Msg, Inet) ->
+   {next_state, 'CONNECT', init(Inet, Msg), 0}.
 
 %%%------------------------------------------------------------------
 %%%
 %%% LISTEN: holder of listen socket
 %%%
 %%%------------------------------------------------------------------
-'LISTEN'({ctrl, Ctrl}, S) ->
-   {Val, NS} = ctrl(Ctrl, S),
-   {ok, Val, nil, 'LISTEN', NS};
-'LISTEN'(_, _) ->
-   ok.
+'LISTEN'(_, S) ->
+   {next_state, 'LISTEN', S}.
 
 %%%------------------------------------------------------------------
 %%%
 %%% CONNECT
 %%%
 %%%------------------------------------------------------------------
-'CONNECT'(timeout, #fsm{peer = {IP, Port}} = S) ->
+'CONNECT'(timeout, #fsm{peer = {Host, Port}} = S) ->
    % connect socket
    T = proplists:get_value(timeout, S#fsm.opts, ?T_CONNECT),     
-   case gen_tcp:connect(IP, Port, ?SOCK_OPTS, T) of
+   case gen_tcp:connect(Host, Port, ?SOCK_OPTS, T) of
       {ok, Tcp} ->
          {ok, Sock} = ssl:connect(Tcp,  []),
          {ok, Peer} = ssl:peername(Sock),
          {ok, Addr} = ssl:sockname(Sock),
-         ?DEBUG([connected, {addr, Addr}, {peer, Peer}]),
+         lager:info("ssl connected ~p, local addr ~p in ~p usec", [Peer, Addr, nil]),
          pns:register(knet, {iid(S#fsm.inet), established, Peer}, self()),
-         {ok, 
-            nil,
-            {ssl, established, Peer},
+         {emit, 
+            {ssl, Peer, established},
             'ESTABLISHED', 
             S#fsm{
                role = client,
@@ -131,7 +134,12 @@ free(Reason, S) ->
             }
          };
       {error, Reason} ->
-         {error, Reason}
+         lager:error("ssl connect ~p, error ~p", [{Host, Port}, Reason]),
+         {emit,
+            {ssl, {Host, Port}, {error, Reason}},
+            'IDLE',
+            S
+         }
    end.
    
 
@@ -146,11 +154,10 @@ free(Reason, S) ->
    ok = ssl:ssl_accept(Sock),
    {ok, Peer} = ssl:peername(Sock),
    {ok, Addr} = ssl:sockname(Sock),
-   ?DEBUG([acceped, {addr, Addr}, {peer, Peer}]),
+   lager:info("ssl accepted ~p, local addr ~p", [Peer, Addr]),
    pns:register(knet, {iid(S#fsm.inet), established, Peer}, self()),
-   {ok, 
-      nil,
-      {ssl, established, Peer},
+   {emit, 
+      {ssl, Peer, established},
       'ESTABLISHED', 
       S#fsm{
          sock = Sock,
@@ -164,34 +171,55 @@ free(Reason, S) ->
 %%% ESTABLISHED
 %%%
 %%%------------------------------------------------------------------
-'ESTABLISHED'({ctrl, Ctrl}, S) ->
-   {Val, NS} = ctrl(Ctrl, S),
-   {ok, Val, nil, 'ESTABLISHED', NS};
-   
-'ESTABLISHED'({ssl_error, _, Err}, #fsm{peer = Peer} = S) ->
-   ?DEBUG([Peer, {error, Err}]),
-   %konduit:emit(Kpid, {tcp, {error, Err}, Peer}, Sink),
-   {error, Err};
+'ESTABLISHED'({ssl_error, _, Reason}, #fsm{peer = Peer} = S) ->
+   lager:error("ssl error ~p, peer ~p", [Reason, Peer]),
+   {emit,
+      {ssl, Peer, {error, Reason}},
+      'IDLE',
+      S
+   };
    
 'ESTABLISHED'({ssl_closed, _}, #fsm{peer = Peer} = S) ->
-   ?DEBUG([Peer, terminated]),
-   %{stop, konduit:emit(Kpid, {tcp, terminated, Peer}, Sink)};
-   stop;
+   lager:info("ssl terminated by peer ~p", [Peer]),
+   {emit,
+      {ssl, Peer, terminated},
+      'IDLE',
+      S
+   };
 
 'ESTABLISHED'({ssl, _, Data}, #fsm{peer = Peer} = S) ->
-   ?DEBUG([Peer, {recv, Data}]),
+   lager:debug("ssl recv ~p~n~p~n", [Peer, Data]),
    % TODO: flexible flow control
    ssl:setopts(S#fsm.sock, [{active, once}]),
-   {ok, nil, {tcp, recv, Peer, Data}};
+   {emit, 
+      {ssl, Peer, {recv, Data}},
+      'ESTABLISHED',
+      S
+   };
    
-'ESTABLISHED'({ssl, send, _Peer, Data}, S) ->
-   ?DEBUG([S#fsm.peer, {send, Data}]),
-   % gen_tcp:send(...) -> ok | {error, Reason} 
-   % if socket cannot send data then whole machine is terminated
-   ssl:send(S#fsm.sock, Data);
+
+'ESTABLISHED'({send, _Peer, Data}, #fsm{peer=Peer}=S) ->
+   lager:debug("ssl send ~p~n~p~n", [Peer, Data]),
+   case ssl:send(S#fsm.sock, Data) of
+      ok ->
+         {next_state, 'ESTABLISHED', S};
+      {error, Reason} ->
+         lager:error("ssl error ~p, peer ~p", [Reason, Peer]),
+         {reply,
+            {ssl, Peer, {error, Reason}},
+            'IDLE',
+            S
+         }
+   end;
    
-'ESTABLISHED'(terminate, _S) ->
-   stop.   
+'ESTABLISHED'({terminate, _Peer}, #fsm{sock=Sock, peer=Peer}=S) ->
+   lager:info("ssl terminated to peer ~p", [Peer]),
+   ssl:close(Sock),
+   {reply,
+      {ssl, Peer, terminated},
+      'IDLE',
+      S
+   }.
    
    
 %%%------------------------------------------------------------------
@@ -202,13 +230,13 @@ free(Reason, S) ->
 
 %%
 %% initializes konduit
-init(Inet, {listen, Addr, Opts}) when is_integer(Addr) ->
-   init(Inet, {listen, {any, Addr}, Opts}); 
-init(Inet, {listen, Addr, Opts}) ->
+init(Inet, {{listen, Opts}, Addr}) when is_integer(Addr) ->
+   init(Inet, {{listen, Opts}, {any, Addr}}); 
+init(Inet, {{listen, Opts}, Addr}) ->
    % start ssl listener
    {IP, Port}  = Addr,
    {certfile, Cert} = lists:keyfind(certfile, 1, Opts),
-   {keyfile, Key}   = lists:keyfind(keyfile, 1, Opts),
+   {keyfile,   Key} = lists:keyfind(keyfile, 1, Opts),
    {ok, LSock} = ssl:listen(Port, [
    	Inet, 
    	{ip, IP}, 
@@ -217,7 +245,7 @@ init(Inet, {listen, Addr, Opts}) ->
    	{reuseaddr, true} | ?SOCK_OPTS
    ]),
    pns:register(knet, {iid(Inet), listen, Addr}, self()),
-   ?DEBUG([{listen, Addr}]),
+   lager:info("ssl listen on ~p", [Addr]),
    #fsm{
       role = server,
       inet = Inet,
@@ -226,13 +254,13 @@ init(Inet, {listen, Addr, Opts}) ->
       opts = Opts
    };
 
-init(Inet, {accept, Addr, Opts}) when is_integer(Addr) ->
-   init(Inet, {accept, {any, Addr}, Opts}); 
-init(Inet, {accept, Addr, Opts}) ->
+init(Inet, {{accept, Opts}, Addr}) when is_integer(Addr) ->
+   init(Inet, {{accept, Opts}, {any, Addr}}); 
+init(Inet, {{accept, Opts}, Addr}) ->
    % start tcp/ip acceptor
    LPid = pns:whereis(knet, {iid(Inet), listen, Addr}),
-   {ok, LSock} = knet:ctrl(LPid, socket),  
-   ?DEBUG([{accept, Addr}, {sock, LSock}]),
+   {ok, LSock} = konduit:ioctl(socket, knet_ssl, LPid),  
+   lager:info("ssl accepting ~p", [Addr]),
    #fsm{
       role = server,
       inet = Inet,
@@ -241,7 +269,7 @@ init(Inet, {accept, Addr, Opts}) ->
       opts = Opts
    };
 
-init(Inet, {connect, Peer, Opts}) ->
+init(Inet, {{connect, Opts}, Peer}) ->
    % start tcp/ip client
    #fsm{
       role = client,
@@ -257,21 +285,3 @@ iid(inet)  -> ssl4;
 iid(inet6) -> ssl6. 
 
    
-%%%------------------------------------------------------------------   
-%%%
-%%% ctrl
-%%%
-%%%------------------------------------------------------------------
-
-ctrl(address, S) ->
-   {{S#fsm.addr, S#fsm.peer}, S};
-
-ctrl(socket, S) ->
-   {S#fsm.sock, S};
-
-ctrl(_, S) ->
-   {nil, S}.
-   
-%epoch() ->
-%   {Mega, Sec, Micro} = erlang:now(),
-%   (Mega * 1000000 + Sec) * 1000000 + Micro.   
