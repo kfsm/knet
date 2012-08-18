@@ -14,27 +14,27 @@
 %%   See the License for the specific language governing permissions and
 %%   limitations under the License.
 %%
-%%  @description
-%%     
+%%   @description
+%%      ssl client/server konduit  
 %%
 -module(knet_ssl).
 -author('Dmitry Kolesnikov <dmkolesnikov@gmail.com>').
 -author('Mario Cardona <marioxcardona@gmail.com>').
 
-%%
-%% client/server ssl konduit
-%%
-
 -behaviour(konduit).
 -include("knet.hrl").
-
 
 -export([init/1, free/2, ioctl/2]).
 -export(['IDLE'/2, 'LISTEN'/2, 'CONNECT'/2, 'ACCEPT'/2, 'ESTABLISHED'/2]).
 
-
+%% internal state
 -record(fsm, {
    role :: client | server,
+
+   ttcp,   % time to connect tcp/ip
+   tconn,  % time to connect ssl
+   trecv,  % inter packet arrival time 
+   tsend,  % inter packet transmission time
 
    inet,   % inet family
    sock,   % tcp/ip socket
@@ -42,19 +42,6 @@
    addr,   % local address
    opts    % connection option
 }).
-
-
-%%
--define(SOCK_OPTS, [
-   {active, once}, 
-   {mode, binary}, 
-   {nodelay, true},
-   {recbuf, 16 * 1024},
-   {sndbuf, 16 * 1024}
-]).
-
-%
--define(T_CONNECT,     20000).  %% tcp/ip connection timeout
 
 %%%------------------------------------------------------------------
 %%%
@@ -87,12 +74,23 @@ free(Reason, #fsm{peer=Peer, sock=Sock}) ->
 %%  
 ioctl(socket, #fsm{sock=Sock}) ->
    Sock;
+ioctl(address,#fsm{addr=Addr, peer=Peer}) ->
+   {Addr, Peer}; 
+ioctl(iostat, #fsm{ttcp=Ttcp, tconn=Tconn, trecv=Trecv, tsend=Tsend}) ->
+   [
+      {tcp,  Ttcp},
+      {ssl,  Tconn},
+      {recv, counter:len(Trecv)},
+      {send, counter:len(Tsend)},
+      {ttrx, counter:val(Trecv)},
+      {ttwx, counter:val(Tsend)}
+   ];  
 ioctl(_, _) ->
    undefined.
 
 %%%------------------------------------------------------------------
 %%%
-%%% IDLE: allows to chain TCP/IP konduit
+%%% IDLE: allows to chain ssl konduit
 %%%
 %%%------------------------------------------------------------------
 'IDLE'({{accept, _Opts}, _}=Msg, Inet) ->
@@ -113,26 +111,44 @@ ioctl(_, _) ->
 %%% CONNECT
 %%%
 %%%------------------------------------------------------------------
-'CONNECT'(timeout, #fsm{peer = {Host, Port}} = S) ->
+'CONNECT'(timeout, #fsm{peer={Host, Port}, opts=Opts}=S) ->
    % connect socket
-   T = proplists:get_value(timeout, S#fsm.opts, ?T_CONNECT),     
-   case gen_tcp:connect(Host, Port, ?SOCK_OPTS, T) of
+   T = proplists:get_value(timeout, S#fsm.opts, ?T_TCP_CONNECT),  
+   T1 = erlang:now(),   
+   case gen_tcp:connect(check_host(Host), Port, opts(Opts, ?TCP_OPTS) ++ ?SO_TCP, T) of
       {ok, Tcp} ->
-         {ok, Sock} = ssl:connect(Tcp,  []),
-         {ok, Peer} = ssl:peername(Sock),
-         {ok, Addr} = ssl:sockname(Sock),
-         lager:info("ssl connected ~p, local addr ~p in ~p usec", [Peer, Addr, nil]),
-         pns:register(knet, {iid(S#fsm.inet), established, Peer}, self()),
-         {emit, 
-            {ssl, Peer, established},
-            'ESTABLISHED', 
-            S#fsm{
-               role = client,
-               sock = Sock,
-               addr = Addr,
-               peer = Peer
-            }
-         };
+         T2 = erlang:now(),
+         case ssl:connect(Tcp, opts(Opts, ?SSL_OPTS)) of
+            {ok, Sock} ->
+               {ok, Peer} = ssl:peername(Sock),
+               {ok, Addr} = ssl:sockname(Sock),
+               {ok, Sinf} = ssl:connection_info(Sock),
+               Ttcp  = timer:now_diff(T2, T1),
+               Tconn = timer:now_diff(erlang:now(), T2), 
+               lager:info("ssl connected ~p, local addr ~p, suite ~p in ~p usec", [Peer, Addr, Sinf, Ttcp + Tconn]),
+               pns:register(knet, {iid(S#fsm.inet), established, Peer}, self()),
+               {emit, 
+                  {ssl, Peer, established},
+                  'ESTABLISHED', 
+                  S#fsm{
+                     role = client,
+                     sock = Sock,
+                     addr = Addr,
+                     peer = Peer,
+                     ttcp   = Ttcp,
+                     tconn  = Tconn,
+                     trecv  = counter:new(time),
+                     tsend  = counter:new(time)
+                  }
+               };
+            {error, Reason} ->
+               lager:error("ssl connect ~p, error ~p", [{Host, Port}, Reason]),
+               {emit,
+                  {ssl, {Host, Port}, {error, Reason}},
+                  'IDLE',
+                  S
+               }
+         end;
       {error, Reason} ->
          lager:error("ssl connect ~p, error ~p", [{Host, Port}, Reason]),
          {emit,
@@ -151,18 +167,25 @@ ioctl(_, _) ->
 'ACCEPT'(timeout, #fsm{sock = LSock} = S) ->
    % accept a socket
    {ok, Sock} = ssl:transport_accept(LSock),
+   T1 = erlang:now(),
    ok = ssl:ssl_accept(Sock),
+   Tconn = timer:now_diff(erlang:now(), T1),
    {ok, Peer} = ssl:peername(Sock),
    {ok, Addr} = ssl:sockname(Sock),
-   lager:info("ssl accepted ~p, local addr ~p", [Peer, Addr]),
+   {ok, Sinf} = ssl:connection_info(Sock),
+   lager:info("ssl accepted ~p, local addr ~p, suite ~p in ~p usec", [Peer, Addr, Sinf, Tconn]),
    pns:register(knet, {iid(S#fsm.inet), established, Peer}, self()),
    {emit, 
       {ssl, Peer, established},
       'ESTABLISHED', 
       S#fsm{
-         sock = Sock,
-         addr = Addr,
-         peer = Peer
+         sock  = Sock,
+         addr  = Addr,
+         peer  = Peer,
+         ttcp  = 0,
+         tconn = Tconn,
+         trecv = counter:new(time),
+         tsend = counter:new(time)
       } 
    }.
    
@@ -171,7 +194,7 @@ ioctl(_, _) ->
 %%% ESTABLISHED
 %%%
 %%%------------------------------------------------------------------
-'ESTABLISHED'({ssl_error, _, Reason}, #fsm{peer = Peer} = S) ->
+'ESTABLISHED'({ssl_error, _, Reason}, #fsm{peer=Peer}=S) ->
    lager:error("ssl error ~p, peer ~p", [Reason, Peer]),
    {emit,
       {ssl, Peer, {error, Reason}},
@@ -179,7 +202,7 @@ ioctl(_, _) ->
       S
    };
    
-'ESTABLISHED'({ssl_closed, _}, #fsm{peer = Peer} = S) ->
+'ESTABLISHED'({ssl_closed, _}, #fsm{peer=Peer}=S) ->
    lager:info("ssl terminated by peer ~p", [Peer]),
    {emit,
       {ssl, Peer, terminated},
@@ -187,22 +210,22 @@ ioctl(_, _) ->
       S
    };
 
-'ESTABLISHED'({ssl, _, Data}, #fsm{peer = Peer} = S) ->
+'ESTABLISHED'({ssl, _, Data}, #fsm{peer=Peer, trecv=Cnt}=S) ->
    lager:debug("ssl recv ~p~n~p~n", [Peer, Data]),
    % TODO: flexible flow control
    ssl:setopts(S#fsm.sock, [{active, once}]),
    {emit, 
       {ssl, Peer, {recv, Data}},
       'ESTABLISHED',
-      S
+      S#fsm{trecv=counter:add(now, Cnt)}
    };
    
 
-'ESTABLISHED'({send, _Peer, Data}, #fsm{peer=Peer}=S) ->
+'ESTABLISHED'({send, _Peer, Data}, #fsm{peer=Peer, tsend=Cnt}=S) ->
    lager:debug("ssl send ~p~n~p~n", [Peer, Data]),
    case ssl:send(S#fsm.sock, Data) of
       ok ->
-         {next_state, 'ESTABLISHED', S};
+         {next_state, 'ESTABLISHED', S#fsm{tsend=counter:add(now, Cnt)}};
       {error, Reason} ->
          lager:error("ssl error ~p, peer ~p", [Reason, Peer]),
          {reply,
@@ -235,14 +258,10 @@ init(Inet, {{listen, Opts}, Addr}) when is_integer(Addr) ->
 init(Inet, {{listen, Opts}, Addr}) ->
    % start ssl listener
    {IP, Port}  = Addr,
-   {certfile, Cert} = lists:keyfind(certfile, 1, Opts),
-   {keyfile,   Key} = lists:keyfind(keyfile, 1, Opts),
    {ok, LSock} = ssl:listen(Port, [
    	Inet, 
    	{ip, IP}, 
-   	{certfile, Cert}, 
-   	{keyfile,  Key}, 
-   	{reuseaddr, true} | ?SOCK_OPTS
+   	{reuseaddr, true} | opts(Opts, ?SSL_OPTS) ++ opts(Opts, ?TCP_OPTS) ++ ?SO_TCP
    ]),
    pns:register(knet, {iid(Inet), listen, Addr}, self()),
    lager:info("ssl listen on ~p", [Addr]),
@@ -284,4 +303,15 @@ init(Inet, {{connect, Opts}, Peer}) ->
 iid(inet)  -> ssl4;
 iid(inet6) -> ssl6. 
 
-   
+
+%%
+%% validate that host to connect is an acceptable format
+check_host(Host) when is_binary(Host) ->
+   binary_to_list(Host);
+check_host(Host) ->
+   Host. 
+
+%%
+%% perform while list filtering of suplied konduit options
+opts(Opts, Wlist) ->
+   lists:filter(fun({X, _}) -> lists:member(X, Wlist) end, Opts).   

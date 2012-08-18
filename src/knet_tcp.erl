@@ -22,6 +22,7 @@
 -author('Mario Cardona <marioxcardona@gmail.com>').
 
 -behaviour(konduit).
+-include("knet.hrl").
 
 -export([init/1, free/2, ioctl/2]).
 -export(['IDLE'/2, 'LISTEN'/2, 'CONNECT'/2, 'ACCEPT'/2, 'ESTABLISHED'/2]).
@@ -40,20 +41,6 @@
    addr,   % local address
    opts    % connection option
 }). 
-
-%% list of tcp/ip socket options acceptable as with the request
--define(TCP_OPTS, [delay_send, dontroute, keepalive, packet, packet_size, recbuf, send_timeout, sndbuf]).
-%% default socket options
--define(SOCK_OPTS, [
-   {active, once}, 
-   {mode, binary} 
-   %{nodelay, true},
-   %{recbuf, 16 * 1024},
-   %{sndbuf, 16 * 1024}
-]).
-
-%
--define(T_CONNECT,     20000).  %% tcp/ip connection timeout
 
 %%%------------------------------------------------------------------
 %%%
@@ -106,7 +93,7 @@ ioctl(_, _) ->
 
 %%%------------------------------------------------------------------
 %%%
-%%% IDLE: allows to chain TCP/IP konduit
+%%% IDLE: allows to chain tcp/ip konduit
 %%%
 %%%------------------------------------------------------------------
 'IDLE'({{accept,  _Opts}, _Peer}=Msg, #fsm{inet=Inet}) ->
@@ -129,9 +116,9 @@ ioctl(_, _) ->
 %%%------------------------------------------------------------------
 'CONNECT'(timeout, #fsm{peer={Host, Port}, opts=Opts} = S) ->
    % socket connect timeout
-   T  = proplists:get_value(timeout, S#fsm.opts, ?T_CONNECT),    
+   T  = proplists:get_value(timeout, S#fsm.opts, ?T_TCP_CONNECT),    
    T1 = erlang:now(),
-   case gen_tcp:connect(check_host(Host), Port, opts(Opts, ?TCP_OPTS) ++ ?SOCK_OPTS, T) of
+   case gen_tcp:connect(check_host(Host), Port, opts(Opts, ?TCP_OPTS) ++ ?SO_TCP, T) of
       {ok, Sock} ->
          {ok, Peer} = inet:peername(Sock),
          {ok, Addr} = inet:sockname(Sock),
@@ -257,7 +244,7 @@ init(Inet, {{listen, Opts}, Addr}) ->
    {ok, LSock} = gen_tcp:listen(Port, [
       Inet, 
       {ip, IP}, 
-      {reuseaddr, true} | opts(Opts, ?TCP_OPTS) ++ ?SOCK_OPTS
+      {reuseaddr, true} | opts(Opts, ?TCP_OPTS) ++ ?SO_TCP
    ]),
    pns:register(knet, {iid(Inet), listen, Addr}, self()),
    lager:info("tcp/ip listen on ~p", [Addr]),

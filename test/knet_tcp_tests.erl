@@ -69,12 +69,21 @@ server_fsm_test() ->
 client_fsm_test() ->
    tcp_srv({any, ?PORT}),
    Peer = {{127,0,0,1}, ?PORT},
+   % establish
    {ok, Pid} = konduit:start_link({fabric, nil, self(), [
       {knet_tcp, [inet, {{connect, []}, Peer}]}
    ]}),
    {tcp, Peer, established} = konduit:recv(Pid),
+   % send/recv data
    konduit:send(Pid, {send, Peer, ?DATA}),
    {tcp, Peer, {recv, ?DATA}} = konduit:recv(Pid),
+   % io statistic
+   {ok, Stat} = konduit:ioctl(iostat, knet_tcp, Pid),
+   {tcp,  _} = lists:keyfind(tcp,  1, Stat),
+   {recv, _} = lists:keyfind(recv, 1, Stat),
+   {send, _} = lists:keyfind(send, 1, Stat),
+   {ttrx, _} = lists:keyfind(ttrx, 1, Stat),
+   {ttwx, _} = lists:keyfind(ttwx, 1, Stat),
    {tcp, Peer, terminated} = konduit:recv(Pid),
    ok.
 

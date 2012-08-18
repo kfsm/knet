@@ -1,29 +1,36 @@
-%% @author     Dmitry Kolesnikov, <dmkolesnikov@gmail.com>
-%% @copyright  (c) 2012 Dmitry Kolesnikov. All Rights Reserved
 %%
-%%  This library is free software; you can redistribute it and/or modify
-%%  it under the terms of the XXX License, version 3.0
-%%  as published by the Free Software Foundation (the "License").
+%%   Copyright 2012 Dmitry Kolesnikov, All Rights Reserved
+%%   Copyright 2012 Mario Cardona, All Rights Reserved
 %%
-%%  Software distributed under the License is distributed on an "AS IS"
-%%  basis, WITHOUT WARRANTY OF ANY KIND, either express or implied. See
-%%  the License for the specific language governing rights and limitations
-%%  under the License.
-%% 
-%%  You should have received a copy of the XXX
-%%  License along with this library; if not, write to the Free Software
-%%  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
-%%  USA or retrieve online http://www.opensource.org/licenses/xxx
+%%   Licensed under the Apache License, Version 2.0 (the "License");
+%%   you may not use this file except in compliance with the License.
+%%   You may obtain a copy of the License at
+%%
+%%       http://www.apache.org/licenses/LICENSE-2.0
+%%
+%%   Unless required by applicable law or agreed to in writing, software
+%%   distributed under the License is distributed on an "AS IS" BASIS,
+%%   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%%   See the License for the specific language governing permissions and
+%%   limitations under the License.
 %%
 
-%% TODO: flag to disable lager
+%% list of default default socket options
+-define(SO_TCP, [
+   {active, once}, 
+   {mode, binary} 
+   %{nodelay, true},
+   %{recbuf, 16 * 1024},
+   %{sndbuf, 16 * 1024}
+]).
 
--define(DEBUG, true).
+%% white list of socket options acceptable by konduits
+-define(TCP_OPTS, [delay_send, dontroute, keepalive, packet, packet_size, recbuf, send_timeout, sndbuf]).
+-define(SSL_OPTS, [verify, verify_fun, fail_if_no_peer_cert, depth, cert, certfile, key, keyfile, password, cacert, cacertfile, ciphers]).
 
-%%
-%%
--ifdef(DEBUG).
--define(DEBUG(M), error_logger:info_report([{?MODULE, self()}] ++ M)).
--else.
--define(DEBUG(M), true).
--endif.
+%% default timers
+-define(T_TCP_CONNECT,     20000).  %% tcp/ip connection timeout
+-define(T_SSL_CONNECT,     20000).  %% ssl connection timeout
+
+
+

@@ -20,11 +20,14 @@
 -module(knet_ssl_tests).
 -include_lib("eunit/include/eunit.hrl").
 
--define(PORT, 8443).
+-define(PORT, 8443). %%
 -define(DATA, <<"0123456789abcdef">>).
--define(OPTS, [
+-define(SRV_OPTS, [
    {certfile, "../test/cert.pem"},
    {keyfile,  "../test/key.pem"}
+]).
+-define(CLI_OPTS, [
+    {ciphers, [{rsa, rc4_128, sha}]}
 ]).
 
 %%
@@ -32,7 +35,7 @@
 loop(init, []) -> 
    {ok, undefined};
 loop({ssl, Peer, {recv, Data}}, S) ->
-   {reply, {send, Peer, Data}, loop, S};
+   {stop, normal, {send, Peer, Data}, S};
 loop(_, S) ->
    {next_state, loop, S}.
 
@@ -41,14 +44,12 @@ loop(_, S) ->
 tcp_srv(Addr) ->
    ssl:start(),
    knet:start(),
-   lager:set_loglevel(lager_console_backend, debug),
-   %{file, Module} = code:is_loaded(?MODULE),
-   %Dir = filename:dirname(Module),
+   %lager:set_loglevel(lager_console_backend, debug),
    % start listener konduit
    {ok, _} = case pns:whereis(knet, {ssl4, listen, Addr}) of
       undefined ->
          konduit:start_link({fabric, nil, nil, [
-            {knet_ssl, [inet, {{listen, ?OPTS}, Addr}]}
+            {knet_ssl, [inet, {{listen, ?SRV_OPTS}, Addr}]}
          ]});   
       Pid -> 
          {ok, Pid}
@@ -67,7 +68,7 @@ server_fsm_test() ->
    {ok, Sock} = ssl:connect(
    	{127,0,0,1}, 
    	?PORT, 
-   	[binary, {active, false}]
+   	[binary, {active, false} | ?CLI_OPTS]
    ),
    ok = ssl:send(Sock, ?DATA),
    {ok, ?DATA} = ssl:recv(Sock, 0),
@@ -78,11 +79,18 @@ client_fsm_test() ->
    tcp_srv({any, ?PORT}),
    Peer = {{127,0,0,1}, ?PORT},
    {ok, Pid} = konduit:start_link({fabric, nil, self(), [
-      {knet_ssl, [inet, {{connect, []}, Peer}]}
+      {knet_ssl, [inet, {{connect, ?CLI_OPTS}, Peer}]}
    ]}),
    {ssl, Peer, established} = konduit:recv(Pid),
    konduit:send(Pid, {send, Peer, ?DATA}),
    {ssl, Peer, {recv, ?DATA}} = konduit:recv(Pid),
+   {ok, Stat} = konduit:ioctl(iostat, knet_ssl, Pid),
+   {tcp,  _} = lists:keyfind(tcp,  1, Stat),
+   {ssl,  _} = lists:keyfind(ssl,  1, Stat),
+   {recv, _} = lists:keyfind(recv, 1, Stat),
+   {send, _} = lists:keyfind(send, 1, Stat),
+   {ttrx, _} = lists:keyfind(ttrx, 1, Stat),
+   {ttwx, _} = lists:keyfind(ttwx, 1, Stat),
    {ssl, Peer, terminated} = konduit:recv(Pid),
    ok.
 
