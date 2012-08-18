@@ -31,7 +31,8 @@
    role  :: client | server,
    
    tconn,  % time to connect
-   tpckt,  % packet arrival time 
+   trecv,  % inter packet arrival time 
+   tsend,  % inter packet transmission time
 
    inet,   % inet family
    sock,   % tcp/ip socket
@@ -40,13 +41,15 @@
    opts    % connection option
 }). 
 
-%%
+%% list of tcp/ip socket options acceptable as with the request
+-define(TCP_OPTS, [delay_send, dontroute, keepalive, packet, packet_size, recbuf, send_timeout, sndbuf]).
+%% default socket options
 -define(SOCK_OPTS, [
    {active, once}, 
-   {mode, binary}, 
-   {nodelay, true},
-   {recbuf, 16 * 1024},
-   {sndbuf, 16 * 1024}
+   {mode, binary} 
+   %{nodelay, true},
+   %{recbuf, 16 * 1024},
+   %{sndbuf, 16 * 1024}
 ]).
 
 %
@@ -88,11 +91,15 @@ free(Reason, S) ->
 %%  
 ioctl(socket, #fsm{sock=Sock}) ->
    Sock;
-ioctl(latency, #fsm{tconn=Tconn, tpckt=Tpckt}) ->
+ioctl(address,#fsm{addr=Addr, peer=Peer}) ->
+   {Addr, Peer};   
+ioctl(iostat, #fsm{tconn=Tconn, trecv=Trecv, tsend=Tsend}) ->
    [
       {tcp,  Tconn},
-      {pckt, knet_cnt:val(Tpckt)},
-      {pcnt, knet_cnt:count(Tpckt)}
+      {recv, counter:len(Trecv)},
+      {send, counter:len(Tsend)},
+      {ttrx, counter:val(Trecv)},
+      {ttwx, counter:val(Tsend)}
    ];
 ioctl(_, _) ->
    undefined.
@@ -123,9 +130,8 @@ ioctl(_, _) ->
 'CONNECT'(timeout, #fsm{peer={Host, Port}, opts=Opts} = S) ->
    % socket connect timeout
    T  = proplists:get_value(timeout, S#fsm.opts, ?T_CONNECT),    
-   % TODO: overwrite default sock opts with user 
    T1 = erlang:now(),
-   case gen_tcp:connect(check_host(Host), Port, ?SOCK_OPTS ++ Opts, T) of
+   case gen_tcp:connect(check_host(Host), Port, opts(Opts, ?TCP_OPTS) ++ ?SOCK_OPTS, T) of
       {ok, Sock} ->
          {ok, Peer} = inet:peername(Sock),
          {ok, Addr} = inet:sockname(Sock),
@@ -141,7 +147,8 @@ ioctl(_, _) ->
                addr   = Addr,
                peer   = Peer,
                tconn  = Tconn,
-               tpckt  = knet_cnt:new(time)
+               trecv  = counter:new(time),
+               tsend  = counter:new(time)
             }
          };
       {error, Reason} ->
@@ -174,7 +181,8 @@ ioctl(_, _) ->
          addr  = Addr,
          peer  = Peer,
          tconn = 0,
-         tpckt = knet_cnt:new(time)
+         trecv = counter:new(time),
+         tsend = counter:new(time)
       } 
    }.
    
@@ -199,21 +207,21 @@ ioctl(_, _) ->
       S
    };
 
-'ESTABLISHED'({tcp, _, Data}, #fsm{peer=Peer, tpckt=Tpckt}=S) ->
+'ESTABLISHED'({tcp, _, Data}, #fsm{peer=Peer, trecv=Cnt}=S) ->
    lager:debug("tcp/ip recv ~p~n~p~n", [Peer, Data]),
    % TODO: flexible flow control
    inet:setopts(S#fsm.sock, [{active, once}]),
    {emit, 
       {tcp, Peer, {recv, Data}},
       'ESTABLISHED',
-      S#fsm{tpckt=knet_cnt:add(now, Tpckt)}
+      S#fsm{trecv=counter:add(now, Cnt)}
    };
    
-'ESTABLISHED'({send, _Peer, Data}, #fsm{peer=Peer}=S) ->
+'ESTABLISHED'({send, _Peer, Data}, #fsm{peer=Peer, tsend=Cnt}=S) ->
    lager:debug("tcp/ip send ~p~n~p~n", [Peer, Data]),
    case gen_tcp:send(S#fsm.sock, Data) of
       ok ->
-         {next_state, 'ESTABLISHED', S};
+         {next_state, 'ESTABLISHED', S#fsm{tsend=counter:add(now, Cnt)}};
       {error, Reason} ->
          lager:error("tcp/ip error ~p, peer ~p", [Reason, Peer]),
          {reply,
@@ -249,7 +257,7 @@ init(Inet, {{listen, Opts}, Addr}) ->
    {ok, LSock} = gen_tcp:listen(Port, [
       Inet, 
       {ip, IP}, 
-      {reuseaddr, true} | ?SOCK_OPTS
+      {reuseaddr, true} | opts(Opts, ?TCP_OPTS) ++ ?SOCK_OPTS
    ]),
    pns:register(knet, {iid(Inet), listen, Addr}, self()),
    lager:info("tcp/ip listen on ~p", [Addr]),
@@ -285,7 +293,6 @@ init(Inet, {{connect, Opts}, Peer}) ->
       opts = Opts
    }.
 
-
 %%
 %% 
 iid(inet)  -> tcp4;
@@ -298,21 +305,8 @@ check_host(Host) when is_binary(Host) ->
 check_host(Host) ->
    Host.   
 
-%%%------------------------------------------------------------------   
-%%%
-%%% ctrl
-%%%
-%%%------------------------------------------------------------------
-
 %%
-%% konduit ioctrl
-ioctrl(address, S) ->
-   {{S#fsm.addr, S#fsm.peer}, S};
-
-ioctrl(socket, S) ->
-   {S#fsm.sock, S};
-
-ioctrl(_, S) ->
-   {nil, S}.
-   
+%% perform while list filtering of suplied konduit options
+opts(Opts, Wlist) ->
+   lists:filter(fun({X, _}) -> lists:member(X, Wlist) end, Opts).
 
