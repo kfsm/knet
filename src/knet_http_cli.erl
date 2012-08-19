@@ -130,7 +130,7 @@ free(_Reason, _State, _S) ->
 %%%
 %%%------------------------------------------------------------------   
 'RESOLVE'(timeout, _, S) ->
-   ?DEBUG([{timeout, dsn}, {uri, S#fsm.uri}]),
+   %?DEBUG([{timeout, dsn}, {uri, S#fsm.uri}]),
    % TODO: error to link
    {ok, 'IDLE', reset(S)};
    
@@ -151,12 +151,12 @@ free(_Reason, _State, _S) ->
 %%%
 %%%------------------------------------------------------------------   
 'CONNECT'(timeout, _, S) ->
-   ?DEBUG([{timeout, tcp}, {uri, S#fsm.uri}]),
+   %?DEBUG([{timeout, tcp}, {uri, S#fsm.uri}]),
    % TODO: error to link
    {ok, 'IDLE', reset(S)};
    
 'CONNECT'({tcp, established, _}, _, S) ->
-   ?DEBUG([connected, {uri, S#fsm.uri}]),
+   %?DEBUG([connected, {uri, S#fsm.uri}]),
    {ok, 'REQUEST', request(S), ?T_SERVER}. 
 
 %%%------------------------------------------------------------------
@@ -165,7 +165,7 @@ free(_Reason, _State, _S) ->
 %%%
 %%%------------------------------------------------------------------   
 'REQUEST'(timeout, _, S) ->
-   ?DEBUG([{timeout, http}, {uri, S#fsm.uri}]),   
+   %?DEBUG([{timeout, http}, {uri, S#fsm.uri}]),   
    % TODO: error to link
    {ok, 'IDLE', reset(S)};
 
