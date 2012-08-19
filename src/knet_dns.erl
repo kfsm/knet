@@ -42,10 +42,10 @@ free(_Reason, _State, _S) ->
 'NS'({resolve, Family, Host}, Kpid, _) when is_list(Host) ->
    case inet:gethostbyname(Host, Family) of
       {ok,  DNS} ->
-         ?DEBUG([{resolve, DNS}]),
+         %?DEBUG([{resolve, DNS}]),
          konduit:send(Kpid, DNS);
       {error, E} ->
-         ?DEBUG([{error, E}]),
+         %?DEBUG([{error, E}]),
          konduit:send(Kpid, {E, Host})
    end,
    ok.
