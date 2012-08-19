@@ -51,7 +51,7 @@ start() ->
    Apps = proplists:get_value(applications, List, []),
    lists:foreach(
       fun(X) -> 
-         ?DEBUG([{app, X}]), 
+         %?DEBUG([{app, X}]), 
          case application:start(X) of
             ok -> ok;
             {error, {already_started, _}} -> ok
