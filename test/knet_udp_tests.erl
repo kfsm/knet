@@ -20,8 +20,6 @@
 -module(knet_udp_tests).
 -include_lib("eunit/include/eunit.hrl").
 
--define(HOST, {127,0,0,1}).
--define(PORT, 1234).
 -define(DATA, <<"0123456789abcdef">>).
 
 %%
@@ -34,40 +32,81 @@ loop(_, S) ->
    {next_state, loop, S}.
 
 %%
-%% spawn udp server
-udp_srv(Addr) ->
+%% spawn udp simple server
+udp_simple_srv(Addr) ->
    knet:start(),
    % start acceptor
    {ok, _} = konduit:start_link({fabric, nil, nil, [
-      {knet_udp,   [inet, {{connect, []}, Addr}]},
+      {knet_udp,   [inet, {{listen, []}, Addr}]},
       {fun loop/2, []}
    ]}).
 
 %%
-%%
-spawn_udp_test() ->
-   udp_srv(?PORT).
+%% spawn udp pool server
+udp_pool_srv(Addr) ->
+   knet:start(),
+   % start acceptor
+   {ok, _} = konduit:start_link({fabric, nil, nil, [
+      {knet_udp,   [inet, {{listen, [{pool, test}]}, Addr}]}
+   ]}),
+   {ok, _} = konduit:start_link({pool, test, [
+      {size, 2},
+      {ondemand, false},
+      {pool, {fabric, nil, nil, [
+         {knet_udp, [inet, {{connect, []}, Addr}]},
+         {fun loop/2, []}
+      ]}}
+   ]}).
 
 %%
-%%
-server_udp_test() ->
+%% spawn udp peer server
+udp_peer_srv(Addr) ->
+   knet:start(),
+   % start acceptor
+   {ok, _} = konduit:start_link({fabric, nil, nil, [
+      {knet_udp,   [inet, {{listen, []}, Addr}]}
+   ]}),
+   {ok, _} = konduit:start_link({fabric, nil, nil, [
+      {knet_udp,   [inet, {{connect, []}, Addr, {127,0,0,1}}]},
+      {fun loop/2, []}
+   ]}).
+
+
+
+udp_simple_fsm_test() ->
+   %lager:set_loglevel(lager_console_backend, debug),
+   udp_simple_srv({any, 8081}),
    {ok, Sock} = gen_udp:open(0, [binary, {active, false}]),
-   ok = gen_udp:send(Sock, "localhost", ?PORT, ?DATA),
-   {ok, {?HOST, ?PORT, ?DATA}} = gen_udp:recv(Sock, 0),
+   ok = gen_udp:send(Sock, {127,0,0,1}, 8081, ?DATA),
+   {ok, {{127,0,0,1}, 8081, ?DATA}} = gen_udp:recv(Sock, 0),
+   gen_udp:close(Sock).
+
+udp_pool_fsm_test() ->
+   %lager:set_loglevel(lager_console_backend, debug),
+   udp_pool_srv({any, 8082}),
+   {ok, Sock} = gen_udp:open(0, [binary, {active, false}]),
+   ok = gen_udp:send(Sock, {127,0,0,1}, 8082, ?DATA),
+   {ok, {{127,0,0,1}, 8082, ?DATA}} = gen_udp:recv(Sock, 0),
+   gen_udp:close(Sock).
+
+udp_peer_fsm_test() ->
+   %lager:set_loglevel(lager_console_backend, debug),
+   udp_peer_srv({any, 8083}),
+   {ok, Sock} = gen_udp:open(0, [binary, {active, false}]),
+   ok = gen_udp:send(Sock, {127,0,0,1}, 8083, ?DATA),
+   {ok, {{127,0,0,1}, 8083, ?DATA}} = gen_udp:recv(Sock, 0),
    gen_udp:close(Sock).
 
 %%
 %%
 client_udp_test() ->
-   Peer = {?HOST, ?PORT},
+   Peer = {{127,0,0,1}, 8083},
    {ok, Pid} = konduit:start_link({fabric, nil, self(), [
       {knet_udp, [inet, {{connect, []}, 0}]}
    ]}),
    konduit:send(Pid, {send, Peer, ?DATA}),
    {udp, Peer, {recv, ?DATA}} = konduit:recv(Pid),
    ok.
-
-
 
 
 

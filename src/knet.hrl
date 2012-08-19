@@ -19,13 +19,16 @@
 -define(SO_TCP, [
    {active, once}, 
    {mode, binary} 
-   %{nodelay, true},
-   %{recbuf, 16 * 1024},
-   %{sndbuf, 16 * 1024}
+]).
+
+-define(SO_UDP, [
+	{active, once}, 
+   {mode, binary}
 ]).
 
 %% white list of socket options acceptable by konduits
--define(TCP_OPTS, [delay_send, dontroute, keepalive, packet, packet_size, recbuf, send_timeout, sndbuf]).
+-define(UDP_OPTS, [broadcast, delay_send, dontroute, read_packets, recbuf, sndbuf]).
+-define(TCP_OPTS, [delay_send, nodelay, dontroute, keepalive, packet, packet_size, recbuf, send_timeout, sndbuf]).
 -define(SSL_OPTS, [verify, verify_fun, fail_if_no_peer_cert, depth, cert, certfile, key, keyfile, password, cacert, cacertfile, ciphers]).
 
 %% default timers

@@ -22,27 +22,24 @@
 -author('Mario Cardona <marioxcardona@gmail.com>').
 
 -behaviour(konduit).
+-include("knet.hrl").
 
 -export([init/1, free/2, ioctl/2]).
--export(['IDLE'/2, 'ACTIVE'/2]).
+-export(['IDLE'/2, 'LISTEN'/2, 'ACTIVE'/2]).
 
 %%
 %% internal state
 -record(fsm, {
-   tpckt,  % packet arrival time 
+   trecv,  % packet arrival time 
+   tsend,
 
    inet,   % inet family
-   sock,   % udp  socket
+   sock,   % udp socket
+   peer,   % udp peer 
+   pool,   % udp pool of data handlers
    opts    % socket options   
 }).
 
-%%
--define(SOCK_OPTS, [
-	binary,
-   {active, once}, 
-   {recbuf, 16 * 1024},
-   {sndbuf, 16 * 1024}
-]).
 
 %%%------------------------------------------------------------------
 %%%
@@ -52,6 +49,12 @@
 
 %%
 %%
+init([Inet, {{listen, _Opts}, _Addr}=Msg]) ->
+   {ok, 'LISTEN', init(Inet, Msg)};
+
+init([Inet, {{connect, _Opts}, _Addr, _Peer}=Msg]) ->
+   {ok, 'ACTIVE', init(Inet, Msg)};
+
 init([Inet, {{connect, _Opts}, _Addr}=Msg]) ->
    {ok, 'ACTIVE', init(Inet, Msg)};
 
@@ -71,13 +74,16 @@ free(Reason, #fsm{sock=Sock}) ->
    end.
 
 %%
-%%
-ioctl(latency, #fsm{tpckt=Tpckt}) ->
+%% ioctl interface
+ioctl(socket, #fsm{sock=Sock}) ->
+   Sock;
+ioctl(iostat, #fsm{trecv=Trecv, tsend=Tsend}) ->
    [
-      {pckt, knet_cnt:val(Tpckt)},
-      {pcnt, knet_cnt:count(Tpckt)}
+      {recv, counter:len(Trecv)},
+      {send, counter:len(Tsend)},
+      {ttrx, counter:val(Trecv)},
+      {ttwx, counter:val(Tsend)}
    ];
-
 ioctl(_,_) ->
    undefined.
 
@@ -87,9 +93,54 @@ ioctl(_,_) ->
 %%% IDLE
 %%%
 %%%------------------------------------------------------------------
-
 'IDLE'({{connect, _Opts}, _Addr}=Msg, #fsm{inet=Inet}) ->
+   {next_state, 'ACTIVE', init(Inet, Msg)};
+
+'IDLE'({{connect, _Opts}, _Addr, _Peer}=Msg, #fsm{inet=Inet}) ->
    {next_state, 'ACTIVE', init(Inet, Msg)}.
+
+%%%------------------------------------------------------------------
+%%%
+%%% LISTEN
+%%%
+%%%------------------------------------------------------------------
+%% listen is a fake udp state, it is holder of udp socket 
+%% and dispatches incoming messages
+'LISTEN'({udp, _, Peer, Port, Pckt}=Msg, #fsm{inet=Inet, sock=Sock, pool=undefined}=S) ->
+   % pool is not define, discover handler by peer identity
+   inet:setopts(Sock, [{active, once}]),
+   case pns:whereis(knet, {iid(Inet), peer, Peer}) of
+      % unknown peer, relay message up chain
+      undefined -> 
+         lager:debug("udp: unknown peer ~p~n", [{Peer, Port}]),
+         {emit, {udp, {Peer, Port}, {recv, Pckt}}, 'LISTEN', S};
+      % known peer, relay message to it
+      Pid       -> 
+         erlang:send(Pid, {udp, {Peer, Port}, {recv, Pckt}}),
+         {next_state, 'LISTEN', S}
+   end;
+
+'LISTEN'({udp, _, Peer, Port, Pckt}=Msg, #fsm{sock=Sock, pool=Pool}=S) ->
+   % relay message to one of data handler from pool
+   inet:setopts(Sock, [{active, once}]),
+   {ok, Pid} = konduit:lease(Pool),
+   erlang:send(Pid, {udp, {Peer, Port}, {recv, Pckt}}),
+   konduit:release(Pool, Pid),
+   {next_state, 'LISTEN', S};
+
+'LISTEN'({send, {IP, Port}=Peer, Pckt}, #fsm{sock=Sock, tsend=Cnt}=S) ->
+   lager:debug("udp send ~p~n~p~n", [Peer, Pckt]),
+   case gen_udp:send(Sock, IP, Port, Pckt) of
+      ok ->
+         {next_state, 'LISTEN', S#fsm{tsend=counter:add(now, Cnt)}};
+      {error, Reason} ->
+         lager:error("udp error ~p, peer ~p", [Reason, Peer]),
+         {reply,
+            {udp, Peer, {error, Reason}},
+            'IDLE',
+            S
+         }
+   end.
 
 
 %%%------------------------------------------------------------------
@@ -98,11 +149,11 @@ ioctl(_,_) ->
 %%%
 %%%------------------------------------------------------------------
 
-'ACTIVE'({send, {IP, Port}=Peer, Pckt}, #fsm{sock=Sock}=S) ->
+'ACTIVE'({send, {IP, Port}=Peer, Pckt}, #fsm{sock=Sock, tsend=Cnt}=S) ->
    lager:debug("udp send ~p~n~p~n", [Peer, Pckt]),
    case gen_udp:send(Sock, IP, Port, Pckt) of
    	ok ->
-   	   {next_state, 'ACTIVE', S};
+   	   {next_state, 'ACTIVE', S#fsm{tsend=counter:add(now, Cnt)}};
    	{error, Reason} ->
    	   lager:error("udp error ~p, peer ~p", [Reason, Peer]),
    	   {reply,
@@ -112,14 +163,23 @@ ioctl(_,_) ->
    	   }
    end;
 
-'ACTIVE'({udp, _, IP, Port, Pckt}, #fsm{sock=Sock, tpckt=Tpckt}=S) ->
+
+'ACTIVE'({udp, _, IP, Port, Pckt}, #fsm{sock=Sock, trecv=Cnt}=S) ->
+   % packet is received from udp socket
    lager:debug("udp recv ~p~n~p~n", [{IP, Port}, Pckt]),
    % TODO: flexible flow control
    inet:setopts(Sock, [{active, once}]),
    {emit,
       {udp, {IP, Port}, {recv, Pckt}},
       'ACTIVE',
-      S#fsm{tpckt=knet_cnt:add(now, Tpckt)}
+      S#fsm{trecv=counter:add(now, Cnt)}
+   };
+
+'ACTIVE'({udp, Peer, Pckt}=Msg, #fsm{trecv=Cnt}=S) ->
+   % packet is realyed by udp listener
+   lager:debug("udp recv ~p~n~p~n", [Peer, Pckt]),
+   {emit, Msg, 'ACTIVE',
+      S#fsm{trecv=counter:add(now, Cnt)}
    }.
 
 
@@ -129,22 +189,81 @@ ioctl(_,_) ->
 %%%
 %%%------------------------------------------------------------------
 
+%%
+%%
+init(Inet, {{listen, Opts}, Addr}) when is_integer(Addr) ->
+   init(Inet, {{listen, Opts}, {any, Addr}});
+init(Inet, {{listen, Opts}, {IP, Port}=Addr}) ->
+   %% listen is owner (supervisor) process for udp socket
+   %% the process hold socket, provides ioctl interface and
+   %% interact with pool of udp data handlers
+   {ok, Sock} = gen_udp:open(Port, [
+      Inet, {reuseaddr, true}, {ip, IP} | opts(Opts, ?UDP_OPTS) ++ ?SO_UDP
+   ]),
+   pns:register(knet, {iid(Inet), listen, Addr}, self()),
+   lager:info("udp shared socket on ~p", [Addr]),
+   #fsm{
+      inet = Inet,
+      sock = Sock,
+      pool = proplists:get_value(pool, Opts),
+      opts = Opts,
+      trecv  = counter:new(time),
+      tsend  = counter:new(time)
+   };
+
+init(Inet, {{connect, Opts}, Addr, Peer}) when is_integer(Addr) ->
+   init(Inet, {{connect, Opts}, {any, Addr}, Peer});
+init(Inet, {{connect, Opts}, {_IP, _Port}=Addr, Peer}) ->
+   LPid = pns:whereis(knet, {iid(Inet), listen, Addr}),
+   {ok, LSock} = konduit:ioctl(socket, knet_udp, LPid),
+   pns:register(knet, {iid(Inet), peer, Peer}, self()),
+   lager:info("udp shared socket on ~p (~p), peer ~p", [Addr, LSock, Peer]),
+   #fsm{
+      inet   = Inet,
+      sock   = LSock,
+      peer   = Peer,
+      opts   = Opts,
+      trecv  = counter:new(time),
+      tsend  = counter:new(time)
+   };
+
 init(Inet, {{connect, Opts}, Addr}) when is_integer(Addr) ->
    init(Inet, {{connect, Opts}, {any, Addr}});
 init(Inet, {{connect, Opts}, {IP, Port}=Addr}) ->
-   {ok, Sock} = gen_udp:open(Port, [
-   	Inet,
-   	{ip, IP} | ?SOCK_OPTS
-   ]),
-   lager:info("upd open at ~p", [Addr]),
-   #fsm{
-      tpckt  = knet_cnt:new(time),
-      inet   = Inet,
-      sock   = Sock,
-      opts   = Opts
-   }.
+   case pns:whereis(knet, {iid(Inet), listen, Addr}) of
+      % socket started in exclusive mode
+      undefined ->
+         {ok, Sock} = gen_udp:open(Port, [Inet, {ip, IP} | opts(Opts, ?UDP_OPTS) ++ ?SO_UDP]),
+         pns:register(knet, {iid(Inet), active, Addr}, self()),
+         lager:info("upd exclusive socket on ~p", [Addr]),
+         #fsm{
+            inet   = Inet,
+            sock   = Sock,
+            opts   = Opts,
+            trecv  = counter:new(time),
+            tsend  = counter:new(time)
+         };
+      % socket is sharable
+      LPid ->
+         {ok, LSock} = konduit:ioctl(socket, knet_udp, LPid),
+         lager:info("upd shared socket on ~p (~p)", [Addr, LSock]),
+         #fsm{
+            inet   = Inet,
+            sock   = LSock,
+            opts   = Opts,
+            trecv  = counter:new(time),
+            tsend  = counter:new(time)
+         }
+   end.
+ 
+%%
+%% 
+iid(inet)  -> udp4;
+iid(inet6) -> udp6. 
 
-
-
+%%
+%% perform while list filtering of suplied konduit options
+opts(Opts, Wlist) ->
+   lists:filter(fun({X, _}) -> lists:member(X, Wlist) end, Opts).
 
 
