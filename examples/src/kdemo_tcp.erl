@@ -21,7 +21,7 @@
 %%
 %% console api
 -export([server/1]).
-%% fsm api
+%% echo fsm api
 -export([init/1, free/2, 'IDLE'/2, 'ECHO'/2]).
 
 %%
@@ -32,7 +32,7 @@ server(Port) ->
    lager:set_loglevel(lager_console_backend, info),
    % start listener
    {ok, _} = konduit:start_link({fabric, nil, nil, [
-      {knet_tcp, [inet, {{listen, []}, Port}]}
+      {knet_tcp, [inet, {{listen, [{rcvbuf, 5*1024*1024}, {sndbuf, 5*1024*1024}]}, Port}]}
    ]}),
    % spawn acceptor pool
    [ acceptor(Port) || _ <- lists:seq(1,2) ],

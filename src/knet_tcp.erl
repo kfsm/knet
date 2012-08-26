@@ -27,6 +27,12 @@
 -export([init/1, free/2, ioctl/2]).
 -export(['IDLE'/2, 'LISTEN'/2, 'CONNECT'/2, 'ACCEPT'/2, 'ESTABLISHED'/2]).
 
+%%
+%% konduit options
+%%    tcp/ip opts see inet:opts
+%%    timeout - time to establish tcp/ip connection
+
+
 %% internal state
 -record(fsm, {
    role  :: client | server,
@@ -116,7 +122,7 @@ ioctl(_, _) ->
 %%%------------------------------------------------------------------
 'CONNECT'(timeout, #fsm{peer={Host, Port}, opts=Opts} = S) ->
    % socket connect timeout
-   T  = proplists:get_value(timeout, S#fsm.opts, ?T_TCP_CONNECT),    
+   T  = proplists:get_value(timeout, Opts, ?T_TCP_CONNECT),    
    T1 = erlang:now(),
    case gen_tcp:connect(check_host(Host), Port, opts(Opts, ?TCP_OPTS) ++ ?SO_TCP, T) of
       {ok, Sock} ->

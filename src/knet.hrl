@@ -34,6 +34,6 @@
 %% default timers
 -define(T_TCP_CONNECT,     20000).  %% tcp/ip connection timeout
 -define(T_SSL_CONNECT,     20000).  %% ssl connection timeout
-
+-define(T_HTTP_WAIT,       20000).  %% http server response time
 
 

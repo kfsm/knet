@@ -139,6 +139,16 @@ client_get_2_test() ->
    {http, _, {recv, ?CHUNK3}} = konduit:recv(Pid),
    {http, _, {recv, ?CHUNK4}} = konduit:recv(Pid),  
    {http, _, eof}      = konduit:recv(Pid),
+   lager:error("tcp  iostat ~p", [konduit:ioctl(iostat, knet_tcp,   Pid)]),
+   lager:error("http iostat ~p", [konduit:ioctl(iostat, knet_httpc, Pid)]),
    ok.
 
+% knet:start().
+% {ok, Pid} = konduit:start_link({fabric, nil, self(), [
+%    {knet_ssl,  [inet]},
+%    {knet_httpc,[[]]}
+% ]}).
+% konduit:send(Pid, {{'GET', []}, "https://www.google.fi:443/"}).
+% konduit:ioctl(iostat, knet_ssl, Pid).
+% konduit:ioctl(iostat, knet_httpc, Pid).
 

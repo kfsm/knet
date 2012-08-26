@@ -21,6 +21,7 @@
 -author('Mario Cardona <marioxcardona@gmail.com>').
 
 -behaviour(konduit).
+-include("knet.hrl").
 
 %%
 %%
@@ -34,10 +35,18 @@
    'RECV'/2        %% payload is received
 ]). 
 
+%%
+%% konduit options
+%%    uri -
+%%    method - 
+%%    heads  -
 
 %%
 %% internal state
 -record(fsm, {
+   thttp,   % time to wait server response
+   trecv,   % time to receive payload
+
    ua,      % default user agent
    peer,    % transport protocol peer
    method,  % default method
@@ -68,7 +77,9 @@ init([Opts]) ->
          ua     = default_ua(),
          uri    = proplists:get_value(uri, Opts),
          method = proplists:get_value(method, Opts),
-         opts   = Opts
+         opts   = Opts,
+         thttp  = counter:new(time),
+         trecv  = counter:new(time)
       }
    }.
 
@@ -84,6 +95,14 @@ ioctl({method, IOCtl}, S) ->
 ioctl(method, #fsm{method=IOCtl}) ->
    % get default method
    IOCtl;
+
+ioctl(iostat, #fsm{thttp=Thttp, trecv=Trecv}) ->
+   [
+      {http, counter:val(Thttp)},
+      {req,  counter:len(Thttp)},
+      {recv, counter:len(Trecv)},
+      {ttrx, counter:val(Trecv)}
+   ];
 
 ioctl({Head, _}=IOCtl, #fsm{opts=Opts}=S) ->
    % set header
@@ -117,7 +136,7 @@ ioctl(_, _) ->
 'IDLE'({_, Uri} = Req, #fsm{opts=Opts}=S) ->
    Peer = peer(Uri, Opts),
    {emit, 
-      {{connect, []}, Peer},
+      {{connect, Opts}, Peer},
       'REQUESTED',
       S#fsm{
          peer    = Peer,
@@ -133,7 +152,7 @@ ioctl(_, _) ->
 'IDLE'({_, Uri, _} = Req, #fsm{opts=Opts}=S) ->
    Peer = peer(Uri, Opts),
    {emit, 
-      {{connect, []}, Peer},
+      {{connect, Opts}, Peer},
       'REQUESTED',
       S#fsm{
          peer    = Peer,
@@ -266,7 +285,7 @@ ioctl(_, _) ->
 %%
 parse_status_line(#fsm{buffer=Buffer}=S) ->   
    case erlang:decode_packet(http_bin, Buffer, []) of
-      {more, _}       -> {next_state, 'REQUESTED', S, ?T_SERVER};
+      {more, _}       -> {next_state, 'REQUESTED', S, ?T_HTTP_WAIT};
       {error, Reason} -> {stop, Reason, S};
       {ok, Req,Chunk} -> parse_status_line(Req, S#fsm{buffer=Chunk})
    end.
@@ -302,27 +321,41 @@ parse_header({http_header, _I, Head, _R, Val},
            #fsm{response={Code, Heads}}=S) ->
    parse_header(S#fsm{response={Code, [{Head, Val} | Heads]}});
 
-parse_header(http_eoh, #fsm{iolen=undefined}=S) ->
+parse_header(http_eoh, #fsm{iolen=undefined, thttp=Thttp, trecv=Trecv}=S) ->
    % expected length of response is not known, stream it
-   parse_chunk(S#fsm{pckt=0});
+   parse_chunk(
+      S#fsm{
+         pckt=0, 
+         thttp=counter:add(idle, Thttp), 
+         trecv=counter:add(now,  Trecv)
+      }
+   );
 
-parse_header(http_eoh, #fsm{iolen=0, request={_, Uri}, response=Rsp}=S) ->
+parse_header(http_eoh, #fsm{iolen=0, request={_, Uri}, response=Rsp, thttp=Thttp, trecv=Trecv}=S) ->
    % nothing to receive
    {emit, 
       [{http, Uri, Rsp}, {http, Uri, eof}],
       'CONNECTED', 
       S#fsm{
+         thttp=counter:add(idle, Thttp),
+         trecv=counter:add(now,  Trecv),
          buffer= <<>>
       }
    };
 
-parse_header(http_eoh, S) ->
+parse_header(http_eoh, #fsm{thttp=Thttp, trecv=Trecv}=S) ->
    % exprected length of response is know, receive it
-   parse_payload(S#fsm{pckt=0}).
+   parse_payload(
+      S#fsm{
+         pckt=0, 
+         thttp=counter:add(idle, Thttp),
+         trecv=counter:add(now,  Trecv)
+      }
+   ).
 
 %%
 %%
-parse_payload(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=Len, buffer=Buffer}=S) ->
+parse_payload(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=Len, buffer=Buffer, trecv=Trecv}=S) ->
    case size(Buffer) of
       % buffer equals or exceed expected payload size
       % end of data stream is reached.
@@ -335,6 +368,7 @@ parse_payload(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=Len, buffer=
          {emit, Msg, 'CONNECTED', 
             S#fsm{
                pckt  = Pckt + 1,
+               trecv = counter:add(idle, Trecv),
                buffer= <<>>
             }
          };
@@ -354,7 +388,7 @@ parse_payload(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=Len, buffer=
 
 %%
 %%
-parse_chunk(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=undefined, buffer=Buffer}=S) ->
+parse_chunk(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=undefined, buffer=Buffer, trecv=Trecv}=S) ->
    case binary:split(Buffer, <<"\r\n">>) of  
       [_]          -> 
          {next_state, 'STREAM', S};
@@ -368,7 +402,7 @@ parse_chunk(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=undefined, buf
                   Pckt =:= 0 -> [{http, Uri, Rsp}, {http, Uri, eof}];
                   true       -> {http, Uri, eof}
                end,
-               {emit, Msg, 'CONNECTED', S};
+               {emit, Msg, 'CONNECTED', S#fsm{trecv=counter:add(idle, Trecv)}};
             true      ->
                parse_chunk(S#fsm{iolen=Len, buffer=Data})
          end
@@ -455,7 +489,7 @@ resource(Uri, Opts) ->
 
 %%
 %% send http request
-http_request({{Method, Head0}, Uri}, #fsm{peer=Peer, ua=UA, opts=Opts}=S) ->
+http_request({{Method, Head0}, Uri}, #fsm{peer=Peer, ua=UA, opts=Opts, thttp=Cnt}=S) ->
    % http request w/o payload
    Head = check_head_host(Uri,
       check_head_ua(UA, Head0 ++ proplists:get_value(heads, Opts, []))
@@ -465,13 +499,14 @@ http_request({{Method, Head0}, Uri}, #fsm{peer=Peer, ua=UA, opts=Opts}=S) ->
       {send, Peer, Req},
       'REQUESTED',
       S#fsm{
+         thttp  = counter:add(now, Cnt),
          iolen  = undefined,
          buffer = <<>>
       },
-      ?T_SERVER
+      ?T_HTTP_WAIT
    };
 
-http_request({{Method, Head0}, Uri, Payload}, #fsm{peer=Peer, ua=UA, opts=Opts}=S) ->
+http_request({{Method, Head0}, Uri, Payload}, #fsm{peer=Peer, ua=UA, opts=Opts, thttp=Cnt}=S) ->
    % http request with payload
    Head = check_head_host(Uri,
       check_head_ua(UA, Head0 ++ proplists:get_value(heads, Opts, []))
@@ -485,8 +520,9 @@ http_request({{Method, Head0}, Uri, Payload}, #fsm{peer=Peer, ua=UA, opts=Opts}=
       [{send, Peer, Req}, {send, Peer, Payload}],
       'REQUESTED',
       S#fsm{
+         thttp  = counter:add(now, Cnt),
          iolen  = undefined,
          buffer = <<>>
       },
-      ?T_SERVER
+      ?T_HTTP_WAIT
    }.

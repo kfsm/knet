@@ -26,9 +26,8 @@
    init/1
 ]).
 
-%%%
-%%% Root supervisor of Erlang Cluster
-%%%
+%%
+%%
 start_link() ->
    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
    
@@ -39,26 +38,3 @@ init([]) ->
          []
       }
    }.
-   
-   
-% tcp() ->
-%    {
-%       knet_tcp,
-%       {
-%          konduit_sup,
-%          start_link,
-%          [tcp, knet_tcp]
-%       },
-%       permanent, brutal_kill, supervisor, dynamic
-%    }.   
-   
-% dns() ->
-%    {
-%       knet_dns,
-%       {
-%          konduit_sup,
-%          start_link,
-%          [dns, knet_dns]
-%       },
-%       permanent, brutal_kill, supervisor, dynamic
-%    }.   
