@@ -396,12 +396,13 @@ check_head_srv(Srv, Heads) ->
 
 
 %%
-%% http request validator
-%%
+%% assert http buffer, do not exceed length 
 assert_io(Len, Buf)
  when size(Buf) < Len -> Buf;
 assert_io(_, _)   -> throw({http_error, 414}).
 
+%%
+%% assert http method
 assert_method('HEAD')  -> 'HEAD';
 assert_method('GET')   -> 'GET';
 assert_method('POST')  -> 'POST';
@@ -420,7 +421,7 @@ assert_uri({absoluteURI, Scheme, Host, Port, Path}) ->
    	)
    );
 %uri({scheme, Scheme, Uri}=E) ->
-assert_uri({abs_path, Path}) ->
+assert_uri({abs_path, Path}) ->  
    uri:set(path, Path, uri:new(http)); %TODO: ssl support
 %uri('*') ->
 %uri(Uri) ->
