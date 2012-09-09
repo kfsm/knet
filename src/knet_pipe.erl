@@ -23,26 +23,25 @@
 -include("knet.hrl").
 
 -export([init/1, free/2, ioctl/2]).
--export(['PIPE'/2]).
+-export(['IDLE'/2, 'PIPE'/2]).
 
 %%
 %%
 -record(fsm, {
-	cmd,   %% command line
-   port   %% communication port
+	exec,   %% executable
+   args,   %% arguments
+   port    %% communication port
 }).
-
+-define(PORT_OPTS, [binary, stream, exit_status]).
 
 %%
 %%
-init([Cmd]) ->
-	Port = erlang:open_port({spawn, Cmd}, [binary, stream, exit_status]),
-	lager:debug("pipe ~p open to ~p", [Port, Cmd]),
+init([Exec, Args]) ->
 	{ok, 
-	   'PIPE', 
+	   'IDLE', 
 	   #fsm{
-	      cmd  = Cmd,
-	      port = Port 
+	      exec = Exec,
+	      args = Args 
 	   }
 	}.
 
@@ -63,6 +62,39 @@ free(Reason, #fsm{port=Port}) ->
 ioctl(_, _) ->
    undefined.
 
+
+%%%------------------------------------------------------------------
+%%%
+%%% IDLE
+%%%
+%%%------------------------------------------------------------------
+
+'IDLE'({send, Data}, #fsm{exec=Exec, args=Args}=S) ->
+   case (catch erlang:open_port({spawn_executable, Exec}, [{args, Args} | ?PORT_OPTS])) of
+      {'EXIT', {Reason, _}} ->
+         {reply,
+            {error, Reason},
+            'IDLE',
+            S
+         };
+      Port ->
+         lager:debug("pipe ~p to ~p ~p", [Port, Exec, Args]),
+         port_command(Port, Data),
+         {next_state,
+            'PIPE',
+            S#fsm{
+               port = Port
+            }
+         }
+   end.
+
+
+%%%------------------------------------------------------------------
+%%%
+%%% PIPE
+%%%
+%%%------------------------------------------------------------------
+
 %%
 %%
 'PIPE'({_Port, {data, Data}}, #fsm{port=Port}=S) ->
@@ -75,11 +107,15 @@ ioctl(_, _) ->
 
 'PIPE'({_Port, {exit_status, 0}}, #fsm{port=Port}=S) ->
    lager:info("pipe terminated ~p", [Port]),
-   {stop, normal, S};
+   {next_state, 'IDLE', S};
 
 'PIPE'({_Port, {exit_status, Reason}},  #fsm{port=Port}=S) ->
    lager:error("pipe error ~p, peer ~p", [Reason, Port]),
-   {stop, {error, Reason}, S};
+   {emit,
+      {error, Reason},
+      'IDLE',
+      S
+   };
 
 'PIPE'({send, Data}, #fsm{port=Port}=S) ->
    lager:debug("pipe send ~p~n~p~n", [Port, Data]),
