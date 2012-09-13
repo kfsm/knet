@@ -21,9 +21,6 @@
          syntax_tools,
          lager,
          pts,
-         crypto,
-         public_key,
-         ssl,
          konduit
       ]},
       {mod, {knet_app, []}},
