@@ -27,15 +27,15 @@
 %%
 %%
 server(Port) ->
-   lager:start(),
    knet:start(),
    lager:set_loglevel(lager_console_backend, info),
    % start listener
    {ok, _} = konduit:start_link({fabric, nil, nil, [
-      {knet_tcp, [inet, {{listen, [{rcvbuf, 5*1024*1024}, {sndbuf, 5*1024*1024}]}, Port}]}
+      {knet_tcp, [
+         inet, 
+         {{listen, [{rcvbuf, 5*1024*1024}, {sndbuf, 5*1024*1024}, {acceptor, acceptor(Port)}, {pool, 2}]}, Port}
+      ]}
    ]}),
-   % spawn acceptor pool
-   [ acceptor(Port) || _ <- lists:seq(1,2) ],
    ok.
 
 %%%------------------------------------------------------------------
@@ -44,10 +44,10 @@ server(Port) ->
 %%%
 %%%------------------------------------------------------------------
 acceptor(Port) ->
-   konduit:start({fabric, nil, nil, [
+   {fabric, nil, nil, [
       {knet_tcp, [inet]}, % TCP/IP fsm
       {?MODULE,  [Port]}  % ECHO   fsm
-   ]}).
+   ]}.
 
 
 %%%------------------------------------------------------------------

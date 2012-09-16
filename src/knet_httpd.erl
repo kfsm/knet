@@ -85,7 +85,7 @@ ioctl(_, _) ->
       S
    };
 
-'IDLE'({_Prot, Peer, established}, S) ->
+'IDLE'({_Prot, Peer, established}, #fsm{opts=Opts}=S) ->
    {next_state, 
       'LISTEN', 
       S#fsm{

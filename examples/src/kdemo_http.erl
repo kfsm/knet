@@ -24,20 +24,18 @@
 %% fsm api
 -export([init/1, free/2, 'IDLE'/2, 'ECHO'/2]).
 
--define(APP, kdemo).
-
 %%
 %%
 server(Port) ->
-   lager:start(),
    knet:start(),
    lager:set_loglevel(lager_console_backend, debug),
    % start listener
    {ok, _} = konduit:start_link({fabric, nil, nil, [
-      {knet_tcp, [inet, {{listen, []}, {any, Port}}]}
+      {knet_tcp, [
+         inet, 
+         {{listen, [{acceptor, acceptor(Port)}, {pool, 2}]}, {any, Port}}
+      ]}
    ]}),
-   % spawn acceptor pool
-   [ acceptor(Port) || _ <- lists:seq(1,2) ],
    ok.
 
 %%
@@ -65,13 +63,13 @@ get(Uri) ->
 %%%
 %%%------------------------------------------------------------------
 acceptor(Port) ->
-   konduit:start({fabric, nil, nil,
+   {fabric, nil, nil,
       [
          {knet_tcp, [inet]}, % TCP/IP fsm
          {knet_httpd, [[]]}, % HTTP   fsm
          {?MODULE,  [Port]}  % ECHO   fsm
       ]
-   }).
+   }.
 
 
 %%%------------------------------------------------------------------

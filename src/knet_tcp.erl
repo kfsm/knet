@@ -45,6 +45,7 @@
    sock,   % tcp/ip socket
    peer,   % peer address  
    addr,   % local address
+   fsup,   % acceptor factory
    opts    % connection option
 }). 
 
@@ -59,11 +60,11 @@
 init([Inet, {{listen, _Opts}, _Peer}=Msg]) ->
    {ok, 'LISTEN', init(Inet, Msg)}; 
 
-init([Inet, {{accept, _Opts}, _Peer}=Msg]) ->
-   {ok, 'ACCEPT', init(Inet, Msg), 0};
-
 init([Inet, {{connect, _Opts}, _Peer}=Msg]) ->
    {ok, 'CONNECT', init(Inet, Msg), 0};
+
+init([Inet, {{accept, _Opts}, _Peer}=Msg]) ->
+   {ok, 'ACCEPT', init(Inet, Msg), 0};
 
 init([Inet]) ->
    {ok, 'IDLE', #fsm{inet = Inet}}.
@@ -84,6 +85,8 @@ free(Reason, S) ->
 %%  
 ioctl(socket, #fsm{sock=Sock}) ->
    Sock;
+ioctl(factory, #fsm{fsup=Sup}) ->
+   Sup;   
 ioctl(address,#fsm{addr=Addr, peer=Peer}) ->
    {Addr, Peer};   
 ioctl(iostat, #fsm{tconn=Tconn, trecv=Trecv, tsend=Tsend}) ->
@@ -102,6 +105,8 @@ ioctl(_, _) ->
 %%% IDLE: allows to chain tcp/ip konduit
 %%%
 %%%------------------------------------------------------------------
+'IDLE'({{listen,  _Opts}, _Peer}=Msg, #fsm{inet=Inet}) ->
+   {next_state, 'LISTEN', init(Inet, Msg), 0};
 'IDLE'({{accept,  _Opts}, _Peer}=Msg, #fsm{inet=Inet}) ->
    {next_state, 'ACCEPT', init(Inet, Msg), 0};
 'IDLE'({{connect, _Opts}, _Peer}=Msg, #fsm{inet=Inet}) ->
@@ -159,13 +164,15 @@ ioctl(_, _) ->
 %%% ACCEPT
 %%%
 %%%------------------------------------------------------------------
-'ACCEPT'(timeout, #fsm{sock = LSock} = S) ->
+'ACCEPT'(timeout, #fsm{sock=LSock, fsup=FSup} = S) ->
    % accept a socket
    {ok, Sock} = gen_tcp:accept(LSock),
    {ok, Peer} = inet:peername(Sock),
    {ok, Addr} = inet:sockname(Sock),
    lager:info("tcp/ip accepted ~p, local addr ~p", [Peer, Addr]),
    pns:register(knet, {iid(S#fsm.inet), established, Peer}, self()),
+   % acceptor is consumed, spawn a new one
+   ksup:spawn(FSup),
    {emit, 
       {tcp, Peer, established},
       'ESTABLISHED', 
@@ -252,13 +259,24 @@ init(Inet, {{listen, Opts}, Addr}) ->
       {ip, IP}, 
       {reuseaddr, true} | opts(Opts, ?TCP_OPTS) ++ ?SO_TCP
    ]),
+   % start acceptor factory
+   {acceptor, Spec} = lists:keyfind(acceptor, 1, Opts),
+   {ok, FSup} = konduit:start_link({factory, Spec}),
    pns:register(knet, {iid(Inet), listen, Addr}, self()),
    lager:info("tcp/ip listen on ~p", [Addr]),
+   % spawn acceptor pool
+   {pool, Pool} = lists:keyfind(pool, 1, Opts),
+   spawn(
+      fun() ->
+         [ ksup:spawn(FSup) || _ <- lists:seq(1, Pool) ]
+      end
+   ),
    #fsm{
       role = server,
       inet = Inet,
       sock = LSock,
       addr = Addr,
+      fsup = FSup,
       opts = Opts
    };
 
@@ -268,12 +286,14 @@ init(Inet, {{accept, Opts}, Addr}) ->
    % start tcp/ip acceptor
    LPid = pns:whereis(knet, {iid(Inet), listen, Addr}),
    {ok, LSock} = konduit:ioctl(socket, knet_tcp, LPid),
+   {ok, FSup}  = konduit:ioctl(factory,knet_tcp, LPid),   
    lager:info("tcp/ip accepting ~p (~p)", [Addr, LSock]),
    #fsm{
       role = server,
       inet = Inet,
       sock = LSock,
       addr = Addr,
+      fsup = FSup,
       opts = Opts
    };
 
@@ -299,7 +319,7 @@ check_host(Host) ->
    Host.   
 
 %%
-%% perform while list filtering of suplied konduit options
+%% perform while list filtering of supplied konduit options
 opts(Opts, Wlist) ->
    lists:filter(fun({X, _}) -> lists:member(X, Wlist) end, Opts).
 
