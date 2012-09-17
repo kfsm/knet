@@ -27,7 +27,8 @@
 %%    Mthd = atom()
 %%    Uri  = binary()
 %%    Req  = [header()]
-encode_req(Mthd, Uri, Req) ->
+encode_req(Mthd, Uri, Req)
+ when is_atom(Mthd), is_binary(Uri), is_list(Req) ->
    [
       <<(atom_to_binary(Mthd, utf8))/binary, 32, Uri/binary, 32, "HTTP/1.1", $\r, $\n>>,
       encode_header(Req),
