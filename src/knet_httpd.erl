@@ -274,7 +274,7 @@ parse_header({http_header, _I, Head, _R, Val},
 parse_header(http_eoh, #fsm{request={Mthd, Uri, Heads}, iolen=undefined}=S) ->
    % nothing to receive, Content-Length, Transfer-Encoding is not present
    {emit, 
-      {Mthd, Uri, Heads}, % Note: eof is not sent for req w/o content
+      {http, Mthd, Uri, Heads}, % Note: eof is not sent for req w/o content
       'SERV',
       S#fsm{pckt=0}
    };
@@ -297,8 +297,8 @@ parse_payload(#fsm{request={Mthd, Uri, Heads}, pckt=Pckt, iolen=Len, buffer=Buff
       Size when Size >= Len ->
          <<Chunk:Len/binary, _/binary>> = Buffer,
          Msg = if
-            Pckt =:= 0 -> [{Mthd, Uri, Heads}, {Mthd, Uri, {recv, Chunk}}, {Mthd, Uri, eof}];
-            true       -> [{Mthd, Uri, {recv, Chunk}}, {Mthd, Uri, eof}]
+            Pckt =:= 0 -> [{http, Mthd, Uri, Heads}, {http, Mthd, Uri, {recv, Chunk}}, {http, Mthd, Uri, eof}];
+            true       -> [{http, Mthd, Uri, {recv, Chunk}}, {http, Mthd, Uri, eof}]
          end,
          {emit, Msg, 'SERV', 
             S#fsm{
@@ -308,8 +308,8 @@ parse_payload(#fsm{request={Mthd, Uri, Heads}, pckt=Pckt, iolen=Len, buffer=Buff
          };
       Size when Size < Len ->
          Msg = if
-            Pckt =:= 0 -> [{Mthd, Uri, Heads}, {Mthd, Uri, {recv, Buffer}}];
-            true       -> {Mthd, Uri, {recv, Buffer}}
+            Pckt =:= 0 -> [{http, Mthd, Uri, Heads}, {http, Mthd, Uri, {recv, Buffer}}];
+            true       -> {http, Mthd, Uri, {recv, Buffer}}
          end,
          {emit, Msg, 'SERV',
             S#fsm{
@@ -333,8 +333,8 @@ parse_chunk(#fsm{request={Mthd, Uri, Heads}, pckt=Pckt, iolen=chunk, buffer=Buff
             % chunk with length 0 is last chunk is stream
             Len =:= 0 ->
                Msg = if
-                  Pckt =:= 0 -> [{Mthd, Uri, Heads}, {Mthd, Uri, eof}];
-                  true       -> {Mthd, Uri, eof}
+                  Pckt =:= 0 -> [{http, Mthd, Uri, Heads}, {http, Mthd, Uri, eof}];
+                  true       -> {http, Mthd, Uri, eof}
                end,
                {emit, Msg, 'SERV', S};
             true      ->
@@ -347,8 +347,8 @@ parse_chunk(#fsm{request={Mthd, Uri, Heads}, pckt=Pckt, iolen=Len, buffer=Buffer
       Size when Size >= Len ->
          <<Chunk:Len/binary, $\r, $\n, Rest/binary>> = Buffer,
          Msg = if
-            Pckt =:= 0 -> [{Mthd, Uri, Heads}, {Mthd, Uri, {recv, Chunk}}];
-            true       -> {Mthd, Uri, {recv, Chunk}}
+            Pckt =:= 0 -> [{http, Mthd, Uri, Heads}, {http, Mthd, Uri, {recv, Chunk}}];
+            true       -> {http, Mthd, Uri, {recv, Chunk}}
          end,
          {emit, Msg, 'SERV',
             S#fsm{
@@ -360,8 +360,8 @@ parse_chunk(#fsm{request={Mthd, Uri, Heads}, pckt=Pckt, iolen=Len, buffer=Buffer
          };
       Size when Size < Len ->
          Msg = if
-            Pckt =:= 0 -> [{Mthd, Uri, Heads}, {Mthd, Uri, {recv, Buffer}}];
-            true       -> {Mthd, Uri, {recv, Buffer}}
+            Pckt =:= 0 -> [{http, Mthd, Uri, Heads}, {http, Mthd, Uri, {recv, Buffer}}];
+            true       -> {http, Mthd, Uri, {recv, Buffer}}
          end,
          {emit, Msg, 'SERV', 
             S#fsm{
@@ -423,10 +423,7 @@ assert_uri({absoluteURI, Scheme, Host, Port, Path}) ->
    );
 %uri({scheme, Scheme, Uri}=E) ->
 assert_uri({abs_path, Path}) ->  
-   case binary:split(Path, <<"/">>, [global, trim]) of
-      []        -> [];
-      [_ | Uri] -> Uri
-   end;
+   uri:new(Path); %TODO: ssl support
 %uri('*') ->
 %uri(Uri) ->
 assert_uri(_) -> throw({http_error, 400}).

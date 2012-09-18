@@ -96,7 +96,7 @@ free(_, _) ->
       S
    }.
 
-'ECHO'({http, Uri, {recv, Msg}}, S) ->
+'ECHO'({http, _Mthd, Uri, {recv, Msg}}, S) ->
    lager:info("echo ~p: ~p data ~p", [self(), Uri, Msg]),
    {reply,
       {send, Uri, Msg},   
@@ -105,19 +105,18 @@ free(_, _) ->
       5000
    };
 
-'ECHO'({Mthd, Uri, Heads}, {Port, Cnt}) ->
+'ECHO'({http, Mthd, Uri, Heads}, {Port, Cnt}) ->
    lager:info("echo ~p: ~p ~p", [self(), Mthd, Uri]),
-   Euri = lists:foldl(fun(X, A) -> <<A/binary, $/, X/binary>> end, <<>>, Uri), 
    %% acceptor is consumed run a new one
    {reply, 
-      [{200, Uri, []}, {send, Uri, knet_http:encode_req(Mthd, Euri, Heads)}],  % echo received header
+      [{200, Uri, []}, {send, Uri, knet_http:encode_req(Mthd, uri:to_binary(Uri), Heads)}],  % echo received header
       'ECHO',            % 
       {Port, Cnt + 1},   % 
       5000               % 
    };
 
 
-'ECHO'({http, Uri, eof}, {_, Cnt}=S) ->   
+'ECHO'({http, _Mthd, Uri, eof}, {_, Cnt}=S) ->   
    lager:info("echo ~p: processed ~p", [self(), Cnt]),
    {reply, {eof, Uri}, 'ECHO', S, 5000};
 
