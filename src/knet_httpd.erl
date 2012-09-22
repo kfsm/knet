@@ -26,27 +26,36 @@
 -export([
    'IDLE'/2,    %% idle
    'LISTEN'/2,  %% listen for incoming requests
-   'REQUEST'/2, %% receiveing request
-   'SERV'/2     %% request is received and serving by app
+   'REQUEST'/2, %% receiving request
+   'IO'/2       %% IO data
 ]).
 
 %% internal state
 -record(fsm, {
    lib,     % default server identity
-
-   peer,
-   request, % active request {{Method, Head}, Uri}
+   peer,    % remote peer
+   request, % active request #req{}
   
-   iolen,   % expected length of data
-   pckt,    % number of received packets
+   chunked, % 
+   iolen :: integer() | chunk,   % expected length of entity
+   chunk :: integer(),           % chunk size to be transmitted to client
 
    opts,    % http protocol options
    buffer   % I/O buffer
 }).
 
+%%
+%% request
+-record(req, {
+   method,
+   uri,
+   heads
+}).
+
 %
 -define(URL_LEN,    2048). % max allowed size of request line
--define(REQ_LEN,    4096). % max allowed size of headers
+-define(REQ_LEN,    2048). % max allowed size of header
+-define(BUF_LEN,   19264). % length of http i/o buffer
 
 %% TODO: no eof for GET
 
@@ -60,7 +69,8 @@ init([Opts]) ->
    {ok,
       'IDLE',
       #fsm{
-         lib  = default_httpd(),
+         lib  = httpd(Opts),
+         chunk= proplists:get_value(chunk, Opts, ?BUF_LEN), 
          opts = Opts
       }
    }.
@@ -116,6 +126,27 @@ ioctl(_, _) ->
 'LISTEN'({_Prot, _Peer, {error, Reason}}, S) ->
    {stop, Reason, S}.
 
+%%
+%%
+parse_request_line(#fsm{buffer=Buffer}=S) ->
+   case erlang:decode_packet(http_bin, Buffer, []) of
+      {more, _}        -> {next_state, 'LISTEN', S};
+      {error, _Reason} -> http_error(400, S); 
+      {ok, Req, Chunk} -> parse_request_line(Req, S#fsm{buffer=Chunk})
+   end.
+
+parse_request_line({http_error, Msg}, S) ->
+   http_error(400, S);
+
+parse_request_line({http_request, Mthd, Uri, _Vsn}, S) ->
+   % request line received
+   lager:debug("httpd ~p ~p", [Mthd, Uri]),
+   parse_header(
+      S#fsm{
+         request = #req{method=assert_method(Mthd), uri=assert_uri(Uri), heads=[]}
+      }
+   ).
+
 %%%------------------------------------------------------------------
 %%%
 %%% REQUEST
@@ -139,21 +170,62 @@ ioctl(_, _) ->
 'REQUEST'({_Prot, _Peer, {error, Reason}}, S) ->
    {stop, Reason, S}.
 
-%%%------------------------------------------------------------------
-%%%
-%%% PROCESS
-%%%
-%%%------------------------------------------------------------------   
+%%
+%% 
+parse_header(#fsm{buffer=Buffer}=S) -> 
+   case erlang:decode_packet(httph_bin, Buffer, []) of
+      {more, _}        -> {next_state, 'REQUEST', S};
+      {error, _Reason} -> http_error(400, S);
+      {ok, Req, Chunk} -> parse_header(Req, S#fsm{buffer=Chunk})
+   end.
 
-'SERV'({send, _Uri, Data}, #fsm{peer=Peer}=S) ->
-   % response with chunk
-   {emit,
-      {send, Peer, knet_http:encode_chunk(Data)},
-      'SERV',
+parse_header({http_error, Msg}, S) ->
+   http_error(400, S);
+
+parse_header({http_header, _I, 'Content-Length'=Head, _R, Val}, 
+             #fsm{request=#req{heads=Heads}=R}=S) ->
+   Len = list_to_integer(binary_to_list(Val)),
+   parse_header(S#fsm{request=R#req{heads=[{Head, Len} | Heads]}, iolen=Len, chunked=false});
+
+parse_header({http_header, _I, 'Transfer-Encoding'=Head, _R, <<"chunked">>=Val},
+             #fsm{request=#req{heads=Heads}=R}=S) ->
+   parse_header(S#fsm{request=R#req{heads=[{Head, Val} | Heads]}, chunked=true}); %% TODO: fix
+
+parse_header({http_header, _I, Head, _R, Val},
+             #fsm{request=#req{heads=Heads}=R}=S) ->
+   parse_header(S#fsm{request=R#req{heads=[{Head, Val} | Heads]}});
+
+parse_header(http_eoh, #fsm{request=R, iolen=undefined}=S) ->
+   % nothing to receive, Content-Length, Transfer-Encoding is not present
+   {emit, 
+      {http, R#req.method, R#req.uri, R#req.heads}, 
+      'IO',
       S
    };
 
-'SERV'({Code, _Uri, Head0}, #fsm{lib=Lib, peer=Peer, opts=Opts}=S) ->
+parse_header(http_eoh, #fsm{request=R, buffer=Buffer, iolen=Len}=S) ->
+   {emit, 
+      {http, R#req.method, R#req.uri, R#req.heads}, 
+      'IO',
+      S,
+      0   % trigger payload handling via timeout
+   }.
+
+%%%------------------------------------------------------------------
+%%%
+%%% I/O Payload
+%%%
+%%%------------------------------------------------------------------   
+
+'IO'(timeout, S) ->
+   parse_data(S);
+
+'IO'({_Prot, _Peer, {recv, Chunk}}, #fsm{buffer=Buffer}=S) ->
+   % NOTE: potential performance defect
+   parse_data(S#fsm{buffer = <<Buffer/binary, Chunk/binary>>});
+
+'IO'({Code, _Uri, Head0}, #fsm{lib=Lib, peer=Peer, opts=Opts}=S)
+ when is_integer(Code) ->
    % response chunked
    Head = check_head_srv(Lib, 
       Head0 ++ proplists:get_value(heads, Opts, [])
@@ -164,14 +236,11 @@ ioctl(_, _) ->
    ),
    {emit,
       {send, Peer, Rsp},
-      'SERV',
-      S#fsm{
-         iolen = undefined,
-         buffer= <<>>
-      }
+      'IO',
+      S
    };
 
-'SERV'({Code, _Uri, Head0, Payload}, #fsm{lib=Lib, peer=Peer, opts=Opts}=S) ->
+'IO'({Code, _Uri, Head0, Payload}, #fsm{lib=Lib, peer=Peer, opts=Opts}=S) ->
    % response with payload
    Head = check_head_srv(Lib, 
       Head0 ++ proplists:get_value(heads, Opts, [])
@@ -189,8 +258,15 @@ ioctl(_, _) ->
       }
    };
 
+'IO'({send, _Uri, Data}, #fsm{peer=Peer}=S) ->
+   % response with chunk
+   {emit,
+      {send, Peer, knet_http:encode_chunk(Data)},
+      'IO',
+      S
+   };
 
-'SERV'({eof, _Uri}, #fsm{peer=Peer}=S) ->
+'IO'({eof, _Uri}, #fsm{peer=Peer}=S) ->
    % response with end-of-file
    {emit,
       {send, Peer, knet_http:encode_chunk(<<>>)},
@@ -201,175 +277,82 @@ ioctl(_, _) ->
       }
    };
 
-'SERV'(timeout, S) ->
-   parse_chunk(S);
-
-'SERV'({_Prot, _Peer, {recv, Chunk}}, #fsm{request={_, Uri}}=S) ->
-   % TODO: parse chunk here
-   {emit,
-      {http, Uri, {recv, Chunk}},
-      'SERV',
-      S
-   };
-
-'SERV'({_Prot, _Peer, terminated}, S) ->
+'IO'({_Prot, _Peer, terminated}, S) ->
    {stop, normal, S};
 
-'SERV'({_Prot, _Peer, {error, Reason}}, S) ->
+'IO'({_Prot, _Peer, {error, Reason}}, S) ->
    {stop, Reason, S}.
 
-
-%%%------------------------------------------------------------------
-%%%
-%%% http request parser 
-%%%
-%%%------------------------------------------------------------------   
-
-%%
-%% parses request line
-parse_request_line(#fsm{buffer=Buffer}=S) ->
-   case erlang:decode_packet(http_bin, Buffer, []) of
-      {more, _}        -> {next_state, 'LISTEN', S};
-      {error, _Reason} -> http_error(400, S); 
-      {ok, Req, Chunk} -> parse_request_line(Req, S#fsm{buffer=Chunk})
-   end.
-
-parse_request_line({http_error, Msg}, S) ->
-   http_error(400, S);
-
-parse_request_line({http_request, Mthd, Uri, _Vsn}, S) ->
-   % request line received
-   lager:debug("httpd ~p ~p", [Mthd, Uri]),
-   parse_header(
-      S#fsm{
-         request={assert_method(Mthd), assert_uri(Uri), []}
-      }
-   ).
-
-%%
-%% parses headers
-parse_header(#fsm{buffer=Buffer}=S) -> 
-   case erlang:decode_packet(httph_bin, Buffer, []) of
-      {more, _}        -> {next_state, 'REQUEST', S};
-      {error, _Reason} -> http_error(400, S);
-      {ok, Req, Chunk} -> parse_header(Req, S#fsm{buffer=Chunk})
-   end.
-
-parse_header({http_error, Msg}, S) ->
-   http_error(400, S);
-
-parse_header({http_header, _I, 'Content-Length'=Head, _R, Val}, 
-             #fsm{request={Mthd, Uri, Heads}}=S) ->
-   Len = list_to_integer(binary_to_list(Val)),
-   parse_header(S#fsm{request={Mthd, Uri, [{Head, Len} | Heads]}, iolen=Len});
-
-parse_header({http_header, _I, 'Transfer-Encoding'=Head, _R, <<"chunked">>=Val},
-             #fsm{request={Mthd, Uri, Heads}}=S) ->
-   parse_header(S#fsm{request={Mthd, Uri, [{Head, Val} | Heads]}, iolen=chunk}); %% TODO: fix
-
-parse_header({http_header, _I, Head, _R, Val},
-           #fsm{request={Mthd, Uri, Heads}}=S) ->
-   parse_header(S#fsm{request={Mthd, Uri, [{Head, Val} | Heads]}});
-
-parse_header(http_eoh, #fsm{request={Mthd, Uri, Heads}, iolen=undefined}=S) ->
-   % nothing to receive, Content-Length, Transfer-Encoding is not present
-   {emit, 
-      {http, Mthd, Uri, Heads}, % Note: eof is not sent for req w/o content
-      'SERV',
-      S#fsm{pckt=0}
-   };
-
-parse_header(http_eoh, #fsm{iolen=chunk}=S) ->
-   % expected length of response is not known, stream it
-   parse_chunk(S#fsm{pckt=0});
-
-parse_header(http_eoh, S) ->
-   % exprected length of response is know, receive it
-   parse_payload(S#fsm{pckt=0}).
-
-
 %%
 %%
-parse_payload(#fsm{request={Mthd, Uri, Heads}, pckt=Pckt, iolen=Len, buffer=Buffer}=S) ->
+parse_data(#fsm{chunked=true}=S) ->
+   parse_chunk(S);
+parse_data(#fsm{chunked=false}=S) ->
+   parse_payload(S).
+
+parse_payload(#fsm{request=#req{method=Mthd, uri=Uri}, iolen=Len, chunk=Clen, buffer=Buffer}=S) ->
    case size(Buffer) of
-      % buffer equals or exceed expected payload size
-      % end of data stream is reached.
+      % eof is reached, received buffers exceed expected payload
       Size when Size >= Len ->
-         <<Chunk:Len/binary, _/binary>> = Buffer,
-         Msg = if
-            Pckt =:= 0 -> [{http, Mthd, Uri, Heads}, {http, Mthd, Uri, {recv, Chunk}}, {http, Mthd, Uri, eof}];
-            true       -> [{http, Mthd, Uri, {recv, Chunk}}, {http, Mthd, Uri, eof}]
-         end,
-         {emit, Msg, 'SERV', 
+         <<Chunk:Len/binary, Rest/binary>> = Buffer,
+         {emit, 
+            [{http, Mthd, Uri, {recv, Chunk}}, {http, Mthd, Uri, eof}],
+            'IO',
             S#fsm{
-               pckt  = Pckt + 1,
+               buffer = Rest
+            }
+         };
+      % received data needs to be flushed to client    
+      Size when Size < Len, Size >= Clen ->
+         {emit, 
+            {http, Mthd, Uri, {recv, Buffer}},  
+            'IO',
+            S#fsm{
+               iolen = Len - Size, 
                buffer= <<>>
             }
          };
-      Size when Size < Len ->
-         Msg = if
-            Pckt =:= 0 -> [{http, Mthd, Uri, Heads}, {http, Mthd, Uri, {recv, Buffer}}];
-            true       -> {http, Mthd, Uri, {recv, Buffer}}
-         end,
-         {emit, Msg, 'SERV',
-            S#fsm{
-               pckt  = Pckt + 1,
-               iolen = Len - size(Buffer), 
-               buffer= <<>>
-            }
-         }
+      % do nothing
+      _ ->
+         {next_state, 'IO', S}
    end.
 
 %%
 %%
-parse_chunk(#fsm{request={Mthd, Uri, Heads}, pckt=Pckt, iolen=chunk, buffer=Buffer}=S) ->
+parse_chunk(#fsm{request=#req{method=Mthd, uri=Uri}, iolen=chunk, buffer=Buffer}=S) ->
    case binary:split(Buffer, <<"\r\n">>) of  
+      % chunk header is not received
       [_]          -> 
-         {next_state, 'SERV', S};
+         {next_state, 'IO', S};
+      % chunk header  
       [Head, Data] -> 
          [L |_] = binary:split(Head, [<<" ">>, <<";">>]),
          Len    = list_to_integer(binary_to_list(L), 16),
-         if
-            % chunk with length 0 is last chunk is stream
-            Len =:= 0 ->
-               Msg = if
-                  Pckt =:= 0 -> [{http, Mthd, Uri, Heads}, {http, Mthd, Uri, eof}];
-                  true       -> {http, Mthd, Uri, eof}
-               end,
-               {emit, Msg, 'SERV', S};
+         if 
+            Len =:= 0 -> % this is last chunk
+               {emit, {http, Mthd, Uri, eof}, 'IO', S};
             true      ->
                parse_chunk(S#fsm{iolen=Len, buffer=Data})
          end
    end;
 
-parse_chunk(#fsm{request={Mthd, Uri, Heads}, pckt=Pckt, iolen=Len, buffer=Buffer}=S) ->
+parse_chunk(#fsm{request=#req{method=Mthd, uri=Uri}, iolen=Len, buffer=Buffer}=S) ->
    case size(Buffer) of
+      % chunk is received
       Size when Size >= Len ->
          <<Chunk:Len/binary, $\r, $\n, Rest/binary>> = Buffer,
-         Msg = if
-            Pckt =:= 0 -> [{http, Mthd, Uri, Heads}, {http, Mthd, Uri, {recv, Chunk}}];
-            true       -> {http, Mthd, Uri, {recv, Chunk}}
-         end,
-         {emit, Msg, 'SERV',
+         {emit,
+            {http, Mthd, Uri, {recv, Chunk}}, 
+            'IO',
             S#fsm{
                iolen = chunk, 
-               buffer= Rest,
-               pckt  = Pckt + 1
+               buffer= Rest
             },
-            0    %re-sched via timeout
+            0    % trigger buffer handling
          };
-      Size when Size < Len ->
-         Msg = if
-            Pckt =:= 0 -> [{http, Mthd, Uri, Heads}, {http, Mthd, Uri, {recv, Buffer}}];
-            true       -> {http, Mthd, Uri, {recv, Buffer}}
-         end,
-         {emit, Msg, 'SERV', 
-            S#fsm{
-               iolen = Len - size(Buffer), 
-               buffer= <<>>,
-               pckt  = Pckt + 1
-            }
-         }
+      % wait for end of chunk
+      _ ->
+         {next_state, 'IO', S}
    end.
 
 
@@ -380,12 +363,19 @@ parse_chunk(#fsm{request={Mthd, Uri, Heads}, pckt=Pckt, iolen=Len, buffer=Buffer
 %%%------------------------------------------------------------------
 
 %%
-%% return default server identity
+%% return daemon identity 
+httpd(Opts) ->
+   case lists:keyfind(server, 1, Opts) of
+      false      -> default_httpd();
+      {_, Httpd} -> Httpd
+   end.
+
 default_httpd() ->
    % discover library name
    {ok,   Lib} = application:get_application(?MODULE),
    {_, _, Vsn} = lists:keyfind(Lib, 1, application:which_applications()),
    <<(atom_to_binary(Lib, utf8))/binary, $/, (list_to_binary(Vsn))/binary>>.
+
 
 %%
 %% check server header

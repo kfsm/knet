@@ -65,9 +65,9 @@ get(Uri) ->
 acceptor(Port) ->
    {fabric, nil, nil,
       [
-         {knet_tcp, [inet]}, % TCP/IP fsm
+         {knet_tcp,   [inet, {{accept, []}, Port}]}, % TCP/IP fsm
          {knet_httpd, [[]]}, % HTTP   fsm
-         {?MODULE,  [Port]}  % ECHO   fsm
+         {?MODULE,    [[]]}  % ECHO   fsm
       ]
    }.
 
@@ -77,56 +77,65 @@ acceptor(Port) ->
 %%% FSM
 %%%
 %%%------------------------------------------------------------------
-init([Port]) ->
-   % initialize echo process
-   lager:info("echo new process ~p, port ~p", [self(), Port]),
-   {ok, 
-      'IDLE',     % initial state is idle
-      {Port, 0},  % state is {Port, Counter}
-      0           % fire timeout event after 0 sec
-   }.
+init([_]) ->
+   lager:info("new echo ~p", [self()]),
+   {ok, 'IDLE', 0}.
 
 free(_, _) ->
    ok.
 
-'IDLE'(timeout, {Port, _}=S) ->
-   {reply, 
-      {{accept, []}, Port},  % issue accept request to HTTP
-      'ECHO',
-      S
-   }.
+%%
+'IDLE'({http, 'GET', Uri, Heads}, Cnt) -> 
+   handle('GET', Uri, Heads, Cnt);
+'IDLE'({http, 'HEAD', Uri, Heads}, Cnt) -> 
+   handle('HEAD', Uri, Heads, Cnt);
+'IDLE'({http, 'DELETE', Uri, Heads}, Cnt) -> 
+   handle('DELETE', Uri, Heads, Cnt);
+'IDLE'({http, 'OPTIONS', Uri, Heads}, Cnt) -> 
+   handle('OPTIONS', Uri, Heads, Cnt);
 
+'IDLE'({http, 'POST', Uri, Heads}, Cnt) -> 
+   recv('POST', Uri, Heads, Cnt);
+'IDLE'({http, 'PUT', Uri, Heads}, Cnt) -> 
+   recv('PUT', Uri, Heads, Cnt);
+'IDLE'({http, 'PATCH', Uri, Heads}, Cnt) -> 
+   recv('PATCH', Uri, Heads, Cnt).
+   
+%%   
 'ECHO'({http, _Mthd, Uri, {recv, Msg}}, S) ->
    lager:info("echo ~p: ~p data ~p", [self(), Uri, Msg]),
    {reply,
       {send, Uri, Msg},   
       'ECHO',
-      S,
-      5000
+      S
    };
 
-'ECHO'({http, Mthd, Uri, Heads}, {Port, Cnt}) ->
+'ECHO'({http, _Mthd, Uri, eof}, Cnt) ->   
+   lager:info("echo ~p: processed ~p", [self(), Cnt]),
+   {reply, {eof, Uri}, 'IDLE', Cnt + 1}.
+
+
+%%
+%%
+handle(Mthd, Uri, Heads, Cnt) ->
    lager:info("echo ~p: ~p ~p", [self(), Mthd, Uri]),
-   %% acceptor is consumed run a new one
-   {reply, 
-      [{200, Uri, []}, {send, Uri, knet_http:encode_req(Mthd, uri:to_binary(Uri), Heads)}],  % echo received header
-      'ECHO',            % 
-      {Port, Cnt + 1},   % 
-      5000               % 
-   };
+   Msg = knet_http:encode_req(Mthd, uri:to_binary(Uri), Heads),
+   {reply,
+      {200, Uri, [{'Content-Type', <<"text/plain">>}], Msg},
+      'IDLE',
+      Cnt + 1
+   }.
 
-
-'ECHO'({http, _Mthd, Uri, eof}, {_, Cnt}=S) ->   
-   lager:info("echo ~p: processed ~p", [self(), Cnt]),
-   {reply, {eof, Uri}, 'ECHO', S, 5000};
-
-'ECHO'(timeout, {_, Cnt}=S) ->
-   lager:info("echo ~p: processed ~p", [self(), Cnt]),
-   {stop, normal, S}.
-
-
-
-
+%%
+%%
+recv(Mthd, Uri, Heads, Cnt) ->
+   lager:info("echo ~p: ~p ~p", [self(), Mthd, Uri]),
+   Msg = knet_http:encode_req(Mthd, uri:to_binary(Uri), Heads),
+   {reply,
+      [{200, Uri, [{'Content-Type', <<"text/plain">>}]}, {send, Uri, Msg}],
+      'ECHO',
+      Cnt + 1
+   }.
 
 
 

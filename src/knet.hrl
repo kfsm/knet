@@ -22,7 +22,7 @@
 ]).
 
 -define(SO_UDP, [
-	{active, once}, 
+   {active, once}, 
    {mode, binary}
 ]).
 
