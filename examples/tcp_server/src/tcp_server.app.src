@@ -1,0 +1,24 @@
+{application, tcp_server,
+   [
+      {description, "knet tcp server example"},
+      {vsn,         "0.1.0"},
+      {modules,     [
+         tcp_server,
+         tcp_server_sup,
+         tcp_server_app
+      ]},
+      {registered,  []},
+      {applications,[
+         kernel,
+         stdlib,
+         compiler,
+         syntax_tools,
+         lager,
+         pts,
+         konduit,
+         knet
+      ]},
+      {mod, {tcp_server_app, []}},
+      {env, []}
+   ]
+}.  

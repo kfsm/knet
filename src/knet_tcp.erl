@@ -172,7 +172,7 @@ ioctl(_, _) ->
    lager:info("tcp/ip accepted ~p, local addr ~p", [Peer, Addr]),
    pns:register(knet, {iid(S#fsm.inet), established, Peer}, self()),
    % acceptor is consumed, spawn a new one
-   ksup:spawn(FSup),
+   konduit_sup:spawn(FSup),
    {emit, 
       {tcp, Peer, established},
       'ESTABLISHED', 
@@ -266,9 +266,9 @@ init(Inet, {{listen, Opts}, Addr}) ->
    lager:info("tcp/ip listen on ~p", [Addr]),
    % spawn acceptor pool
    {pool, Pool} = lists:keyfind(pool, 1, Opts),
-   spawn(
+   spawn_link(
       fun() ->
-         [ ksup:spawn(FSup) || _ <- lists:seq(1, Pool) ]
+         [ konduit_sup:spawn(FSup) || _ <- lists:seq(1, Pool) ]
       end
    ),
    #fsm{
