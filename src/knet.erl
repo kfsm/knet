@@ -34,6 +34,7 @@
 
 -export([start/0, stop/0]).
 -export([connect/1, connect/2, close/1]).% listen/1, listen/2, close/1]).
+-export([listen/1]).
 -export([ioctl/2, send/2, recv/1]).
 -export([route/2, ifget/1, ifget/2]).
 -export([size/1]).
@@ -44,8 +45,6 @@
 %%%
 %%%------------------------------------------------------------------
 start() ->
-   %{file, Module} = code:is_loaded(?MODULE),
-   %AppFile = filename:dirname(Module) ++ "/" ++ atom_to_list(?MODULE) ++ ".app",
    AppFile = code:where_is_file(atom_to_list(?MODULE) ++ ".app"),
    {ok, [{application, _, List}]} = file:consult(AppFile), 
    Apps = proplists:get_value(applications, List, []),
@@ -136,6 +135,11 @@ connect(Uri, Opts)
 %%   {Iid, established, Peer} - each accepted connection
 %%   {Iid, terminated,  Peer} 
 %%   {Iid, {error, Reason}, Peer}
+listen(Spec) ->
+   knet_acceptor_sup:start_link(Spec).
+
+
+
 % listen(Addr) ->
 %    listen(Addr, []).
 % listen({tcp4, Addr}, Opts) when is_tuple(Addr) ->

@@ -14,34 +14,29 @@ init([]) ->
    {ok,
       {
          {one_for_one, 4, 1800},
-         [konduit()]
+         [server()]
       }
-   }.
-
-konduit() ->
-   {
-      konduit,
-      {konduit, start_link, [server()]},
-      permanent, 1000, worker, dynamic
    }.
 
 server() ->
    {ok, Port} = application:get_env(tcp_server, port),
-   {fabric, [
-      {knet_tcp, [inet, {{listen, lopts()}, Port}]}
-   ]}.
+   {
+      konduit,
+      {knet, listen, [stack(Port)]},
+      permanent, 1000, worker, dynamic
+   }.
 
-lopts() ->
+%%
+%% server specification
+stack(Port) -> 
    [
-      {rcvbuf, 38528},
-      {sndbuf, 38528},
-      {pool,       2},
-      {acceptor, acceptor()}
+      {knet_tcp,        [{tcp(), Port}]},
+      {tcp_server_echo, []}
    ].
 
-acceptor() ->
-   {fabric, [
-      {knet_tcp,        [inet]},
-      {tcp_server_echo, []}
+tcp() ->
+   {accept, [
+      {rcvbuf, 38528},
+      {sndbuf, 38528},
+      {pool,       2}
    ]}.
-
