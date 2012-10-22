@@ -23,7 +23,7 @@ server() ->
    {
       konduit,
       {knet, listen, [stack(Port)]},
-      permanent, 1000, worker, dynamic
+      permanent, 1000, supervisor, dynamic
    }.
 
 %%
@@ -38,5 +38,5 @@ tcp() ->
    {accept, [
       {rcvbuf, 38528},
       {sndbuf, 38528},
-      {pool,       2}
+      {acceptor,   2}
    ]}.

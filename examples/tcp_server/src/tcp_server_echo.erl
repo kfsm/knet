@@ -7,7 +7,7 @@
 %%
 %%
 init(_) ->
-	lager:info("echo ~p: new", [self()]),
+   lager:info("echo ~p: new", [self()]),
    {ok, 'ECHO', undefined}.
 
 %%

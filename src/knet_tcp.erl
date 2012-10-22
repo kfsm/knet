@@ -272,7 +272,7 @@ init(Sup, {{listen, Opts}, Addr}) ->
    ]),
    lager:info("tcp/ip listen on ~p", [Addr]),
    % spawn acceptor pool
-   {pool, Pool} = lists:keyfind(pool, 1, Opts),
+   {acceptor, Pool} = lists:keyfind(acceptor, 1, Opts),
    spawn_link(
       fun() ->
          Factory = knet_acceptor_sup:factory(Sup),
