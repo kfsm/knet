@@ -30,6 +30,8 @@
 %%
 %% internal state
 -record(fsm, {
+   sup,    %
+
    trecv,  % packet arrival time 
    tsend,
 
@@ -49,17 +51,17 @@
 
 %%
 %%
-init([Inet, {{listen, _Opts}, _Addr}=Msg]) ->
-   {ok, 'LISTEN', init(Inet, Msg)};
+init([Sup, {listen, _Addr, _Opts}=Msg]) ->
+   {ok, 'LISTEN', init(Sup, Msg)};
 
-init([Inet, {{connect, _Opts}, _Addr, _Peer}=Msg]) ->
-   {ok, 'ACTIVE', init(Inet, Msg)};
+init([Sup, {connect, _Addr, _Opts}=Msg]) ->
+   {ok, 'ACTIVE', init(Sup, Msg)};
 
-init([Inet, {{connect, _Opts}, _Addr}=Msg]) ->
-   {ok, 'ACTIVE', init(Inet, Msg)};
+init([Sup, {connect, _Addr, _Peer, _Opts}=Msg]) ->
+   {ok, 'ACTIVE', init(Sup, Msg)};
 
-init([Inet]) ->
-   {ok, 'IDLE', #fsm{inet = Inet}}.
+init([Sup]) ->
+   {ok, 'IDLE', #fsm{sup = Sup}}.
 
 %%
 %%
@@ -93,10 +95,10 @@ ioctl(_,_) ->
 %%% IDLE
 %%%
 %%%------------------------------------------------------------------
-'IDLE'({{connect, _Opts}, _Addr}=Msg, #fsm{inet=Inet}) ->
+'IDLE'({connect, _Addr, _Opts}=Msg, #fsm{inet=Inet}) ->
    {next_state, 'ACTIVE', init(Inet, Msg)};
 
-'IDLE'({{connect, _Opts}, _Addr, _Peer}=Msg, #fsm{inet=Inet}) ->
+'IDLE'({{connect, _Addr, _Peer, _Opts}=Msg, #fsm{inet=Inet}) ->
    {next_state, 'ACTIVE', init(Inet, Msg)}.
 
 %%%------------------------------------------------------------------

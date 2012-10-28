@@ -30,6 +30,7 @@
 %% internal state
 -record(fsm, {
    role :: client | server,
+   sup,    % supervisor of konduit hierarchy
 
    ttcp,   % time to connect tcp/ip
    tconn,  % time to connect ssl
@@ -51,17 +52,20 @@
 
 %%
 %%
-init([Inet, {{listen, _Opts}, _Peer}=Msg]) ->
-   {ok, 'LISTEN', init(Inet, Msg)}; 
+init([Sup, {listen, _Peer, _Opts}=Msg]) ->
+   {ok, 'LISTEN', init(Sup, Msg)}; 
 
-init([Inet, {{accept, _Opts}, _Peer}=Msg]) ->
-   {ok, 'ACCEPT', init(Inet, Msg), 0};
+init([Sup, {accept, _Peer, _Opts}=Msg]) ->
+   {ok, 'ACCEPT', init(Sup, Msg), 0};
 
-init([Inet, {{connect, _Opts}, _}=Msg]) ->
-   {ok, 'CONNECT', init(Inet, Msg), 0};
+init([Sup, {connect, _Peer, _Opts}=Msg]) ->
+   {ok, 'CONNECT', init(Sup, Msg), 0};
 
-init([Inet]) ->
-   {ok, 'IDLE', Inet}.
+init([{connect, _Peer, _Opts}=Msg]) ->
+   {ok, 'CONNECT', init(undefined, Msg), 0};
+
+init([Sup]) ->
+   {ok, 'IDLE', #fsm{sup=Sup}}.
 
 %%
 %%
@@ -93,9 +97,9 @@ ioctl(_, _) ->
 %%% IDLE: allows to chain ssl konduit
 %%%
 %%%------------------------------------------------------------------
-'IDLE'({{accept, _Opts}, _}=Msg, Inet) ->
+'IDLE'({accept,  _Peer, _Opts}=Msg, Inet) ->
    {next_state, 'ACCEPT', init(Inet, Msg), 0};
-'IDLE'({{connect, _Opts}, _}=Msg, Inet) ->
+'IDLE'({connect, _Peer, _Opts}=Msg, Inet) ->
    {next_state, 'CONNECT', init(Inet, Msg), 0}.
 
 %%%------------------------------------------------------------------
@@ -126,7 +130,7 @@ ioctl(_, _) ->
                Ttcp  = timer:now_diff(T2, T1),
                Tconn = timer:now_diff(erlang:now(), T2), 
                lager:info("ssl connected ~p, local addr ~p, suite ~p in ~p usec", [Peer, Addr, Sinf, Ttcp + Tconn]),
-               pns:register(knet, {iid(S#fsm.inet), established, Peer}, self()),
+               %pns:register(knet, {iid(S#fsm.inet), established, Peer}, self()),
                {emit, 
                   {ssl, Peer, established},
                   'ESTABLISHED', 
@@ -174,7 +178,7 @@ ioctl(_, _) ->
    {ok, Addr} = ssl:sockname(Sock),
    {ok, Sinf} = ssl:connection_info(Sock),
    lager:info("ssl accepted ~p, local addr ~p, suite ~p in ~p usec", [Peer, Addr, Sinf, Tconn]),
-   pns:register(knet, {iid(S#fsm.inet), established, Peer}, self()),
+   %pns:register(knet, {iid(S#fsm.inet), established, Peer}, self()),
    {emit, 
       {ssl, Peer, established},
       'ESTABLISHED', 
@@ -215,7 +219,7 @@ ioctl(_, _) ->
    % TODO: flexible flow control
    ssl:setopts(S#fsm.sock, [{active, once}]),
    {emit, 
-      {ssl, Peer, {recv, Data}},
+      {ssl, Peer, Data},
       'ESTABLISHED',
       S#fsm{trecv=counter:add(now, Cnt)}
    };
@@ -253,46 +257,55 @@ ioctl(_, _) ->
 
 %%
 %% initializes konduit
-init(Inet, {{listen, Opts}, Addr}) when is_integer(Addr) ->
-   init(Inet, {{listen, Opts}, {any, Addr}}); 
-init(Inet, {{listen, Opts}, Addr}) ->
-   % start ssl listener
-   {IP, Port}  = Addr,
-   {ok, LSock} = ssl:listen(Port, [
-   	Inet, 
-   	{ip, IP}, 
-   	{reuseaddr, true} | opts(Opts, ?SSL_OPTS) ++ opts(Opts, ?TCP_OPTS) ++ ?SO_TCP
-   ]),
-   pns:register(knet, {iid(Inet), listen, Addr}, self()),
-   lager:info("ssl listen on ~p", [Addr]),
-   #fsm{
-      role = server,
-      inet = Inet,
-      sock = LSock,
-      addr = Addr,
-      opts = Opts
-   };
+init(Sup, {accept, Addr, Opts}) when is_integer(Addr) ->
+   init(Sup, {accept, {any, Addr}, Opts}); 
 
-init(Inet, {{accept, Opts}, Addr}) when is_integer(Addr) ->
-   init(Inet, {{accept, Opts}, {any, Addr}}); 
-init(Inet, {{accept, Opts}, Addr}) ->
-   % start tcp/ip acceptor
-   LPid = pns:whereis(knet, {iid(Inet), listen, Addr}),
-   {ok, LSock} = konduit:ioctl(socket, knet_ssl, LPid),  
+init(Sup, {accept, Addr, Opts}) ->
+   Lpid = knet_acceptor_sup:server(Sup),
+   {ok, [LSock]} = konduit:ioctl(socket, knet_ssl, Lpid),  
    lager:info("ssl accepting ~p", [Addr]),
    #fsm{
       role = server,
-      inet = Inet,
+      sup  = Sup,
       sock = LSock,
       addr = Addr,
       opts = Opts
    };
 
-init(Inet, {{connect, Opts}, Peer}) ->
+init(Sup, {listen, Addr, Opts}) when is_integer(Addr) ->
+   init(Sup, {listen,  {any, Addr}, Opts}); 
+
+init(Sup, {listen, Addr, Opts}) ->
+   % start ssl listener
+   {IP, Port}  = Addr,
+   {ok, LSock} = ssl:listen(Port, [
+   	{ip, IP}, 
+   	{reuseaddr, true} | opts(Opts, ?SSL_OPTS) ++ opts(Opts, ?TCP_OPTS) ++ ?SO_TCP
+   ]),
+   lager:info("ssl listen on ~p", [Addr]),
+   % spawn acceptor pool
+   {acceptor, Pool} = lists:keyfind(acceptor, 1, Opts),
+   spawn_link(
+      fun() ->
+         Factory = knet_acceptor_sup:factory(Sup),
+         [ konduit_sup:spawn(Factory) || _ <- lists:seq(1, Pool) ] 
+      end
+   ),
+   #fsm{
+      role = server,
+      sup  = Sup,
+      sock = LSock,
+      addr = Addr,
+      opts = Opts
+   };
+
+
+
+init(Sup, {connect, Peer, Opts}) ->
    % start tcp/ip client
    #fsm{
       role = client,
-      inet = Inet,
+      sup  = Sup,
       peer = Peer,
       opts = Opts
    }.

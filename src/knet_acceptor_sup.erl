@@ -16,9 +16,9 @@ start_link([{Prot, Opts} | Tail]) ->
       transient, 1000, worker, dynamic
    }),
    % listener
-   [{{_, Req}, Peer}] = Opts, 
+   [{_, Peer, Req}] = Opts, 
    Listen = {fabric, [
-      {Prot, [Sup, {{listen, Req}, Peer}]}
+      {Prot, [Sup, {listen, Peer, Req}]}
    ]},
    {ok, _} = supervisor:start_child(Sup, {
       listen,

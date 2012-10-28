@@ -1,6 +1,6 @@
 %%
 %%
--module(tcp_server_sup).
+-module(tls_sup).
 -behaviour(supervisor).
 
 -export([start_link/0, init/1]).
@@ -19,9 +19,9 @@ init([]) ->
    }.
 
 server() ->
-   {ok, Port} = application:get_env(tcp_server, port),
+   {ok, Port} = application:get_env(tls, port),
    {
-      konduit,
+      server,
       {knet, listen, [stack(Port)]},
       permanent, 1000, supervisor, dynamic
    }.
@@ -30,13 +30,15 @@ server() ->
 %% server specification
 stack(Port) -> 
    [
-      {knet_tcp,        [{tcp(), Port}]},
-      {tcp_server_echo, []}
+      {knet_ssl, [{accept, Port, ssl()}]},
+      {tls_echo, []}
    ].
 
-tcp() ->
-   {accept, [
+ssl() ->
+   [
       {rcvbuf, 38528},
       {sndbuf, 38528},
-      {acceptor,   2}
-   ]}.
+      {acceptor,   2},
+      {certfile, code:priv_dir(tls) ++ "/cert.pem"},
+      {keyfile,  code:priv_dir(tls) ++ "/key.pem"}
+   ].

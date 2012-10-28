@@ -57,14 +57,17 @@
 
 %%
 %%
-init([Sup, {{listen, _Opts}, _Peer}=Msg]) ->
+init([Sup, {listen,  _Peer, _Opts}=Msg]) ->
    {ok, 'LISTEN', init(Sup, Msg)}; 
 
-init([Sup, {{connect, _Opts}, _Peer}=Msg]) ->
+init([Sup, {accept, _Peer, _Opts}=Msg]) ->
+   {ok, 'ACCEPT', init(Sup, Msg), 0};
+
+init([Sup, {connect, _Peer, _Opts}=Msg]) ->
    {ok, 'CONNECT', init(Sup, Msg), 0};
 
-init([Sup, {{accept, _Opts}, _Peer}=Msg]) ->
-   {ok, 'ACCEPT', init(Sup, Msg), 0};
+init([{connect, _Peer, _Opts}=Msg]) ->
+   {ok, 'CONNECT', init(undefined, Msg), 0};
 
 init([Sup]) ->
    {ok, 'IDLE', #fsm{sup=Sup}}.
@@ -103,9 +106,9 @@ ioctl(_, _) ->
 %%% IDLE: allows to chain tcp/ip konduit
 %%%
 %%%------------------------------------------------------------------
-'IDLE'({{accept,  _Opts}, _Peer}=Msg, #fsm{sup=Sup}) ->
+'IDLE'({accept,  _Peer, _Opts}=Msg, #fsm{sup=Sup}) ->
    {next_state, 'ACCEPT', init(Sup, Msg), 0};
-'IDLE'({{connect, _Opts}, _Peer}=Msg, #fsm{sup=Sup}) ->
+'IDLE'({connect, _Peer, _Opts}=Msg, #fsm{sup=Sup}) ->
    {next_state, 'CONNECT', init(Sup, Msg), 0}.
 
 %%%------------------------------------------------------------------
@@ -208,7 +211,7 @@ ioctl(_, _) ->
    % TODO: flexible flow control
    inet:setopts(S#fsm.sock, [{active, once}]),
    {emit, 
-      {tcp, Peer, {recv, Data}},
+      {tcp, Peer, Data},
       'ESTABLISHED',
       S#fsm{trecv=counter:add(now, Cnt)}
    };
@@ -235,7 +238,7 @@ ioctl(_, _) ->
       'IDLE',
       S
    }.   
-   
+
    
 %%%------------------------------------------------------------------
 %%%
@@ -245,10 +248,10 @@ ioctl(_, _) ->
 
 %%
 %% initializes konduit
-init(Sup, {{accept, Opts}, Addr}) when is_integer(Addr) ->
-   init(Sup, {{accept, Opts}, {any, Addr}}); 
+init(Sup, {accept, Addr, Opts}) when is_integer(Addr) ->
+   init(Sup, {accept, {any, Addr}, Opts}); 
 
-init(Sup, {{accept, Opts}, Addr}) ->
+init(Sup, {accept, Addr, Opts}) ->
    Lpid = knet_acceptor_sup:server(Sup),
    {ok, [LSock]} = konduit:ioctl(socket, knet_tcp, Lpid),
    lager:info("tcp/ip accepting ~p (~p)", [Addr, LSock]),
@@ -260,10 +263,10 @@ init(Sup, {{accept, Opts}, Addr}) ->
       opts = Opts
    };
 
-init(Sup, {{listen, Opts}, Addr}) when is_integer(Addr) ->
-   init(Sup, {{listen, Opts}, {any, Addr}}); 
+init(Sup, {listen, Addr, Opts}) when is_integer(Addr) ->
+   init(Sup, {listen, {any, Addr}, Opts}); 
 
-init(Sup, {{listen, Opts}, Addr}) ->
+init(Sup, {listen, Addr, Opts}) ->
    % start tcp/ip listener
    {IP, Port}  = Addr,
    {ok, LSock} = gen_tcp:listen(Port, [
@@ -287,7 +290,7 @@ init(Sup, {{listen, Opts}, Addr}) ->
       opts = Opts
    };
 
-init(Sup, {{connect, Opts}, Peer}) ->
+init(Sup, {connect, Peer, Opts}) ->
    % start tcp/ip client
    #fsm{
       role = client,
@@ -298,7 +301,7 @@ init(Sup, {{connect, Opts}, Peer}) ->
 
 
 %%
-%% 
+%% check host is format acceptable by gen_tcp
 check_host(Host) when is_binary(Host) ->
    binary_to_list(Host);
 check_host(Host) ->

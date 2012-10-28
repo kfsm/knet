@@ -1,4 +1,4 @@
--module(tcp_server_echo).
+-module(tcp_echo).
 
 %%
 %% konduit api
@@ -26,10 +26,10 @@ ioctl(_, _) ->
    lager:info("echo ~p: established ~p", [self(), Peer]),
    {next_state, 'ECHO', S};
 
-'ECHO'({tcp, Peer, {recv, <<"exit\r\n">>}}, S) ->
+'ECHO'({tcp, Peer, <<"exit\r\n">>}, S) ->
    {stop, normal, S};
 
-'ECHO'({tcp, Peer, {recv, Msg}}, S) ->
+'ECHO'({tcp, Peer, Msg}, S) when is_binary(Msg) ->
    lager:info("echo ~p: data ~p ~p", [self(), Peer, Msg]),
    {reply, 
       {send, Peer, Msg}, 

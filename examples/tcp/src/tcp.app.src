@@ -1,11 +1,11 @@
-{application, tcp_server,
+{application, tcp,
    [
-      {description, "knet tcp server example"},
+      {description, "knet tcp example application"},
       {vsn,         "0.1.0"},
       {modules,     [
-         tcp_server,
-         tcp_server_sup,
-         tcp_server_app
+         tcp,
+         tcp_sup,
+         tcp_app
       ]},
       {registered,  []},
       {applications,[
@@ -18,7 +18,7 @@
          konduit,
          knet
       ]},
-      {mod, {tcp_server_app, []}},
+      {mod, {tcp_app, []}},
       {env, []}
    ]
 }.  

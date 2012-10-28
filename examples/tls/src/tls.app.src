@@ -1,0 +1,28 @@
+{application, tls,
+   [
+      {description, "knet ssl example application"},
+      {vsn,         "0.1.0"},
+      {modules,     [
+         tls,
+         tls_echo,
+         tls_sup,
+         tls_app
+      ]},
+      {registered,  []},
+      {applications,[
+         kernel,
+         stdlib,
+         compiler,
+         syntax_tools,
+         lager,
+         pts,
+         konduit,
+         knet,
+         crypto,
+         public_key,
+         ssl
+      ]},
+      {mod, {tls_app, []}},
+      {env, []}
+   ]
+}.  
