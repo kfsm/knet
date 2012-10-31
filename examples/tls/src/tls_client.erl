@@ -1,4 +1,4 @@
--module(tls_echo).
+-module(tls_client).
 
 %%
 %% konduit api
@@ -7,8 +7,9 @@
 %%
 %%
 init(_) ->
-   lager:info("echo ~p: new", [self()]),
-   {ok, 'ECHO', <<>>}.
+   lager:info("echo ~p: client", [self()]),
+   random:seed(erlang:now()),
+   {ok, 'ECHO', undefined}.
 
 %%
 %%
@@ -24,25 +25,32 @@ ioctl(_, _) ->
 %%
 'ECHO'({ssl, Peer, established}, S) ->
    lager:info("echo ~p: established ~p", [self(), Peer]),
-   {next_state, 'ECHO', S};
-
-'ECHO'({ssl, Peer, <<"exit\r\n">>}, S) ->
-   {stop, normal, S};
+   {reply, 
+      {send, Peer, message()}, 
+      'ECHO', 
+      S
+   };
 
 'ECHO'({ssl, Peer, <<_:8>>=Msg}, S) when is_binary(Msg) ->
    lager:info("echo ~p: data ~p ~p", [self(), Peer, Msg]),
    {next_state, 
       'ECHO',            
-      Msg
+      S
    };
 
 'ECHO'({ssl, Peer, Msg}, S) when is_binary(Msg) ->
    lager:info("echo ~p: data ~p ~p", [self(), Peer, Msg]),
    {reply, 
-      {send, Peer, <<S/binary, Msg/binary>>}, 
+      {send, Peer, message()}, 
       'ECHO',            
-		<<>>
+		S
    };
 
 'ECHO'(_, S) ->
    {next_state, 'ECHO', S}.
+
+message() ->
+   Size = random:uniform(2046) + 2,
+   << <<($A + random:uniform(26)):8>> || <<_:1>> <= <<0:Size>> >>.
+
+

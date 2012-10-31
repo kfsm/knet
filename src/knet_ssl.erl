@@ -168,7 +168,7 @@ ioctl(_, _) ->
 %%% ACCEPT
 %%%
 %%%------------------------------------------------------------------
-'ACCEPT'(timeout, #fsm{sock = LSock} = S) ->
+'ACCEPT'(timeout, #fsm{sock=LSock, sup=Sup} = S) ->
    % accept a socket
    {ok, Sock} = ssl:transport_accept(LSock),
    T1 = erlang:now(),
@@ -179,6 +179,7 @@ ioctl(_, _) ->
    {ok, Sinf} = ssl:connection_info(Sock),
    lager:info("ssl accepted ~p, local addr ~p, suite ~p in ~p usec", [Peer, Addr, Sinf, Tconn]),
    %pns:register(knet, {iid(S#fsm.inet), established, Peer}, self()),
+   konduit_sup:spawn(knet_acceptor_sup:factory(Sup)),
    {emit, 
       {ssl, Peer, established},
       'ESTABLISHED', 

@@ -44,5 +44,5 @@ ioctl(_, _) ->
 
 
 message() ->
-   Size = random:uniform(2048),
+   Size = random:uniform(2048) + 1,
    << <<($A + random:uniform(26)):8>> || <<_:1>> <= <<0:Size>> >>.
