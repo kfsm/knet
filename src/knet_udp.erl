@@ -98,7 +98,7 @@ ioctl(_,_) ->
 'IDLE'({connect, _Addr, _Opts}=Msg, #fsm{inet=Inet}) ->
    {next_state, 'ACTIVE', init(Inet, Msg)};
 
-'IDLE'({{connect, _Addr, _Peer, _Opts}=Msg, #fsm{inet=Inet}) ->
+'IDLE'({connect, _Addr, _Peer, _Opts}=Msg, #fsm{inet=Inet}) ->
    {next_state, 'ACTIVE', init(Inet, Msg)}.
 
 %%%------------------------------------------------------------------

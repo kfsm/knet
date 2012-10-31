@@ -2,10 +2,9 @@
 %%
 -module(tcp).
 
--export([start/1]).
+-export([server/1, client/1]).
 
-start(Port) ->
-   application:set_env(?MODULE, port, Port),
+start() ->
    AppFile = code:where_is_file(atom_to_list(?MODULE) ++ ".app"),
    {ok, [{application, _, List}]} = file:consult(AppFile), 
    Apps = proplists:get_value(applications, List, []),
@@ -20,3 +19,11 @@ start(Port) ->
    ),
    application:start(?MODULE).
 
+
+server(Port) ->
+   start(),
+   tcp_sup:server(Port).
+
+client(Peer) ->
+   start(),
+   tcp_sup:client(Peer).
