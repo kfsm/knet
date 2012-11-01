@@ -1,0 +1,24 @@
+{application, http,
+   [
+      {description, "knet http example application"},
+      {vsn,         "0.1.0"},
+      {modules,     [
+         tcp,
+         tcp_sup,
+         tcp_app
+      ]},
+      {registered,  []},
+      {applications,[
+         kernel,
+         stdlib,
+         compiler,
+         syntax_tools,
+         lager,
+         pts,
+         konduit,
+         knet
+      ]},
+      {mod, {http_app, []}},
+      {env, []}
+   ]
+}.  

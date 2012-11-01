@@ -73,7 +73,9 @@ init([Opts]) ->
          chunk= proplists:get_value(chunk, Opts, ?BUF_LEN), 
          opts = Opts
       }
-   }.
+   };
+init(_) ->
+   init([[]]).
 
 free(_, _) ->
    ok.
@@ -88,14 +90,8 @@ ioctl(_, _) ->
 %%% IDLE
 %%%
 %%%------------------------------------------------------------------   
-'IDLE'({{accept, _Opts}, Addr}, S) ->
-   {emit, 
-      {{accept, []}, Addr}, 
-      'IDLE',
-      S
-   };
 
-'IDLE'({_Prot, Peer, established}, #fsm{opts=Opts}=S) ->
+'IDLE'({_Prot, Peer, established}, #fsm{}=S) ->
    {next_state, 
       'LISTEN', 
       S#fsm{
@@ -109,7 +105,7 @@ ioctl(_, _) ->
 %%% LISTEN
 %%%
 %%%------------------------------------------------------------------   
-'LISTEN'({_Prot, _Peer, {recv, Chunk}}, #fsm{buffer=Buf}=S) ->
+'LISTEN'({_Prot, _Peer, Chunk}, #fsm{buffer=Buf}=S) when is_binary(Chunk) ->
    try 
       parse_request_line(
          S#fsm{
@@ -152,7 +148,7 @@ parse_request_line({http_request, Mthd, Uri, _Vsn}, S) ->
 %%% REQUEST
 %%%
 %%%------------------------------------------------------------------   
-'REQUEST'({_Prot, _Peer, {recv, Chunk}}, #fsm{buffer=Buf}=S) ->
+'REQUEST'({_Prot, _Peer, Chunk}, #fsm{buffer=Buf}=S) when is_binary(Chunk) ->
    try
       parse_header(
          S#fsm{
@@ -220,9 +216,7 @@ parse_header(http_eoh, #fsm{request=R, buffer=Buffer, iolen=Len}=S) ->
 'IO'(timeout, S) ->
    parse_data(S);
 
-'IO'({_Prot, _Peer, {recv, Chunk}}, #fsm{buffer=Buffer}=S) ->
-   % NOTE: potential performance defect
-   parse_data(S#fsm{buffer = <<Buffer/binary, Chunk/binary>>});
+
 
 'IO'({Code, _Uri, Head0}, #fsm{lib=Lib, peer=Peer, opts=Opts}=S)
  when is_integer(Code) ->
@@ -258,7 +252,7 @@ parse_header(http_eoh, #fsm{request=R, buffer=Buffer, iolen=Len}=S) ->
       }
    };
 
-'IO'({send, _Uri, Data}, #fsm{peer=Peer}=S) ->
+'IO'({send, _Uri, Data}, #fsm{peer=Peer}=S) when is_binary(Data) ->
    % response with chunk
    {emit,
       {send, Peer, knet_http:encode_chunk(Data)},
@@ -276,6 +270,10 @@ parse_header(http_eoh, #fsm{request=R, buffer=Buffer, iolen=Len}=S) ->
          buffer= <<>>
       }
    };
+
+'IO'({_Prot, _Peer, Chunk}, #fsm{buffer=Buffer}=S) when is_binary(Chunk) ->
+   % NOTE: potential performance defect
+   parse_data(S#fsm{buffer = <<Buffer/binary, Chunk/binary>>});
 
 'IO'({_Prot, _Peer, terminated}, S) ->
    {stop, normal, S};
@@ -296,7 +294,7 @@ parse_payload(#fsm{request=#req{method=Mthd, uri=Uri}, iolen=Len, chunk=Clen, bu
       Size when Size >= Len ->
          <<Chunk:Len/binary, Rest/binary>> = Buffer,
          {emit, 
-            [{http, Mthd, Uri, {recv, Chunk}}, {http, Mthd, Uri, eof}],
+            [{http, Mthd, Uri, Chunk}, {http, Mthd, Uri, eof}],
             'IO',
             S#fsm{
                buffer = Rest
@@ -305,7 +303,7 @@ parse_payload(#fsm{request=#req{method=Mthd, uri=Uri}, iolen=Len, chunk=Clen, bu
       % received data needs to be flushed to client    
       Size when Size < Len, Size >= Clen ->
          {emit, 
-            {http, Mthd, Uri, {recv, Buffer}},  
+            {http, Mthd, Uri, Buffer},  
             'IO',
             S#fsm{
                iolen = Len - Size, 
@@ -342,7 +340,7 @@ parse_chunk(#fsm{request=#req{method=Mthd, uri=Uri}, iolen=Len, buffer=Buffer}=S
       Size when Size >= Len ->
          <<Chunk:Len/binary, $\r, $\n, Rest/binary>> = Buffer,
          {emit,
-            {http, Mthd, Uri, {recv, Chunk}}, 
+            {http, Mthd, Uri, Chunk}, 
             'IO',
             S#fsm{
                iolen = chunk, 
