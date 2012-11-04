@@ -21,6 +21,7 @@
 -author('Mario Cardona <marioxcardona@gmail.com>').
 
 -behaviour(konduit).
+-include("knet.hrl").
 
 -export([init/1, free/2, ioctl/2]).
 -export([
@@ -32,33 +33,27 @@
 
 %% internal state
 -record(fsm, {
-   lib,     % default server identity
+   % transport 
+   prot,    % transport protocol 
    peer,    % remote peer
-   request, % active request #req{}
-  
-   chunked, % 
+
+   % request
+   request, % active request #htreq{...}
+   chunked,                      % 
    iolen :: integer() | chunk,   % expected length of entity
-   chunk :: integer(),           % chunk size to be transmitted to client
-
-   opts,    % http protocol options
-   buffer   % I/O buffer
+   buffer,  % I/O buffer
+   
+   % options
+   lib,     % default server identity
+   heads,   % default headers
+   chunk    % chunk size to be transmitted to client
 }).
 
-%%
-%% request
--record(req, {
-   method,
-   uri,
-   heads
-}).
 
 %
 -define(URL_LEN,    2048). % max allowed size of request line
--define(REQ_LEN,    2048). % max allowed size of header
+-define(REQ_LEN,    2048). % max allowed size of single header
 -define(BUF_LEN,   19264). % length of http i/o buffer
-
-%% TODO: no eof for GET
-
 
 %%%------------------------------------------------------------------
 %%%
@@ -69,9 +64,11 @@ init([Opts]) ->
    {ok,
       'IDLE',
       #fsm{
-         lib  = httpd(Opts),
+         lib  = httpd_id(Opts),
+         % length of http chunk transmitted to client
          chunk= proplists:get_value(chunk, Opts, ?BUF_LEN), 
-         opts = Opts
+         % default headers, attached to each response
+         heads= proplists:get_value(heads, Opts, [])
       }
    };
 init(_) ->
@@ -91,10 +88,11 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'IDLE'({_Prot, Peer, established}, #fsm{}=S) ->
+'IDLE'({Prot, Peer, established}, #fsm{}=S) ->
    {next_state, 
       'LISTEN', 
       S#fsm{
+         prot   = Prot,
          peer   = Peer,
          buffer = <<>>
       }
@@ -105,22 +103,22 @@ ioctl(_, _) ->
 %%% LISTEN
 %%%
 %%%------------------------------------------------------------------   
-'LISTEN'({_Prot, _Peer, Chunk}, #fsm{buffer=Buf}=S) when is_binary(Chunk) ->
-   try 
-      parse_request_line(
-         S#fsm{
-            buffer = assert_io(?URL_LEN, <<Buf/binary, Chunk/binary>>)
-         }
-      )
-   catch
-      {http_error, Code} -> http_error(Code, S)
-   end;
-
 'LISTEN'({_Prot, _Peer, terminated}, S) ->
    {stop, normal, S};
 
 'LISTEN'({_Prot, _Peer, {error, Reason}}, S) ->
-   {stop, Reason, S}.
+   {stop, Reason, S};
+
+'LISTEN'({_Prot, _Peer, Chunk}, #fsm{buffer=Buf}=S) when is_binary(Chunk) ->
+   try 
+      parse_request_line(
+         S#fsm{
+            buffer = knet_http:check_io(?URL_LEN, <<Buf/binary, Chunk/binary>>)
+         }
+      )
+   catch
+      {http_error, Code} -> http_error(Code, S)
+   end.
 
 %%
 %%
@@ -136,10 +134,9 @@ parse_request_line({http_error, Msg}, S) ->
 
 parse_request_line({http_request, Mthd, Uri, _Vsn}, S) ->
    % request line received
-   lager:debug("httpd ~p ~p", [Mthd, Uri]),
    parse_header(
       S#fsm{
-         request = #req{method=assert_method(Mthd), uri=assert_uri(Uri), heads=[]}
+         request = {http, knet_http:check_uri(Uri), {knet_http:check_method(Mthd), []}}
       }
    ).
 
@@ -148,23 +145,23 @@ parse_request_line({http_request, Mthd, Uri, _Vsn}, S) ->
 %%% REQUEST
 %%%
 %%%------------------------------------------------------------------   
-'REQUEST'({_Prot, _Peer, Chunk}, #fsm{buffer=Buf}=S) when is_binary(Chunk) ->
-   try
-      parse_header(
-         S#fsm{
-            buffer = assert_io(?REQ_LEN, <<Buf/binary, Chunk/binary>>)
-         }
-      )
-   catch
-      {http_error, Code} -> http_error(Code, S)
-   end;
-
-
 'REQUEST'({_Prot, _Peer, terminated}, S) ->
    {stop, normal, S};
 
 'REQUEST'({_Prot, _Peer, {error, Reason}}, S) ->
-   {stop, Reason, S}.
+   {stop, Reason, S};
+
+'REQUEST'({_Prot, _Peer, Chunk}, #fsm{buffer=Buf}=S) when is_binary(Chunk) ->
+   try
+      parse_header(
+         S#fsm{
+            buffer = knet_http:check_io(?REQ_LEN, <<Buf/binary, Chunk/binary>>)
+         }
+      )
+   catch
+      {http_error, Code} -> http_error(Code, S)
+   end.
+
 
 %%
 %% 
@@ -179,33 +176,41 @@ parse_header({http_error, Msg}, S) ->
    http_error(400, S);
 
 parse_header({http_header, _I, 'Content-Length'=Head, _R, Val}, 
-             #fsm{request=#req{heads=Heads}=R}=S) ->
-   Len = list_to_integer(binary_to_list(Val)),
-   parse_header(S#fsm{request=R#req{heads=[{Head, Len} | Heads]}, iolen=Len, chunked=false});
+             #fsm{request={http, Uri, {Mthd, Heads}}}=S) ->
+   Len = btoi(Val),
+   parse_header(
+      S#fsm{
+         request = {http, Uri, {Mthd, [{Head, Len} | Heads]}},
+         iolen   = Len, 
+         chunked = false
+      }
+   );
 
 parse_header({http_header, _I, 'Transfer-Encoding'=Head, _R, <<"chunked">>=Val},
-             #fsm{request=#req{heads=Heads}=R}=S) ->
-   parse_header(S#fsm{request=R#req{heads=[{Head, Val} | Heads]}, chunked=true}); %% TODO: fix
+             #fsm{request={http, Uri, {Mthd, Heads}}}=S) ->
+   parse_header(
+      S#fsm{
+         request = {http, Uri, {Mthd, [{Head, Val} | Heads]}},
+         iolen   = chunk,
+         chunked = true
+      }
+   ); 
 
 parse_header({http_header, _I, Head, _R, Val},
-             #fsm{request=#req{heads=Heads}=R}=S) ->
-   parse_header(S#fsm{request=R#req{heads=[{Head, Val} | Heads]}});
+             #fsm{request={http, Uri, {Mthd, Heads}}}=S) ->
+   parse_header(
+      S#fsm{
+         request = {http, Uri, {Mthd, [{Head, Val} | Heads]}}
+      }
+   );
 
-parse_header(http_eoh, #fsm{request=R, iolen=undefined}=S) ->
-   % nothing to receive, Content-Length, Transfer-Encoding is not present
-   {emit, 
-      {http, R#req.method, R#req.uri, R#req.heads}, 
-      'IO',
-      S
-   };
+parse_header(http_eoh, #fsm{request=Req, iolen=undefined}=S) ->
+   % request do not contain a payload, Content-Length, Transfer-Encoding are not present
+   {emit, Req, 'IO', S};
 
-parse_header(http_eoh, #fsm{request=R, buffer=Buffer, iolen=Len}=S) ->
-   {emit, 
-      {http, R#req.method, R#req.uri, R#req.heads}, 
-      'IO',
-      S,
-      0   % trigger payload handling via timeout
-   }.
+parse_header(http_eoh, #fsm{request=Req, buffer=Buffer, iolen=Len}=S) ->
+   % request contains payload, trigger payload handling via timeout
+   {emit, Req, 'IO', S, 0}.
 
 %%%------------------------------------------------------------------
 %%%
@@ -216,35 +221,37 @@ parse_header(http_eoh, #fsm{request=R, buffer=Buffer, iolen=Len}=S) ->
 'IO'(timeout, S) ->
    parse_data(S);
 
+'IO'({Prot, _Peer, terminated}, #fsm{prot=P}=S)
+ when Prot =:= P ->
+   % transport terminated
+   {stop, normal, S};
 
+'IO'({Prot, _Peer, {error, Reason}}, #fsm{prot=P}=S)
+ when Prot =:= P ->
+   % transport failure
+   {stop, Reason, S};
 
-'IO'({Code, _Uri, Head0}, #fsm{lib=Lib, peer=Peer, opts=Opts}=S)
+'IO'({Prot, _Peer, Chunk}, #fsm{prot=P, buffer=Buffer}=S)
+ when Prot =:= P, is_binary(Chunk) ->
+   % NOTE: potential performance defect
+   parse_data(S#fsm{buffer = <<Buffer/binary, Chunk/binary>>});
+
+'IO'({Code, _Uri, Head}, #fsm{peer=Peer}=S)
  when is_integer(Code) ->
-   % response chunked
-   Head = check_head_srv(Lib, 
-      Head0 ++ proplists:get_value(heads, Opts, [])
-   ),
-   Rsp  = knet_http:encode_rsp(
-      Code, 
-      [{'Transfer-Encoding', <<"chunked">>} | Head]
-   ),
+   % outgoing response
+   Msg = response(Code, [{'Transfer-Encoding', <<"chunked">>} | Head], S),
    {emit,
-      {send, Peer, Rsp},
+      {send, Peer, Msg},
       'IO',
       S
    };
 
-'IO'({Code, _Uri, Head0, Payload}, #fsm{lib=Lib, peer=Peer, opts=Opts}=S) ->
-   % response with payload
-   Head = check_head_srv(Lib, 
-      Head0 ++ proplists:get_value(heads, Opts, [])
-   ),
-   Rsp  = knet_http:encode_rsp(
-      Code, 
-      [{'Content-Length', knet:size(Payload)} | Head]
-   ),
+'IO'({Code, _Uri, Head, Payload}, #fsm{peer=Peer}=S)
+ when is_integer(Code) ->
+   % outgoing response with payload
+   Msg = response(Code, [{'Content-Length', knet:size(Payload)} | Head], S),
    {emit,
-      [{send, Peer, Rsp}, {send, Peer, Payload}],
+      [{send, Peer, Msg}, {send, Peer, Payload}],
       'LISTEN',
       S#fsm{
          iolen = undefined,
@@ -253,7 +260,7 @@ parse_header(http_eoh, #fsm{request=R, buffer=Buffer, iolen=Len}=S) ->
    };
 
 'IO'({send, _Uri, Data}, #fsm{peer=Peer}=S) when is_binary(Data) ->
-   % response with chunk
+   % outgoing data chunk
    {emit,
       {send, Peer, knet_http:encode_chunk(Data)},
       'IO',
@@ -261,7 +268,7 @@ parse_header(http_eoh, #fsm{request=R, buffer=Buffer, iolen=Len}=S) ->
    };
 
 'IO'({eof, _Uri}, #fsm{peer=Peer}=S) ->
-   % response with end-of-file
+   % outgoing last chunk, response with end-of-file
    {emit,
       {send, Peer, knet_http:encode_chunk(<<>>)},
       'LISTEN',
@@ -269,32 +276,23 @@ parse_header(http_eoh, #fsm{request=R, buffer=Buffer, iolen=Len}=S) ->
          iolen = undefined,
          buffer= <<>>
       }
-   };
-
-'IO'({_Prot, _Peer, Chunk}, #fsm{buffer=Buffer}=S) when is_binary(Chunk) ->
-   % NOTE: potential performance defect
-   parse_data(S#fsm{buffer = <<Buffer/binary, Chunk/binary>>});
-
-'IO'({_Prot, _Peer, terminated}, S) ->
-   {stop, normal, S};
-
-'IO'({_Prot, _Peer, {error, Reason}}, S) ->
-   {stop, Reason, S}.
+   }.
 
 %%
 %%
 parse_data(#fsm{chunked=true}=S) ->
    parse_chunk(S);
+
 parse_data(#fsm{chunked=false}=S) ->
    parse_payload(S).
 
-parse_payload(#fsm{request=#req{method=Mthd, uri=Uri}, iolen=Len, chunk=Clen, buffer=Buffer}=S) ->
+parse_payload(#fsm{request={http, Uri, _}, iolen=Len, chunk=Clen, buffer=Buffer}=S) ->
    case size(Buffer) of
       % eof is reached, received buffers exceed expected payload
       Size when Size >= Len ->
          <<Chunk:Len/binary, Rest/binary>> = Buffer,
-         {emit, 
-            [{http, Mthd, Uri, Chunk}, {http, Mthd, Uri, eof}],
+         {emit,
+            [{http, Uri, Chunk}, {http, Uri, eof}],
             'IO',
             S#fsm{
                buffer = Rest
@@ -303,7 +301,7 @@ parse_payload(#fsm{request=#req{method=Mthd, uri=Uri}, iolen=Len, chunk=Clen, bu
       % received data needs to be flushed to client    
       Size when Size < Len, Size >= Clen ->
          {emit, 
-            {http, Mthd, Uri, Buffer},  
+            {http, Uri, Buffer},  
             'IO',
             S#fsm{
                iolen = Len - Size, 
@@ -317,7 +315,7 @@ parse_payload(#fsm{request=#req{method=Mthd, uri=Uri}, iolen=Len, chunk=Clen, bu
 
 %%
 %%
-parse_chunk(#fsm{request=#req{method=Mthd, uri=Uri}, iolen=chunk, buffer=Buffer}=S) ->
+parse_chunk(#fsm{request={http, Uri, _}, iolen=chunk, buffer=Buffer}=S) ->
    case binary:split(Buffer, <<"\r\n">>) of  
       % chunk header is not received
       [_]          -> 
@@ -327,20 +325,22 @@ parse_chunk(#fsm{request=#req{method=Mthd, uri=Uri}, iolen=chunk, buffer=Buffer}
          [L |_] = binary:split(Head, [<<" ">>, <<";">>]),
          Len    = list_to_integer(binary_to_list(L), 16),
          if 
-            Len =:= 0 -> % this is last chunk
-               {emit, {http, Mthd, Uri, eof}, 'IO', S};
+            % this is last chunk
+            Len =:= 0 -> 
+               {emit, {http, Uri, eof}, 'IO', S};
+            % this is interim chunk   
             true      ->
                parse_chunk(S#fsm{iolen=Len, buffer=Data})
          end
    end;
 
-parse_chunk(#fsm{request=#req{method=Mthd, uri=Uri}, iolen=Len, buffer=Buffer}=S) ->
+parse_chunk(#fsm{request={http, Uri, _}, iolen=Len, buffer=Buffer}=S) ->
    case size(Buffer) of
       % chunk is received
       Size when Size >= Len ->
          <<Chunk:Len/binary, $\r, $\n, Rest/binary>> = Buffer,
          {emit,
-            {http, Mthd, Uri, Chunk}, 
+            {http, Uri, Chunk}, 
             'IO',
             S#fsm{
                iolen = chunk, 
@@ -353,6 +353,16 @@ parse_chunk(#fsm{request=#req{method=Mthd, uri=Uri}, iolen=Len, buffer=Buffer}=S
          {next_state, 'IO', S}
    end.
 
+%%
+%%
+response(Code, Heads, #fsm{lib=Lib, heads=Heads0}) ->
+   HD = check_head_srv(Lib, Heads ++ Heads0),
+   knet_http:encode_rsp(Code, HD).
+
+
+
+
+
 
 %%%------------------------------------------------------------------
 %%%
@@ -360,15 +370,16 @@ parse_chunk(#fsm{request=#req{method=Mthd, uri=Uri}, iolen=Len, buffer=Buffer}=S
 %%%
 %%%------------------------------------------------------------------
 
+
 %%
-%% return daemon identity 
-httpd(Opts) ->
+%% return version of http server
+httpd_id(Opts) ->
    case lists:keyfind(server, 1, Opts) of
-      false      -> default_httpd();
+      false      -> default_httpd_id();
       {_, Httpd} -> Httpd
    end.
 
-default_httpd() ->
+default_httpd_id() ->
    % discover library name
    {ok,   Lib} = application:get_application(?MODULE),
    {_, _, Vsn} = lists:keyfind(Lib, 1, application:which_applications()),
@@ -383,39 +394,10 @@ check_head_srv(Srv, Heads) ->
       _     -> Heads
    end.
 
-
 %%
-%% assert http buffer, do not exceed length 
-assert_io(Len, Buf)
- when size(Buf) < Len -> Buf;
-assert_io(_, _)   -> throw({http_error, 414}).
-
 %%
-%% assert http method
-assert_method('HEAD')  -> 'HEAD';
-assert_method('GET')   -> 'GET';
-assert_method('POST')  -> 'POST';
-assert_method('PUT')   -> 'PUT';
-assert_method('DELETE')-> 'DELETE';
-assert_method(<<"PATCH">>) -> 'PATCH';
-assert_method('TRACE') -> 'TRACE';
-assert_method('OPTIONS') -> 'OPTIONS';
-assert_method(<<"CONNECT">>) -> 'CONNECT';
-assert_method(_)     -> throw({http_error, 501}).
-
-assert_uri({absoluteURI, Scheme, Host, Port, Path}) ->
-   uri:set(path, Path, 
-   	uri:set(authority, {Host, Port},
-   		uri:new(Scheme)
-   	)
-   );
-%uri({scheme, Scheme, Uri}=E) ->
-assert_uri({abs_path, Path}) ->  
-   uri:new(Path); %TODO: ssl support
-%uri('*') ->
-%uri(Uri) ->
-assert_uri(_) -> throw({http_error, 400}).
-
+btoi(X) ->
+   list_to_integer(binary_to_list(X)).
 
 %%
 %% handles http error

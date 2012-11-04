@@ -59,6 +59,7 @@ stop() ->
       lists:reverse(lists:delete(kernel, lists:delete(stdlib, Apps)))
    ).
 
+%% used by http
 size(Data)
  when is_binary(Data) ->
    erlang:size(Data);

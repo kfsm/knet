@@ -22,7 +22,7 @@ ioctl(_, _) ->
 
 %%
 %%
-'ECHO'({http, 'GET', Uri, _Heads}, S) -> 
+'ECHO'({http, Uri, {'GET', _Heads}}, S) -> 
    lager:info("echo ~p: GET ~p", [self(), Uri]),
    {reply,
       {200, Uri, [{'Content-Type', <<"text/plain">>}], message()},
@@ -30,7 +30,7 @@ ioctl(_, _) ->
       S
    };
 
-'ECHO'({http, 'POST', Uri, Heads}, S) when is_list(Heads) ->
+'ECHO'({http, Uri, {'POST', Heads}}, S) when is_list(Heads) ->
    lager:info("echo ~p: POST ~p", [self(), Uri]),
    Mime = proplists:get_value('Content-Type', Heads, <<"text/plain">>),
    {reply, 
@@ -39,15 +39,15 @@ ioctl(_, _) ->
       S
    };
 
-'ECHO'({http, 'POST', Uri, Chunk}, S) when is_binary(Chunk) ->
+'ECHO'({http, Uri, Chunk}, S) when is_binary(Chunk) ->
    lager:info("echo ~p: chunk ~p", [self(), Chunk]),
    {reply,
-      {send, Uri, <<"hhhh">>},   
+      {send, Uri, Chunk},   
       'ECHO',
       S
    };
 
-'ECHO'({http, 'POST', Uri, eof}, S) ->
+'ECHO'({http, Uri, eof}, S) ->
    lager:info("echo ~p: eof", [self()]),
    {reply,
       {eof, Uri},   
@@ -55,9 +55,14 @@ ioctl(_, _) ->
       S
    };
 
-'ECHO'(_, S) ->
-   {next_state, 'ECHO', S}.
+'ECHO'({http, Uri, _}, S) ->
+   {reply, 
+      {405, Uri, [{'Content-Type', <<"text/plain">>}], <<"405 Method Not Allowed\r\n">>},
+      'ECHO', 
+      S
+   }.
 
 message() ->
    Size = random:uniform(2048) + 1,
    << <<($A + random:uniform(26)):8>> || <<_:1>> <= <<0:Size>> >>.
+

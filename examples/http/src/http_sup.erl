@@ -53,8 +53,9 @@ client(Peer) ->
 
 cli(Peer) ->
    [
-      {knet_tcp, [{connect, Peer, []}]},
-      {tcp_client, []}
+      {knet_tcp,    [undefined]},
+      {knet_httpc,  [[]]},
+      {http_client, [Peer]}
    ].
 
 

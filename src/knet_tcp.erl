@@ -57,6 +57,9 @@
 
 %%
 %%
+init([{connect, _Peer, _Opts}=Msg]) ->
+   {ok, 'CONNECT', init(undefined, Msg), 0};
+
 init([Sup, {listen,  _Peer, _Opts}=Msg]) ->
    {ok, 'LISTEN', init(Sup, Msg)}; 
 
@@ -66,11 +69,10 @@ init([Sup, {accept, _Peer, _Opts}=Msg]) ->
 init([Sup, {connect, _Peer, _Opts}=Msg]) ->
    {ok, 'CONNECT', init(Sup, Msg), 0};
 
-init([{connect, _Peer, _Opts}=Msg]) ->
-   {ok, 'CONNECT', init(undefined, Msg), 0};
-
 init([Sup]) ->
    {ok, 'IDLE', #fsm{sup=Sup}}.
+
+
 
 %%
 %%

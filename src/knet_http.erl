@@ -20,7 +20,15 @@
 -author('Dmitry Kolesnikov <dmkolesnikov@gmail.com>').
 -author('Mario Cardona <marioxcardona@gmail.com>').
 
+-include("knet.hrl").
+
+% assert interface
+-export([check_method/1, check_uri/1, check_io/2]).
+% encode interface
 -export([encode_req/3, encode_rsp/2, encode_chunk/1, status/1]).
+
+
+
 
 %%
 %% encode_req(...) -> iolist()
@@ -120,3 +128,63 @@ status(502) -> <<"502 Bad Gateway">>;
 status(503) -> <<"503 Service Unavailable">>;
 status(504) -> <<"504 Gateway Timeout">>;
 status(505) -> <<"505 HTTP Version Not Supported">>.
+
+
+%%%------------------------------------------------------------------
+%%%
+%%% assert interface
+%%%
+%%%------------------------------------------------------------------
+
+%%
+%% assert http method
+check_method('HEAD')    -> 'HEAD';
+check_method('GET')     -> 'GET';
+check_method('POST')    -> 'POST';
+check_method('PUT')     -> 'PUT';
+check_method('DELETE')  -> 'DELETE';
+check_method('PATCH')   -> 'PATCH';
+check_method('TRACE')   -> 'TRACE';
+check_method('OPTIONS') -> 'OPTIONS';
+check_method('CONNECT') -> 'CONNECT';
+check_method(X) when is_binary(X) -> check_method(binary_to_atom(X, utf8));
+check_method(_)         -> throw({http_error, 501}).
+
+
+%%
+%% assert request URI
+check_uri({absoluteURI, Scheme, Host, Port, Path}) ->
+   uri:set(path, Path, 
+      uri:set(authority, {Host, Port},
+         uri:new(Scheme)
+      )
+   );
+%uri({scheme, Scheme, Uri}=E) ->
+check_uri({abs_path, Path}) ->  
+   uri:new(Path); %TODO: ssl support
+%uri('*') ->
+%uri(Uri) ->
+check_uri(Uri)
+ when is_binary(Uri) ->
+   uri:new(Uri);
+
+check_uri(Uri)
+ when is_list(Uri) ->
+   uri:new(Uri);
+
+check_uri({uri, _, _}=Uri) ->
+   Uri;
+
+check_uri(_) -> 
+   throw({http_error, 400}).
+
+%%
+%% assert http buffer, do not exceed length 
+check_io(Len, Buf)
+ when size(Buf) < Len -> 
+   Buf;
+check_io(_, _)   -> 
+   throw({http_error, 414}).
+
+
+

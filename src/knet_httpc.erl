@@ -44,22 +44,25 @@
 %%
 %% internal state
 -record(fsm, {
+   % transport
+   prot,    % transport protocol
+   peer,    % transport protocol peer
+
+   % request/response
+   request, % active request   #req
+   response,% active response  #rsp
+   iolen,   % expected length of data
+   buffer,  % I/O buffer
+
+   % options
+   ua,      % default user agent
+   heads,   % default headers
+   proxy,   % http proxy
+
+   % iostat
    thttp,   % time to wait server response
    trecv,   % time to receive payload
-
-   ua,      % default user agent
-   peer,    % transport protocol peer
-   method,  % default method
-   uri,     % default uri
-
-   request, % active request   {{Method, Head}, Uri}
-   response,% active response  {{Status, Head}, Uri}
-
-   iolen,   % expected length of data
-   pckt,    % number of processed payload chunks
-
-   opts,    % http protocol options
-   buffer   % I/O buffer
+   pckt     % number of processed payload chunks
 }).
 
 %% internal timers
@@ -74,12 +77,13 @@ init([Opts]) ->
    {ok,
       'IDLE',
       #fsm{
-         ua     = default_ua(),
-         uri    = proplists:get_value(uri, Opts),
-         method = proplists:get_value(method, Opts),
-         opts   = Opts,
-         thttp  = counter:new(time),
-         trecv  = counter:new(time)
+         ua    = default_ua(),
+         % http proxy
+         proxy = proplists:get_value(proxy, Opts),
+         % default headers, attached to each request
+         heads = proplists:get_value(heads, Opts, []),
+         thttp = counter:new(time),
+         trecv = counter:new(time)
       }
    }.
 
@@ -88,14 +92,6 @@ free(_, _) ->
 
 %%
 %%
-ioctl({method, IOCtl}, S) ->
-   % set default method
-   S#fsm{method=IOCtl};
-
-ioctl(method, #fsm{method=IOCtl}) ->
-   % get default method
-   IOCtl;
-
 ioctl(iostat, #fsm{thttp=Thttp, trecv=Trecv}) ->
    [
       {http, counter:val(Thttp)},
@@ -104,17 +100,15 @@ ioctl(iostat, #fsm{thttp=Thttp, trecv=Trecv}) ->
       {ttrx, counter:val(Trecv)}
    ];
 
-ioctl({Head, _}=IOCtl, #fsm{opts=Opts}=S) ->
+ioctl({Head, _}=IOCtl, #fsm{heads=Heads}=S) ->
    % set header
    S#fsm{
-      opts = lists:keystore(heads, 1, Opts, 
-         {heads, lists:keystore(Head, 1, proplists:get_value(heads, Opts, []), IOCtl)}
-      )
+      heads = lists:keystore(Head, 1, Heads, IOCtl)
    };
 
-ioctl(Head, #fsm{opts=Opts}) ->   
+ioctl(Head, #fsm{heads=Heads}) ->   
    % get header
-   proplists:get_value(Head, proplists:get_value(heads, Opts, []));
+   proplists:get_value(Head, Heads);
 
 ioctl(_, _) ->
    undefined.
@@ -125,84 +119,130 @@ ioctl(_, _) ->
 %%% IDLE
 %%%
 %%%------------------------------------------------------------------   
-'IDLE'(Payload, #fsm{method=Method, uri=Uri}=S)
- when is_binary(Payload) ->
-   'IDLE'({{Method, []}, Uri, Payload}, S);
 
-'IDLE'({Req, Uri}, S)
- when is_binary(Uri) orelse is_list(Uri) ->
-   'IDLE'({Req, uri:new(Uri)}, S);
-
-'IDLE'({_, Uri} = Req, #fsm{opts=Opts}=S) ->
-   Peer = peer(Uri, Opts),
-   {emit, 
-      {{connect, Opts}, Peer},
-      'REQUESTED',
-      S#fsm{
-         peer    = Peer,
-         request = Req,
-         iolen   = undefined
-      }
-   };
-
-'IDLE'({Req, Uri, Payload}, S)
- when is_binary(Uri) orelse is_list(Uri) ->
-   'IDLE'({Req, uri:new(Uri), Payload}, S);
-
-'IDLE'({_, Uri, _} = Req, #fsm{opts=Opts}=S) ->
-   Peer = peer(Uri, Opts),
-   {emit, 
-      {{connect, Opts}, Peer},
-      'REQUESTED',
-      S#fsm{
-         peer    = Peer,
-         request = Req,
-         iolen   = undefined
-      }
-   };
-
+%% 
 'IDLE'({_Prot, Peer, {error, Reason}}, S) ->
    lager:error("http couldn't connect to peer ~p, error ~p", [Peer, Reason]),
    {next_state, 'IDLE',  S};
    
-'IDLE'({_Prot, _Peer, established}, S) ->
-   {next_state, 'CONNECTED', S}.
+'IDLE'({Prot, _Peer, established}, #fsm{request=undefined}=S) ->
+   {next_state, 'CONNECTED', S#fsm{prot=Prot}};
+
+'IDLE'({Prot, _Peer, established}, #fsm{peer=Peer, request={Mthd, Uri, Heads}, buffer=Buf, thttp=Thttp}=S) ->
+   {reply,
+      {send, Peer, request(Mthd, Uri, Heads, Buf, S)},
+      'REQUESTED',
+      S#fsm{
+         thttp  = counter:add(now, Thttp),
+         iolen  = undefined,
+         buffer = <<>>
+      },
+      ?T_HTTP_WAIT
+   };
+
+%%
+'IDLE'({Mthd, Uri, Heads}, #fsm{proxy=Proxy}=S) ->
+   'IDLE'(request, 
+      S#fsm{
+         peer    = peer(Uri, Proxy), 
+         request = {knet_http:check_method(Mthd), knet_http:check_uri(Uri), Heads},
+         buffer  = <<>>
+      }
+   );
+
+'IDLE'({Mthd, Uri, Heads, Payload}, #fsm{proxy=Proxy}=S) ->
+   'IDLE'(request, 
+      S#fsm{
+         peer    = peer(Uri, Proxy),
+         request = {knet_http:check_method(Mthd), knet_http:check_uri(Uri), Heads},
+         buffer  = Payload
+      }
+   );
+
+'IDLE'(request, #fsm{peer=Peer}=S) ->
+   {emit, 
+      {connect, Peer, []},  % Note: transport protocol options defined via konduit chain
+      'IDLE',
+      S#fsm{
+         iolen   = undefined
+      }
+   }.
+
 
 %%%------------------------------------------------------------------
 %%%
 %%% CONNECTED
 %%%
 %%%------------------------------------------------------------------   
-'CONNECTED'(Payload, #fsm{method=Method, uri=Uri}=S)
- when is_binary(Payload) ->
-   'CONNECTED'({{Method, []}, Uri, Payload}, S);
-
-'CONNECTED'({Req, Uri}, S)
- when is_binary(Uri) orelse is_list(Uri) ->
-   'CONNECTED'({Req, uri:new(Uri)}, S);
-
-'CONNECTED'({{_,_}, _}=Req, S) ->
-   http_request(Req, S);
-
-'CONNECTED'({Req, Uri, Payload}, S)
- when is_binary(Uri) orelse is_list(Uri) ->
-   'CONNECTED'({Req, uri:new(Uri), Payload}, S);
-
-'CONNECTED'({{_,_}, _, _}=Req, S) ->
-   http_request(Req, S);
-
-'CONNECTED'({_Prot, _Peer, terminated}, S) ->
+'CONNECTED'({Prot, _Peer, terminated}, #fsm{prot=P}=S)
+ when Prot =:= P ->
    {next_state, 'IDLE', S};
 
-'CONNECTED'({_Prot, _Peer, {error, _Reason}}, S) ->
-   {next_state, 'IDLE', S}.
+'CONNECTED'({Prot, _Peer, {error, _Reason}}, #fsm{prot=P}=S)
+ when Prot =:= P ->
+   {next_state, 'IDLE', S};
+
+'CONNECTED'({Mthd, Uri, Heads}, S) ->
+   'CONNECTED'(request, 
+      S#fsm{
+         request = {knet_http:check_method(Mthd), knet_http:check_uri(Uri), Heads},
+         buffer  = <<>>
+      }
+   );
+
+'CONNECTED'({Mthd, Uri, Heads, Payload}, S) ->
+   'CONNECTED'(request, 
+      S#fsm{
+         request = {knet_http:check_method(Mthd), knet_http:check_uri(Uri), Heads},
+         buffer  = Payload
+      }
+   );
+
+'CONNECTED'(request, #fsm{peer=Peer, request={Mthd, Uri, Heads}, buffer=Buf, thttp=Thttp}=S) ->
+   {emit,
+      {send, Peer, request(Mthd, Uri, Heads, Buf, S)},
+      'REQUESTED',
+      S#fsm{
+         thttp  = counter:add(now, Thttp),
+         iolen  = undefined,
+         buffer = <<>>
+      },
+      ?T_HTTP_WAIT
+   }.
+
+
+
+request(Mthd, Uri, Heads, <<>>, #fsm{ua=UA, heads=Heads0}) ->
+   HD = check_head_host(
+      Uri, 
+      check_head_ua(UA, Heads ++ Heads0)
+   ),
+   knet_http:encode_req(
+      Mthd, 
+      uri:to_binary(Uri), 
+      Heads
+   );
+
+request(Mthd, Uri, Heads, Buf,  #fsm{ua=UA, heads=Heads0}) ->
+   HD = check_head_host(
+      Uri, 
+      check_head_ua(UA, Heads ++ Heads0)
+   ),
+   knet_http:encode_req(
+      Mthd,
+      uri:to_binary(Uri),
+      [{'Content-Length', knet:size(Buf)} | Heads]
+   ).
+
+
 
 %%%------------------------------------------------------------------
 %%%
 %%% REQUEST: request is sent, waiting to server response
 %%%
 %%%------------------------------------------------------------------ 
-'REQUESTED'({_Prot, _Peer, {recv, Chunk}}, #fsm{buffer=Buf}=S) ->
+'REQUESTED'({_Prot, _Peer, Chunk}, #fsm{buffer=Buf}=S)
+ when is_binary(Chunk) ->
    parse_status_line(
       S#fsm{
          buffer = <<Buf/binary, Chunk/binary>>
@@ -215,10 +255,27 @@ ioctl(_, _) ->
       {http, Uri, {error, Reason}},
       'IDLE',
       S
-   };
+   }.
    
-'REQUESTED'({_Prot, Peer, established}, #fsm{request=Req}=S) ->
-   http_request(Req, S).
+%%
+%%
+parse_status_line(#fsm{buffer=Buffer}=S) ->   
+   case erlang:decode_packet(http_bin, Buffer, []) of
+      {more, _}       -> {next_state, 'REQUESTED', S, ?T_HTTP_WAIT};
+      {error, Reason} -> {stop, Reason, S};
+      {ok, Req,Chunk} -> parse_status_line(Req, S#fsm{buffer=Chunk})
+   end.
+
+parse_status_line({http_response, _Vsn, Code, Msg}, 
+                  #fsm{request={_, Uri, _}}=S) ->
+   parse_header(
+      S#fsm{
+         response={http, Uri, {Code, []}}
+      }
+   );
+
+parse_status_line({http_error, Msg}, S) ->
+   {stop, Msg, S}.
 
 %%%------------------------------------------------------------------
 %%%
@@ -237,23 +294,87 @@ ioctl(_, _) ->
 
 'RESPONSE'({_Prot, _Peer, {error, _Reason}}, S) ->
    {next_state, 'IDLE', S}.
+
+%%
+%%
+parse_header(#fsm{buffer=Buffer}=S) -> 
+   case erlang:decode_packet(httph_bin, Buffer, []) of
+      {more, _}       -> {next_state, 'RESPONSE', S};
+      {error, Reason} -> {stop, Reason, S};
+      {ok, Req,Chunk} -> parse_header(Req, S#fsm{buffer=Chunk})
+   end.
+
+parse_header({http_error, Msg}, S) ->
+   {stop, Msg, S};
+
+parse_header({http_header, _I, 'Content-Length'=Head, _R, Val}, 
+             #fsm{response={http, Uri, {Code, Heads}}}=S) ->
+   Len = btoi(Val),
+   parse_header(
+      S#fsm{
+         response = {http, Uri, {Code,[{Head, Len} | Heads]}}, 
+         iolen    = Len
+      }
+   );
+
+parse_header({http_header, _I, Head, _R, Val},
+           #fsm{response={http, Uri, {Code, Heads}}}=S) ->
+   parse_header(
+      S#fsm{
+         response = {http, Uri, {Code,[{Head, Val} | Heads]}}
+      }
+   );
+
+parse_header(http_eoh, #fsm{iolen=undefined, thttp=Thttp, trecv=Trecv}=S) ->
+   % expected length of response is not known, stream it
+   parse_chunk(
+      S#fsm{
+         pckt=0, 
+         thttp=counter:add(idle, Thttp), 
+         trecv=counter:add(now,  Trecv)
+      }
+   );
+
+parse_header(http_eoh, #fsm{iolen=0, request={_, Uri, _}, response=Rsp, thttp=Thttp, trecv=Trecv}=S) ->
+   % nothing to receive
+   {emit, 
+      [Rsp, {http, Uri, eof}],
+      'CONNECTED', 
+      S#fsm{
+         thttp=counter:add(idle, Thttp),
+         trecv=counter:add(now,  Trecv),
+         buffer= <<>>
+      }
+   };
+
+parse_header(http_eoh, #fsm{thttp=Thttp, trecv=Trecv}=S) ->
+   % expected length of response is know, receive it
+   parse_payload(
+      S#fsm{
+         pckt=0, 
+         thttp=counter:add(idle, Thttp),
+         trecv=counter:add(now,  Trecv)
+      }
+   ).
+
 %%%------------------------------------------------------------------
 %%%
 %%% RECV: receive response payload
 %%%
 %%%------------------------------------------------------------------ 
-'RECV'({_Prot, _Peer, {recv, Data}}, #fsm{buffer=Buf}=S) ->
-   parse_payload(
-      S#fsm{
-         buffer = <<Buf/binary, Data/binary>>
-      }
-   );
-
 'RECV'({_Prot, _Peer, terminated}, S) ->
    {next_state, 'IDLE', S};
 
 'RECV'({_Prot, _Peer, {error, _Reason}}, S) ->
-   {next_state, 'IDLE', S}.
+   {next_state, 'IDLE', S};
+
+'RECV'({_Prot, _Peer, Data}, #fsm{buffer=Buf}=S) ->
+   parse_payload(
+      S#fsm{
+         buffer = <<Buf/binary, Data/binary>>
+      }
+   ).
+
 %%%------------------------------------------------------------------
 %%%
 %%% STREAM
@@ -281,89 +402,18 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------   
 
-%%
-%%
-parse_status_line(#fsm{buffer=Buffer}=S) ->   
-   case erlang:decode_packet(http_bin, Buffer, []) of
-      {more, _}       -> {next_state, 'REQUESTED', S, ?T_HTTP_WAIT};
-      {error, Reason} -> {stop, Reason, S};
-      {ok, Req,Chunk} -> parse_status_line(Req, S#fsm{buffer=Chunk})
-   end.
-
-parse_status_line({http_response, _Vsn, Code, Msg}, 
-                  #fsm{request={{Method, _}, Uri}}=S) ->
-   lager:debug("httpc ~p ~p ~p ~p", [Method, Uri, Code, Msg]), 
-   parse_header(S#fsm{response={Code, []}});
-   % TODOD: fix response signature
-   %parse_header(S#fsm{response={Code, []}, Uri});
-
-parse_status_line({http_error, Msg}, S) ->
-   {stop, Msg, S}.
 
 %%
 %%
-parse_header(#fsm{buffer=Buffer}=S) -> 
-   case erlang:decode_packet(httph_bin, Buffer, []) of
-      {more, _}       -> {next_state, 'RESPONSE', S};
-      {error, Reason} -> {stop, Reason, S};
-      {ok, Req,Chunk} -> parse_header(Req, S#fsm{buffer=Chunk})
-   end.
-
-parse_header({http_error, Msg}, S) ->
-   {stop, Msg, S};
-
-parse_header({http_header, _I, 'Content-Length'=Head, _R, Val}, 
-             #fsm{response={Code, Heads}}=S) ->
-   Len = list_to_integer(binary_to_list(Val)),
-   parse_header(S#fsm{response={Code, [{Head, Len} | Heads]}, iolen=Len});
-
-parse_header({http_header, _I, Head, _R, Val},
-           #fsm{response={Code, Heads}}=S) ->
-   parse_header(S#fsm{response={Code, [{Head, Val} | Heads]}});
-
-parse_header(http_eoh, #fsm{iolen=undefined, thttp=Thttp, trecv=Trecv}=S) ->
-   % expected length of response is not known, stream it
-   parse_chunk(
-      S#fsm{
-         pckt=0, 
-         thttp=counter:add(idle, Thttp), 
-         trecv=counter:add(now,  Trecv)
-      }
-   );
-
-parse_header(http_eoh, #fsm{iolen=0, request={_, Uri}, response=Rsp, thttp=Thttp, trecv=Trecv}=S) ->
-   % nothing to receive
-   {emit, 
-      [{http, Uri, Rsp}, {http, Uri, eof}],
-      'CONNECTED', 
-      S#fsm{
-         thttp=counter:add(idle, Thttp),
-         trecv=counter:add(now,  Trecv),
-         buffer= <<>>
-      }
-   };
-
-parse_header(http_eoh, #fsm{thttp=Thttp, trecv=Trecv}=S) ->
-   % exprected length of response is know, receive it
-   parse_payload(
-      S#fsm{
-         pckt=0, 
-         thttp=counter:add(idle, Thttp),
-         trecv=counter:add(now,  Trecv)
-      }
-   ).
-
-%%
-%%
-parse_payload(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=Len, buffer=Buffer, trecv=Trecv}=S) ->
+parse_payload(#fsm{request={_, Uri, _}, response=Rsp, pckt=Pckt, iolen=Len, buffer=Buffer, trecv=Trecv}=S) ->
    case size(Buffer) of
       % buffer equals or exceed expected payload size
       % end of data stream is reached.
       Size when Size >= Len ->
          <<Chunk:Len/binary, _/binary>> = Buffer,
          Msg = if
-            Pckt =:= 0 -> [{http, Uri, Rsp}, {http, Uri, {recv, Chunk}}, {http, Uri, eof}];
-            true       -> [{http, Uri, {recv, Chunk}}, {http, Uri, eof}]
+            Pckt =:= 0 -> [Rsp, {http, Uri, Chunk}, {http, Uri, eof}];
+            true       -> [{http, Uri, Chunk}, {http, Uri, eof}]
          end,
          {emit, Msg, 'CONNECTED', 
             S#fsm{
@@ -374,8 +424,8 @@ parse_payload(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=Len, buffer=
          };
       Size when Size < Len ->
          Msg = if
-            Pckt =:= 0 -> [{http, Uri, Rsp}, {http, Uri, {recv, Buffer}}];
-            true       -> {http, Uri, {recv, Buffer}}
+            Pckt =:= 0 -> [Rsp, {http, Uri, Buffer}];
+            true       -> {http, Uri, Buffer}
          end,
          {emit, Msg, 'RECV',
             S#fsm{
@@ -388,7 +438,7 @@ parse_payload(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=Len, buffer=
 
 %%
 %%
-parse_chunk(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=undefined, buffer=Buffer, trecv=Trecv}=S) ->
+parse_chunk(#fsm{request={_, Uri, _}, response=Rsp, pckt=Pckt, iolen=undefined, buffer=Buffer, trecv=Trecv}=S) ->
    case binary:split(Buffer, <<"\r\n">>) of  
       [_]          -> 
          {next_state, 'STREAM', S};
@@ -399,7 +449,7 @@ parse_chunk(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=undefined, buf
             % chunk with length 0 is last chunk is stream
             Len =:= 0 ->
                Msg = if
-                  Pckt =:= 0 -> [{http, Uri, Rsp}, {http, Uri, eof}];
+                  Pckt =:= 0 -> [Rsp, {http, Uri, eof}];
                   true       -> {http, Uri, eof}
                end,
                {emit, Msg, 'CONNECTED', S#fsm{trecv=counter:add(idle, Trecv)}};
@@ -408,13 +458,13 @@ parse_chunk(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=undefined, buf
          end
    end;
 
-parse_chunk(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=Len, buffer=Buffer}=S) ->
+parse_chunk(#fsm{request={_, Uri, _}, response=Rsp, pckt=Pckt, iolen=Len, buffer=Buffer}=S) ->
    case size(Buffer) of
       Size when Size >= Len ->
          <<Chunk:Len/binary, $\r, $\n, Rest/binary>> = Buffer,
          Msg = if
-            Pckt =:= 0 -> [{http, Uri, Rsp}, {http, Uri, {recv, Chunk}}];
-            true       -> {http, Uri, {recv, Chunk}}
+            Pckt =:= 0 -> [Rsp, {http, Uri, Chunk}];
+            true       -> {http, Uri, Chunk}
          end,
          {emit, Msg, 'STREAM',
             S#fsm{
@@ -426,8 +476,8 @@ parse_chunk(#fsm{request={_, Uri}, response=Rsp, pckt=Pckt, iolen=Len, buffer=Bu
          };
       Size when Size < Len ->
          Msg = if
-            Pckt =:= 0 -> [{http, Uri, Rsp}, {http, Uri, {recv, Buffer}}];
-            true       -> {http, Uri, {recv, Buffer}}
+            Pckt =:= 0 -> [Rsp, {http, Uri, Buffer}];
+            true       -> {http, Uri, Buffer}
          end,
          {emit, Msg, 'STREAM', 
             S#fsm{
@@ -472,12 +522,12 @@ check_head_host(Uri, Req) ->
 
 %%
 %% resolve a transport peer to establish tcp/ip: proxy or host
-peer(Uri, Opts) ->
-   case lists:keyfind(proxy, 1, Opts) of
-      false          -> uri:get(authority, Uri);
-      {proxy, Proxy} -> Proxy
-   end. 
+peer(Uri, undefined) ->
+   uri:get(authority, Uri);
 
+peer(_Uri, Proxy) ->
+   Proxy.
+ 
 %%
 %%
 resource(Uri, Opts) ->
@@ -486,43 +536,11 @@ resource(Uri, Opts) ->
       {proxy, _Proxy} -> Uri
    end.
 
-
 %%
-%% send http request
-http_request({{Method, Head0}, Uri}, #fsm{peer=Peer, ua=UA, opts=Opts, thttp=Cnt}=S) ->
-   % http request w/o payload
-   Head = check_head_host(Uri,
-      check_head_ua(UA, Head0 ++ proplists:get_value(heads, Opts, []))
-   ),
-   Req = knet_http:encode_req(Method, uri:to_binary(Uri), Head),
-   {reply,
-      {send, Peer, Req},
-      'REQUESTED',
-      S#fsm{
-         thttp  = counter:add(now, Cnt),
-         iolen  = undefined,
-         buffer = <<>>
-      },
-      ?T_HTTP_WAIT
-   };
+%%
+btoi(X) ->
+   list_to_integer(binary_to_list(X)).
 
-http_request({{Method, Head0}, Uri, Payload}, #fsm{peer=Peer, ua=UA, opts=Opts, thttp=Cnt}=S) ->
-   % http request with payload
-   Head = check_head_host(Uri,
-      check_head_ua(UA, Head0 ++ proplists:get_value(heads, Opts, []))
-   ),
-   Req = knet_http:encode_req(
-      Method, 
-      uri:to_binary(Uri), 
-      [{'Content-Length', knet:size(Payload)} | Head]
-   ),
-   {emit,
-      [{send, Peer, Req}, {send, Peer, Payload}],
-      'REQUESTED',
-      S#fsm{
-         thttp  = counter:add(now, Cnt),
-         iolen  = undefined,
-         buffer = <<>>
-      },
-      ?T_HTTP_WAIT
-   }.
+
+
+
