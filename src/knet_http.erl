@@ -153,27 +153,33 @@ check_method(_)         -> throw({http_error, 501}).
 
 %%
 %% assert request URI
+check_uri({uri, _, _}=Uri) ->
+   Uri;
+
 check_uri({absoluteURI, Scheme, Host, Port, Path}) ->
    uri:set(path, Path, 
       uri:set(authority, {Host, Port},
          uri:new(Scheme)
       )
    );
-%uri({scheme, Scheme, Uri}=E) ->
+
 check_uri({abs_path, Path}) ->  
    uri:new(Path); %TODO: ssl support
-%uri('*') ->
-%uri(Uri) ->
+
+check_uri('*') ->
+   throw({http_error, 501});
+
 check_uri(Uri)
- when is_binary(Uri) ->
+ when is_binary(Uri), size(Uri) =< ?HTTP_URL_LEN ->
    uri:new(Uri);
+
+check_uri(Uri)
+ when is_binary(Uri), size(Uri) > ?HTTP_URL_LEN ->
+   throw({http_error, 414});
 
 check_uri(Uri)
  when is_list(Uri) ->
    uri:new(Uri);
-
-check_uri({uri, _, _}=Uri) ->
-   Uri;
 
 check_uri(_) -> 
    throw({http_error, 400}).

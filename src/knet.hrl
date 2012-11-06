@@ -36,7 +36,9 @@
 -define(T_SSL_CONNECT,     20000).  %% ssl connection timeout
 -define(T_HTTP_WAIT,       20000).  %% http server response time
 
-
+%% default buffers
+-define(HTTP_URL_LEN,      2048). % max allowed size of request line
+-define(HTTP_HEADER_LEN,   2048). % max allowed size of single header
 
 
 

@@ -57,7 +57,7 @@ ioctl(_, _) ->
 
 'ECHO'({http, Uri, _}, S) ->
    {reply, 
-      {405, Uri, [{'Content-Type', <<"text/plain">>}], <<"405 Method Not Allowed\r\n">>},
+      {error, Uri, 405},
       'ECHO', 
       S
    }.

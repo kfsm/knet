@@ -14,8 +14,12 @@
 %%   See the License for the specific language governing permissions and
 %%   limitations under the License.
 %%
-%%  @description
+%%   @description
 %%      http server-side konduit   
+%%        - 400 if incorrect request line
+%%        - 414 if URI is too long
+%%        - 501 if Method is not supported 
+%%     
 -module(knet_httpd).
 -author('Dmitry Kolesnikov <dmkolesnikov@gmail.com>').
 -author('Mario Cardona <marioxcardona@gmail.com>').
@@ -25,10 +29,11 @@
 
 -export([init/1, free/2, ioctl/2]).
 -export([
-   'IDLE'/2,    %% idle
-   'LISTEN'/2,  %% listen for incoming requests
-   'REQUEST'/2, %% receiving request
-   'IO'/2       %% IO data
+   'IDLE'/2,     %% idle
+   'LISTEN'/2,   %% listen for incoming requests
+   'REQUEST'/2,  %% receiving request
+   'RESPONSE'/2, %% waiting a client response
+   'IO'/2   %% receiving payload
 ]).
 
 %% internal state
@@ -51,8 +56,6 @@
 
 
 %
--define(URL_LEN,    2048). % max allowed size of request line
--define(REQ_LEN,    2048). % max allowed size of single header
 -define(BUF_LEN,   19264). % length of http i/o buffer
 
 %%%------------------------------------------------------------------
@@ -87,7 +90,6 @@ ioctl(_, _) ->
 %%% IDLE
 %%%
 %%%------------------------------------------------------------------   
-
 'IDLE'({Prot, Peer, established}, #fsm{}=S) ->
    {next_state, 
       'LISTEN', 
@@ -103,22 +105,28 @@ ioctl(_, _) ->
 %%% LISTEN
 %%%
 %%%------------------------------------------------------------------   
-'LISTEN'({_Prot, _Peer, terminated}, S) ->
+'LISTEN'({Prot, _Peer, terminated}, #fsm{prot=P}=S)
+ when Prot =:= P ->
    {stop, normal, S};
 
-'LISTEN'({_Prot, _Peer, {error, Reason}}, S) ->
+'LISTEN'({Prot, _Peer, {error, Reason}}, #fsm{prot=P}=S)
+ when Prot =:= P ->
    {stop, Reason, S};
 
-'LISTEN'({_Prot, _Peer, Chunk}, #fsm{buffer=Buf}=S) when is_binary(Chunk) ->
+'LISTEN'({_Prot, _Peer, Chunk}, #fsm{buffer=Buf}=S)
+ when is_binary(Chunk) ->
    try 
       parse_request_line(
          S#fsm{
-            buffer = knet_http:check_io(?URL_LEN, <<Buf/binary, Chunk/binary>>)
+            buffer = knet_http:check_io(?HTTP_URL_LEN, <<Buf/binary, Chunk/binary>>)
          }
       )
    catch
       {http_error, Code} -> http_error(Code, S)
-   end.
+   end;
+
+'LISTEN'(_, S) ->
+   {next_state, 'LISTEN', S}.
 
 %%
 %%
@@ -132,7 +140,7 @@ parse_request_line(#fsm{buffer=Buffer}=S) ->
 parse_request_line({http_error, Msg}, S) ->
    http_error(400, S);
 
-parse_request_line({http_request, Mthd, Uri, _Vsn}, S) ->
+parse_request_line({http_request, Mthd, Uri, _Vsn}, #fsm{prot=Prot}=S) ->
    % request line received
    parse_header(
       S#fsm{
@@ -151,17 +159,22 @@ parse_request_line({http_request, Mthd, Uri, _Vsn}, S) ->
 'REQUEST'({_Prot, _Peer, {error, Reason}}, S) ->
    {stop, Reason, S};
 
-'REQUEST'({_Prot, _Peer, Chunk}, #fsm{buffer=Buf}=S) when is_binary(Chunk) ->
+'REQUEST'({_Prot, _Peer, Chunk}, #fsm{peer=Peer, buffer=Buf}=S)
+ when is_binary(Chunk) ->
    try
       parse_header(
          S#fsm{
-            buffer = knet_http:check_io(?REQ_LEN, <<Buf/binary, Chunk/binary>>)
+            buffer = knet_http:check_io(?HTTP_HEADER_LEN, <<Buf/binary, Chunk/binary>>)
          }
       )
    catch
-      {http_error, Code} -> http_error(Code, S)
+      {http_error, Code} -> 
+         {reply,  
+            {send, Peer, http_error(Code, S)},
+            'LISTEN',
+            S#fsm{buffer= <<>>}
+         }
    end.
-
 
 %%
 %% 
@@ -173,7 +186,7 @@ parse_header(#fsm{buffer=Buffer}=S) ->
    end.
 
 parse_header({http_error, Msg}, S) ->
-   http_error(400, S);
+   throw({http_error, 400});
 
 parse_header({http_header, _I, 'Content-Length'=Head, _R, Val}, 
              #fsm{request={http, Uri, {Mthd, Heads}}}=S) ->
@@ -196,6 +209,9 @@ parse_header({http_header, _I, 'Transfer-Encoding'=Head, _R, <<"chunked">>=Val},
       }
    ); 
 
+parse_header({http_header, _I, 'Transfer-Encoding'=Head, _R, _Val}, S) ->
+   throw({http_error, 501}); 
+
 parse_header({http_header, _I, Head, _R, Val},
              #fsm{request={http, Uri, {Mthd, Heads}}}=S) ->
    parse_header(
@@ -204,13 +220,95 @@ parse_header({http_header, _I, Head, _R, Val},
       }
    );
 
-parse_header(http_eoh, #fsm{request=Req, iolen=undefined}=S) ->
-   % request do not contain a payload, Content-Length, Transfer-Encoding are not present
-   {emit, Req, 'IO', S};
+parse_header(http_eoh, #fsm{request={http, _, {'HEAD', _}}=Req}=S) ->
+   {emit, Req, 'RESPONSE', S};
 
-parse_header(http_eoh, #fsm{request=Req, buffer=Buffer, iolen=Len}=S) ->
+parse_header(http_eoh, #fsm{request={http, _, {'GET', _}}=Req}=S) ->
+   {emit, Req, 'RESPONSE', S};
+
+parse_header(http_eoh, #fsm{request={http, _, {'POST', _}}=Req}=S) ->
+   {emit, Req, 'IO', S, 0};
+
+parse_header(http_eoh, #fsm{request={http, _, {'PUT', _}}=Req}=S) ->
+   {emit, Req, 'IO', S, 0};
+
+parse_header(http_eoh, #fsm{request={http, _, {'DELETE', _}}=Req}=S) ->
+   {emit, Req, 'RESPONSE'};
+
+parse_header(http_eoh, #fsm{request={http, _, {'PATCH', _}}=Req}=S) ->
+   {emit, Req, 'IO', S, 0};
+
+parse_header(http_eoh, #fsm{request={http, _, {'OPTIONS', _}}=Req, iolen=undefined}=S) ->
+   {emit, Req, 'RESPONSE'};
+
+parse_header(http_eoh, #fsm{request={http, _, {'OPTIONS', _}}=Req, iolen=Len}=S) ->
    % request contains payload, trigger payload handling via timeout
    {emit, Req, 'IO', S, 0}.
+
+%%%------------------------------------------------------------------
+%%%
+%%% PAYLOAD
+%%%
+%%%------------------------------------------------------------------   
+'RESPONSE'({Prot, _Peer, terminated}, #fsm{prot=P}=S)
+ when Prot =:= P ->
+   % transport terminated
+   {stop, normal, S};
+
+'RESPONSE'({Prot, _Peer, {error, Reason}}, #fsm{prot=P}=S)
+ when Prot =:= P ->
+   % transport failure
+   {stop, Reason, S};
+
+'RESPONSE'({error, _Uri, Code}, #fsm{peer=Peer}=S) ->
+   {emit,  
+      {send, Peer, http_error(Code, S)},
+      'LISTEN',
+      S#fsm{buffer= <<>>}
+   };
+
+'RESPONSE'({Code, _Uri, Head}, #fsm{peer=Peer}=S)
+ when is_integer(Code) ->
+   Msg = response(Code, [{'Transfer-Encoding', <<"chunked">>} | Head], S),
+   {emit,
+      {send, Peer, Msg},
+      'RESPONSE',
+      S
+   };
+
+'RESPONSE'({Code, _Uri, Head, Payload}, #fsm{peer=Peer}=S)
+ when is_integer(Code) ->
+   % outgoing response with payload
+   Msg = response(Code, [{'Content-Length', knet:size(Payload)} | Head], S),
+   {emit,
+      {send, Peer, [Msg, Payload]},
+      'LISTEN',
+      S#fsm{
+         iolen = undefined,
+         buffer= <<>>
+      }
+   };
+
+'RESPONSE'({send, _Uri, Chunk}, #fsm{peer=Peer}=S)
+ when is_binary(Chunk) ->
+   % outgoing data chunk
+   {emit,
+      {send, Peer, knet_http:encode_chunk(Chunk)},
+      'RESPONSE',
+      S
+   };
+
+'RESPONSE'({eof, _Uri}, #fsm{peer=Peer}=S) ->
+   % outgoing last chunk, response with end-of-file
+   {emit,
+      {send, Peer, knet_http:encode_chunk(<<>>)},
+      'LISTEN',
+      S#fsm{
+         iolen = undefined,
+         buffer= <<>>
+      }
+   }.
+
 
 %%%------------------------------------------------------------------
 %%%
@@ -235,6 +333,13 @@ parse_header(http_eoh, #fsm{request=Req, buffer=Buffer, iolen=Len}=S) ->
  when Prot =:= P, is_binary(Chunk) ->
    % NOTE: potential performance defect
    parse_data(S#fsm{buffer = <<Buffer/binary, Chunk/binary>>});
+
+'IO'({error, _Uri, Code}, #fsm{peer=Peer}=S) ->
+   {emit,  
+      {send, Peer, http_error(Code, S)},
+      'LISTEN',
+      S#fsm{buffer= <<>>}
+   };
 
 'IO'({Code, _Uri, Head}, #fsm{peer=Peer}=S)
  when is_integer(Code) ->
@@ -408,10 +513,6 @@ http_error(Code, #fsm{lib=Lib, peer=Peer}=S) ->
       Code,
       [{'Server', Lib}, {'Content-Length', size(Msg) + 2}, {'Content-Type', 'text/plain'}]
    ),
-   {reply,  
-      {send, Peer, [Pckt, Msg, <<$\r, $\n>>]},
-      'LISTEN',
-      S#fsm{buffer= <<>>}
-   }.
+   [Pckt, Msg, <<$\r, $\n>>].
 
 

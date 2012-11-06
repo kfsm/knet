@@ -41,7 +41,6 @@ get_test() ->
    {_, _} = lists:keyfind("content-length", 1, Head).
 
 
-
 % -define(DATA,   <<"0123456789abcdef">>).
 % -define(CHUNK1, <<"0123">>).
 % -define(CHUNK2,     <<"4567">>).
