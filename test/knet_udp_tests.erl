@@ -18,7 +18,7 @@
 %%     
 %%
 -module(knet_udp_tests).
--include_lib("eunit/include/eunit.hrl").
+%%-include_lib("eunit/include/eunit.hrl").
 
 -define(DATA, <<"0123456789abcdef">>).
 

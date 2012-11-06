@@ -1,0 +1,24 @@
+{application, rest,
+   [
+      {description, "knet rest api example application"},
+      {vsn,         "0.1.0"},
+      {modules,     [
+         rest,
+         rest_sup,
+         rest_app
+      ]},
+      {registered,  []},
+      {applications,[
+         kernel,
+         stdlib,
+         compiler,
+         syntax_tools,
+         lager,
+         pts,
+         konduit,
+         knet
+      ]},
+      {mod, {rest_app, []}},
+      {env, []}
+   ]
+}.  

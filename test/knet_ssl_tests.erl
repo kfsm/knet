@@ -18,7 +18,7 @@
 %%     
 %%
 -module(knet_ssl_tests).
--include_lib("eunit/include/eunit.hrl").
+%%-include_lib("eunit/include/eunit.hrl").
 
 -define(PORT, 8443). %%
 -define(DATA, <<"0123456789abcdef">>).
