@@ -29,17 +29,26 @@ ioctl(_, _) ->
 %%% LISTEN
 %%%
 %%%------------------------------------------------------------------   
+'LISTEN'({Code, _Uri, _Head, _Payload}=Rsp, #fsm{}=S)
+ when is_integer(Code) ->
+   {emit, Rsp, 'LISTEN', S};
+
 'LISTEN'({http, _Uri, {_Mthd, _Heads}}=Req, #fsm{resource=R}=S) -> 
    request(R, Req, S).
 
 request([{Name, TUri, Mthds} | T], {http, Uri, {Mthd, Heads}}=Req, S) ->
    case uri:match(Uri, TUri) of
    	true  ->
-   	   {emit,
-   	      {rest, Name, {Mthd, Uri, Heads}},
-   	      'LISTEN',
-   	      S
-   	   };
+         case lists:member(Mthd, Mthds) of
+            false -> 
+               {reply, {error, Uri, not_allowed}, 'LISTEN', S};
+            true  -> 
+               {emit,
+   	           {rest, Name, {Mthd, Uri, Heads}},
+   	           'LISTEN',
+   	           S
+               }
+         end;
    	false ->
    	   request(T, Req, S)
    end;

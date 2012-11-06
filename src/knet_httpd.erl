@@ -238,10 +238,11 @@ parse_header(http_eoh, #fsm{request={http, _, {'DELETE', _}}=Req}=S) ->
 parse_header(http_eoh, #fsm{request={http, _, {'PATCH', _}}=Req}=S) ->
    {emit, Req, 'IO', S, 0};
 
-parse_header(http_eoh, #fsm{request={http, _, {'OPTIONS', _}}=Req, iolen=undefined}=S) ->
+parse_header(http_eoh, #fsm{request=Req, iolen=undefined}=S) ->
    {emit, Req, 'RESPONSE'};
 
-parse_header(http_eoh, #fsm{request={http, _, {'OPTIONS', _}}=Req, iolen=Len}=S) ->
+parse_header(http_eoh, #fsm{request=Req, iolen=Len}=S) ->
+   % entity present Content-Length and Transfer_Encoding exists
    % request contains payload, trigger payload handling via timeout
    {emit, Req, 'IO', S, 0}.
 
@@ -260,9 +261,9 @@ parse_header(http_eoh, #fsm{request={http, _, {'OPTIONS', _}}=Req, iolen=Len}=S)
    % transport failure
    {stop, Reason, S};
 
-'RESPONSE'({error, _Uri, Code}, #fsm{peer=Peer}=S) ->
+'RESPONSE'({error, _Uri, Reason}, #fsm{peer=Peer}=S) ->
    {emit,  
-      {send, Peer, http_error(Code, S)},
+      {send, Peer, http_error(Reason, S)},
       'LISTEN',
       S#fsm{buffer= <<>>}
    };

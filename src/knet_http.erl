@@ -25,7 +25,8 @@
 % assert interface
 -export([check_method/1, check_uri/1, check_io/2]).
 % encode interface
--export([encode_req/3, encode_rsp/2, encode_chunk/1, status/1]).
+-export([encode_req/3, encode_rsp/2, encode_chunk/1]).
+-export([status/1]).
 
 
 
@@ -127,7 +128,49 @@ status(501) -> <<"501 Not Implemented">>;
 status(502) -> <<"502 Bad Gateway">>;
 status(503) -> <<"503 Service Unavailable">>;
 status(504) -> <<"504 Gateway Timeout">>;
-status(505) -> <<"505 HTTP Version Not Supported">>.
+status(505) -> <<"505 HTTP Version Not Supported">>;
+
+%status(100) -> <<"100 Continue">>;
+%status(101) -> <<"101 Switching Protocols">>;
+status(ok) -> <<"200 OK">>;
+status(created) -> <<"201 Created">>;
+status(accepted) -> <<"202 Accepted">>;
+%status(203) -> <<"203 Non-Authoritative Information">>;
+status(no_content) -> <<"204 No Content">>;
+%status(205) -> <<"205 Reset Content">>;
+%status(206) -> <<"206 Partial Content">>;
+%status(300) -> <<"300 Multiple Choices">>;
+%status(301) -> <<"301 Moved Permanently">>;
+%status(found) -> <<"302 Found">>;
+%status(303) -> <<"303 See Other">>;
+%status(304) -> <<"304 Not Modified">>;
+%status(307) -> <<"307 Temporary Redirect">>;
+status(badarg) -> <<"400 Bad Request">>;
+status(unauthorized) -> <<"401 Unauthorized">>;
+%status(402) -> <<"402 Payment Required">>;
+status(forbidden) -> <<"403 Forbidden">>;
+status(not_found) -> <<"404 Not Found">>;
+status(not_allowed) -> <<"405 Method Not Allowed">>;
+status(not_acceptable) -> <<"406 Not Acceptable">>;
+%status(407) -> <<"407 Proxy Authentication Required">>;
+%status(408) -> <<"408 Request Timeout">>;
+status(conflict) -> <<"409 Conflict">>.
+%status(410) -> <<"410 Gone">>;
+%status(411) -> <<"411 Length Required">>;
+%status(412) -> <<"412 Precondition Failed">>;
+%status(413) -> <<"413 Request Entity Too Large">>;
+%status(414) -> <<"414 Request-URI Too Long">>;
+%status(415) -> <<"415 Unsupported Media Type">>;
+%status(416) -> <<"416 Requested Range Not Satisfiable">>;
+%status(417) -> <<"417 Expectation Failed">>;
+%status(422) -> <<"422 Unprocessable Entity">>;
+%status(500) -> <<"500 Internal Server Error">>;
+%status(501) -> <<"501 Not Implemented">>;
+%status(502) -> <<"502 Bad Gateway">>;
+%status(503) -> <<"503 Service Unavailable">>;
+%status(504) -> <<"504 Gateway Timeout">>;
+%status(505) -> <<"505 HTTP Version Not Supported">>.
+
 
 
 %%%------------------------------------------------------------------

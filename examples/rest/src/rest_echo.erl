@@ -22,14 +22,13 @@ ioctl(_, _) ->
 
 %%
 %%
-'ECHO'({rest, Resource, {'GET', _Uri, _Heads}}, S) -> 
+'ECHO'({rest, Resource, {'GET', Uri, _Heads}}, S) -> 
    lager:info("echo ~p: GET ~p", [self(), Resource]),
-   {next_state, 'ECHO', S}.
-   %{reply,
-   %   {200, Uri, [{'Content-Type', <<"text/plain">>}], message()},
-   %   'ECHO',
-   %   S
-   %};
+   {reply,
+     {200, Uri, [{'Content-Type', <<"text/plain">>}], message()},
+     'ECHO',
+     S
+   }.
 
 % 'ECHO'({http, Uri, {'POST', Heads}}, S) when is_list(Heads) ->
 %    lager:info("echo ~p: POST ~p", [self(), Uri]),
