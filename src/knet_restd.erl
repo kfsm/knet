@@ -34,27 +34,32 @@ ioctl(_, _) ->
    {emit, Rsp, 'LISTEN', S};
 
 'LISTEN'({http, _Uri, {_Mthd, _Heads}}=Req, #fsm{resource=R}=S) -> 
-   request(R, Req, S).
+   check_uri(R, Req, S).
 
-request([{Name, TUri, Mthds} | T], {http, Uri, {Mthd, Heads}}=Req, S) ->
+%%
+%%
+check_uri([{_, _, TUri}=Rsc | T], {http, Uri, {Mthd, Heads}}=Req, S) ->
    case uri:match(Uri, TUri) of
-   	true  ->
-         case lists:member(Mthd, Mthds) of
-            false -> 
-               {reply, {error, Uri, not_allowed}, 'LISTEN', S};
-            true  -> 
-               {emit,
-   	           {rest, Name, {Mthd, Uri, Heads}},
-   	           'LISTEN',
-   	           S
-               }
-         end;
-   	false ->
-   	   request(T, Req, S)
+   	true  -> check_method(Rsc, Req, S);
+   	false -> check_uri(T, Req, S)
    end;
 
-request([], _Req, S) ->
-   {next_state, 'LISTEN', S}.
+check_uri([], {http, Uri, _}, S) ->
+   {reply, {error, Uri, not_available}, 'LISTEN', S}.
 
+%%
+%%
+check_method({Ref, Mod, _}=Rsc, {http, Uri, {Mthd, Heads}}=Req, S)
+ when Mthd =:= 'HEAD' orelse Mthd =:= 'GET' orelse Mthd =:= 'DELETE' orelse Mthd =:= 'OPTIONS' ->
+   case lists:member(Mthd, Mod:allowed_methods()) of
+      false -> 
+         {reply, {error, Uri, not_allowed}, 'LISTEN', S};
+      true  -> 
+         {emit,
+            {Ref, Uri, {Mthd, Uri, Heads}},
+            'LISTEN',
+            S
+         }
+   end.
 
 

@@ -220,6 +220,15 @@ parse_header({http_header, _I, Head, _R, Val},
       }
    );
 
+parse_header({http_header, _I, 'Accept'=Head, _R, Val},
+             #fsm{request={http, Uri, {Mthd, Heads}}}=S) ->
+   % TODO: parse accept header
+   parse_header(
+      S#fsm{
+         request = {http, Uri, {Mthd, [{Head, Val} | Heads]}}
+      }
+   );  
+
 parse_header(http_eoh, #fsm{request={http, _, {'HEAD', _}}=Req}=S) ->
    {emit, Req, 'RESPONSE', S};
 
@@ -233,13 +242,13 @@ parse_header(http_eoh, #fsm{request={http, _, {'PUT', _}}=Req}=S) ->
    {emit, Req, 'IO', S, 0};
 
 parse_header(http_eoh, #fsm{request={http, _, {'DELETE', _}}=Req}=S) ->
-   {emit, Req, 'RESPONSE'};
+   {emit, Req, 'RESPONSE', S};
 
 parse_header(http_eoh, #fsm{request={http, _, {'PATCH', _}}=Req}=S) ->
    {emit, Req, 'IO', S, 0};
 
 parse_header(http_eoh, #fsm{request=Req, iolen=undefined}=S) ->
-   {emit, Req, 'RESPONSE'};
+   {emit, Req, 'RESPONSE', S};
 
 parse_header(http_eoh, #fsm{request=Req, iolen=Len}=S) ->
    % entity present Content-Length and Transfer_Encoding exists

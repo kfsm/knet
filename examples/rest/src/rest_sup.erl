@@ -33,7 +33,12 @@ srv(Port) ->
       {knet_tcp,   [{accept, Port, tcp()}]},
       {knet_httpd, []},
       {knet_restd, [[{resource, api()}]]},
-      {rest_echo,  []}
+      konduit:alt([
+         {a, rest_uri_a, []},
+         {b, rest_uri_b, []},
+         {c, rest_uri_c, []}
+      ])
+
    ].
 
 tcp() ->
@@ -45,8 +50,9 @@ tcp() ->
 
 api() ->
    [
-      % {name, uri, methods}
-      {api, "/api", ['GET']}
+      {a, rest_uri_a, "/a"},
+      {b, rest_uri_b, "/b"},
+      {c, rest_uri_c, "/c"}
    ].
 
 %%

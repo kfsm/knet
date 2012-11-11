@@ -60,7 +60,11 @@ ioctl(_, _) ->
       {error, Uri, 405},
       'ECHO', 
       S
-   }.
+   };
+
+'ECHO'(M, S) ->
+   lager:error("----> ~p", [M]),
+   {next_state, 'ECHO', S}.
 
 message() ->
    Size = random:uniform(2048) + 1,

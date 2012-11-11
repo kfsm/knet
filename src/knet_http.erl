@@ -154,7 +154,7 @@ status(not_allowed) -> <<"405 Method Not Allowed">>;
 status(not_acceptable) -> <<"406 Not Acceptable">>;
 %status(407) -> <<"407 Proxy Authentication Required">>;
 %status(408) -> <<"408 Request Timeout">>;
-status(conflict) -> <<"409 Conflict">>.
+status(conflict) -> <<"409 Conflict">>;
 %status(410) -> <<"410 Gone">>;
 %status(411) -> <<"411 Length Required">>;
 %status(412) -> <<"412 Precondition Failed">>;
@@ -167,7 +167,7 @@ status(conflict) -> <<"409 Conflict">>.
 %status(500) -> <<"500 Internal Server Error">>;
 %status(501) -> <<"501 Not Implemented">>;
 %status(502) -> <<"502 Bad Gateway">>;
-%status(503) -> <<"503 Service Unavailable">>;
+status(not_available) -> <<"503 Service Unavailable">>.
 %status(504) -> <<"504 Gateway Timeout">>;
 %status(505) -> <<"505 HTTP Version Not Supported">>.
 
