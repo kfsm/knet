@@ -22,38 +22,12 @@ init([]) ->
 %%
 %% server specification
 server(Port) ->
+   Uri = uri:set(port, Port, uri:new("http+rest:")),
    supervisor:start_child(?MODULE, {
       server,
-      {knet, listen, [srv(Port)]},
+      {knet, listen, [Uri, [rest_uri_a, rest_uri_b, rest_uri_c]]},
       permanent, 1000, supervisor, dynamic
    }).
-
-srv(Port) -> 
-   [
-      {knet_tcp,   [{accept, Port, tcp()}]},
-      {knet_httpd, []},
-      {knet_restd, [[{resource, api()}]]},
-      konduit:alt([
-         {a, rest_uri_a, []},
-         {b, rest_uri_b, []},
-         {c, rest_uri_c, []}
-      ])
-
-   ].
-
-tcp() ->
-   [
-      {rcvbuf, 38528},
-      {sndbuf, 38528},
-      {acceptor,   2}
-   ].
-
-api() ->
-   [
-      {a, rest_uri_a, "/a"},
-      {b, rest_uri_b, "/b"},
-      {c, rest_uri_c, "/c"}
-   ].
 
 %%
 %%

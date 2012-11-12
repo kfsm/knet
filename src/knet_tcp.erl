@@ -165,27 +165,30 @@ ioctl(_, _) ->
 %%% ACCEPT
 %%%
 %%%------------------------------------------------------------------
-'ACCEPT'(timeout, #fsm{sock=LSock, sup=Sup} = S) ->
+'ACCEPT'(timeout, #fsm{sock=LSock, sup=Sup}=S) ->
    % accept a socket
-   {ok, Sock} = gen_tcp:accept(LSock),
-   {ok, Peer} = inet:peername(Sock),
-   {ok, Addr} = inet:sockname(Sock),
-   lager:info("tcp/ip accepted ~p, local addr ~p", [Peer, Addr]),
-   %pns:register(knet, {iid(S#fsm.inet), established, Peer}, self()),
-   % acceptor is consumed, spawn a new one
-   konduit_sup:spawn(knet_acceptor_sup:factory(Sup)),
-   {emit, 
-      {tcp, Peer, established},
-      'ESTABLISHED', 
-      S#fsm{
-         sock  = Sock,
-         addr  = Addr,
-         peer  = Peer,
-         tconn = 0,
-         trecv = counter:new(time),
-         tsend = counter:new(time)
-      } 
-   }.
+   case gen_tcp:accept(LSock) of
+      {ok, Sock} ->
+         {ok, Peer} = inet:peername(Sock),
+         {ok, Addr} = inet:sockname(Sock),
+         lager:info("tcp/ip accepted ~p, local addr ~p", [Peer, Addr]),
+         % acceptor is consumed, spawn a new one
+         konduit_sup:spawn(knet_acceptor_sup:factory(Sup)),
+         {emit, 
+            {tcp, Peer, established},
+            'ESTABLISHED', 
+            S#fsm{
+               sock  = Sock,
+               addr  = Addr,
+               peer  = Peer,
+               tconn = 0,
+               trecv = counter:new(time),
+               tsend = counter:new(time)
+            } 
+         };
+      {error, Reason} ->
+         {stop, Reason, S}
+   end.
    
 %%%------------------------------------------------------------------
 %%%
@@ -265,8 +268,11 @@ init(Sup, {accept, Addr, Opts}) ->
       opts = Opts
    };
 
-init(Sup, {listen, Addr, Opts}) when is_integer(Addr) ->
-   init(Sup, {listen, {any, Addr}, Opts}); 
+init(Sup, {listen, Port, Opts}) when is_integer(Port) ->
+   init(Sup, {listen, {any, Port}, Opts}); 
+
+init(Sup, {listen, {<<>>, Port}, Opts}) when is_integer(Port) ->
+   init(Sup, {listen, {any, Port}, Opts}); 
 
 init(Sup, {listen, Addr, Opts}) ->
    % start tcp/ip listener
@@ -277,7 +283,7 @@ init(Sup, {listen, Addr, Opts}) ->
    ]),
    lager:info("tcp/ip listen on ~p", [Addr]),
    % spawn acceptor pool
-   {acceptor, Pool} = lists:keyfind(acceptor, 1, Opts),
+   Pool = proplists:get_value(acceptor, Opts, ?KO_TCP_ACCEPTOR),
    spawn_link(
       fun() ->
          Factory = knet_acceptor_sup:factory(Sup),

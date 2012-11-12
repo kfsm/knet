@@ -24,10 +24,35 @@
 
 % assert interface
 -export([check_method/1, check_uri/1, check_io/2]).
+% decode interface
+-export([decode_header/1]). 
 % encode interface
 -export([encode_req/3, encode_rsp/2, encode_chunk/1]).
 -export([status/1]).
 
+
+%%
+%% decode_header() -> more | {error, Reason} | {eoh, Rest} | {{Head, Val}, Rest}
+decode_header(Bin) ->
+   case erlang:decode_packet(httph_bin, Bin, []) of
+      {more,  _}       -> more;
+      {error, _}=Err   -> Err;
+      {ok, http_eoh, Rest} -> {eoh, Rest};
+      {ok, {http_header, _I, H, _R, V}, Rest} -> decode_header(H, V, Rest) 
+   end.
+
+decode_header('Content-Length', V, Rest) ->
+   {{'Content-Length', list_to_integer(binary_to_list(V))}, Rest};
+
+decode_header('Accept', V, Rest) ->
+   List = lists:map(
+      fun(X) -> mime:new(X) end,
+      binary:split(V, <<$,>>, [trim, global])
+   ),
+   {{'Accept', List}, Rest};
+
+decode_header(Head, Val, Rest) ->
+   {{Head, Val}, Rest}.
 
 
 
@@ -160,7 +185,7 @@ status(conflict) -> <<"409 Conflict">>;
 %status(412) -> <<"412 Precondition Failed">>;
 %status(413) -> <<"413 Request Entity Too Large">>;
 %status(414) -> <<"414 Request-URI Too Long">>;
-%status(415) -> <<"415 Unsupported Media Type">>;
+status(bad_mime_type) -> <<"415 Unsupported Media Type">>;
 %status(416) -> <<"416 Requested Range Not Satisfiable">>;
 %status(417) -> <<"417 Expectation Failed">>;
 %status(422) -> <<"422 Unprocessable Entity">>;

@@ -23,8 +23,10 @@
 -include("knet.hrl").
 
 -export([start/0, stop/0]).
+-export([listen/2, listen/3]).
+
 -export([close/1]).% listen/1, listen/2, close/1]).
--export([listen/1, connect/1, connect/3]).
+-export([connect/1, connect/3]).
 -export([ioctl/2, send/2, recv/1]).
 -export([route/2, ifget/1, ifget/2]).
 -export([size/1]).
@@ -72,6 +74,53 @@ size(Data)
 %%% 
 %%%
 %%%------------------------------------------------------------------
+
+%%
+%% listen(Uri, Mod, Opts) -> {ok, Pid}
+%%
+listen(Uri, Mod) ->
+   listen(Uri, Mod, []).
+
+listen({uri, tcp, _}=Uri, Mod, Opts) ->
+   % tcp/ip listener
+   knet_acceptor_sup:start_link([
+      {knet_tcp, [{accept, uri:get(authority, Uri), Opts}]},
+      {Mod,      [Opts]}
+   ]);
+
+listen({uri, http, _}=Uri, Mod, Opts) ->
+   % http listener
+   knet_acceptor_sup:start_link([
+      {knet_tcp,   [{accept, uri:get(authority, Uri), Opts}]},
+      {knet_httpd, [Opts]},
+      {Mod,        [Opts]}
+   ]);
+
+listen({uri, [http, rest], _}=Uri, Mods, Opts) ->
+   % dispatch table
+   API = lists:map(
+      fun(X) -> {Tag, Pat} = X:uri(), {Tag, X, uri:new(Pat)} end,
+      Mods
+   ),
+   % resource table
+   Resources = lists:map(
+      fun(X) -> {Tag, _} = X:uri(), {Tag, X, [Opts]} end,
+      Mods
+   ),
+   knet_acceptor_sup:start_link([
+      {knet_tcp,   [{accept, uri:get(authority, Uri), Opts}]},
+      {knet_httpd, [Opts]},
+      {knet_restd, [[{resource, API}|Opts]]},
+      {'|', Resources}
+   ]);
+
+listen(Uri, Mod, Opts)
+ when is_list(Uri) orelse is_binary(Uri) ->
+   listen(uri:new(Uri), Mod, Opts).
+
+
+
+
 
 %%
 %% connect(Uri, Opts} -> Link
@@ -136,8 +185,6 @@ connect(tcp, Peer, Opts) ->
 %%   {Iid, established, Peer} - each accepted connection
 %%   {Iid, terminated,  Peer} 
 %%   {Iid, {error, Reason}, Peer}
-listen(Spec) ->
-   knet_acceptor_sup:start_link(Spec).
 
 
 % listen(Addr) ->

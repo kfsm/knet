@@ -3,13 +3,16 @@
 %%
 %% 
 -export([init/1, free/2, ioctl/2, 'ECHO'/2]).
--export([allowed_methods/0, content_types_provided/0, content_types_accepted/0]).
+-export([uri/0, allowed_methods/0, content_types_provided/0, content_types_accepted/0]).
 
 %%%------------------------------------------------------------------
 %%%
 %%% REST
 %%%
 %%%------------------------------------------------------------------   
+
+uri() ->
+   {a, "/a"}.
 
 allowed_methods() ->
    ['GET'].

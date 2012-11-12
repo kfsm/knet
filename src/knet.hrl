@@ -26,6 +26,9 @@
    {mode, binary}
 ]).
 
+%% list of default konduit options
+-define(KO_TCP_ACCEPTOR,       2).
+
 %% white list of socket options acceptable by konduits
 -define(UDP_OPTS, [broadcast, delay_send, dontroute, read_packets, recbuf, sndbuf]).
 -define(TCP_OPTS, [delay_send, nodelay, dontroute, keepalive, packet, packet_size, recbuf, send_timeout, sndbuf]).

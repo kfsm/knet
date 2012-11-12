@@ -27,7 +27,7 @@
 
 start(_Type, _Args) -> 
    % establish pts table for statistic
-   pts:new(knet, [readonly]),
+   % pts:new(knet, [readonly]),
    case knet_sup:start_link() of
       {ok, Pid} -> 
          %{ok, _} = konduit_sup:new(dns, [], self(), dns_resolver),

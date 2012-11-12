@@ -22,8 +22,8 @@ ioctl(_, _) ->
 
 %%
 %%
-'ECHO'({http, Uri, {'GET', _Heads}}, S) -> 
-   lager:info("echo ~p: GET ~p", [self(), Uri]),
+'ECHO'({http, Uri, {'GET', Heads}}, S) -> 
+   lager:info("echo ~p: GET ~p ~p", [self(), uri:to_binary(Uri), Heads]),
    {reply,
       {200, Uri, [{'Content-Type', <<"text/plain">>}], message()},
       'ECHO',

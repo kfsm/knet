@@ -179,78 +179,62 @@ parse_request_line({http_request, Mthd, Uri, _Vsn}, #fsm{prot=Prot}=S) ->
 %%
 %% 
 parse_header(#fsm{buffer=Buffer}=S) -> 
-   case erlang:decode_packet(httph_bin, Buffer, []) of
-      {more, _}        -> {next_state, 'REQUEST', S};
+   case knet_http:decode_header(Buffer) of
+      more             -> {next_state, 'REQUEST', S};
       {error, _Reason} -> http_error(400, S);
-      {ok, Req, Chunk} -> parse_header(Req, S#fsm{buffer=Chunk})
+      {Req, Chunk}     -> parse_header(Req, S#fsm{buffer=Chunk})
    end.
 
-parse_header({http_error, Msg}, S) ->
-   throw({http_error, 400});
-
-parse_header({http_header, _I, 'Content-Length'=Head, _R, Val}, 
-             #fsm{request={http, Uri, {Mthd, Heads}}}=S) ->
-   Len = btoi(Val),
+parse_header({'Content-Length', Len}=Head, #fsm{request={http, Uri, {Mthd, Heads}}}=S) ->
    parse_header(
       S#fsm{
-         request = {http, Uri, {Mthd, [{Head, Len} | Heads]}},
+         request = {http, Uri, {Mthd, [Head | Heads]}},
          iolen   = Len, 
          chunked = false
       }
    );
 
-parse_header({http_header, _I, 'Transfer-Encoding'=Head, _R, <<"chunked">>=Val},
-             #fsm{request={http, Uri, {Mthd, Heads}}}=S) ->
+parse_header({'Transfer-Encoding', <<"chunked">>}=Head, #fsm{request={http, Uri, {Mthd, Heads}}}=S) ->
    parse_header(
       S#fsm{
-         request = {http, Uri, {Mthd, [{Head, Val} | Heads]}},
+         request = {http, Uri, {Mthd, [Head | Heads]}},
          iolen   = chunk,
          chunked = true
       }
    ); 
 
-parse_header({http_header, _I, 'Transfer-Encoding'=Head, _R, _Val}, S) ->
+parse_header({'Transfer-Encoding', _}, S) ->
    throw({http_error, 501}); 
 
-parse_header({http_header, _I, Head, _R, Val},
-             #fsm{request={http, Uri, {Mthd, Heads}}}=S) ->
+parse_header({_, _}=Head, #fsm{request={http, Uri, {Mthd, Heads}}}=S) ->
    parse_header(
       S#fsm{
-         request = {http, Uri, {Mthd, [{Head, Val} | Heads]}}
+         request = {http, Uri, {Mthd, [Head | Heads]}}
       }
    );
 
-parse_header({http_header, _I, 'Accept'=Head, _R, Val},
-             #fsm{request={http, Uri, {Mthd, Heads}}}=S) ->
-   % TODO: parse accept header
-   parse_header(
-      S#fsm{
-         request = {http, Uri, {Mthd, [{Head, Val} | Heads]}}
-      }
-   );  
-
-parse_header(http_eoh, #fsm{request={http, _, {'HEAD', _}}=Req}=S) ->
+parse_header(eoh, #fsm{request={http, _, {'HEAD', _}}=Req}=S) ->
    {emit, Req, 'RESPONSE', S};
 
-parse_header(http_eoh, #fsm{request={http, _, {'GET', _}}=Req}=S) ->
+parse_header(eoh, #fsm{request={http, _, {'GET', _}}=Req}=S) ->
    {emit, Req, 'RESPONSE', S};
 
-parse_header(http_eoh, #fsm{request={http, _, {'POST', _}}=Req}=S) ->
+parse_header(eoh, #fsm{request={http, _, {'POST', _}}=Req}=S) ->
    {emit, Req, 'IO', S, 0};
 
-parse_header(http_eoh, #fsm{request={http, _, {'PUT', _}}=Req}=S) ->
+parse_header(eoh, #fsm{request={http, _, {'PUT', _}}=Req}=S) ->
    {emit, Req, 'IO', S, 0};
 
-parse_header(http_eoh, #fsm{request={http, _, {'DELETE', _}}=Req}=S) ->
+parse_header(eoh, #fsm{request={http, _, {'DELETE', _}}=Req}=S) ->
    {emit, Req, 'RESPONSE', S};
 
-parse_header(http_eoh, #fsm{request={http, _, {'PATCH', _}}=Req}=S) ->
+parse_header(eoh, #fsm{request={http, _, {'PATCH', _}}=Req}=S) ->
    {emit, Req, 'IO', S, 0};
 
-parse_header(http_eoh, #fsm{request=Req, iolen=undefined}=S) ->
+parse_header(eoh, #fsm{request=Req, iolen=undefined}=S) ->
    {emit, Req, 'RESPONSE', S};
 
-parse_header(http_eoh, #fsm{request=Req, iolen=Len}=S) ->
+parse_header(eoh, #fsm{request=Req, iolen=Len}=S) ->
    % entity present Content-Length and Transfer_Encoding exists
    % request contains payload, trigger payload handling via timeout
    {emit, Req, 'IO', S, 0}.
