@@ -2,10 +2,12 @@
 -module(knet_restd).
 
 -export([init/1, free/2, ioctl/2]).
--export(['LISTEN'/2]).
+-export(['LISTEN'/2, 'INPUT'/2]).
 
 -record(fsm, {
-   resource
+   resource,
+   request,
+   buffer
 }).
 
 init([Opts]) ->
@@ -33,48 +35,110 @@ ioctl(_, _) ->
  when is_integer(Code) ->
    {emit, Rsp, 'LISTEN', S};
 
-'LISTEN'({http, _Uri, {_Mthd, _Heads}}=Req, #fsm{resource=R}=S) -> 
-   check_uri(R, Req, S).
+'LISTEN'({http, Uri, {Mthd, _}}=Req, #fsm{resource=RT}=S) -> 
+   try
+      {Ref, Mod, _} = check_resource(RT, Uri),
+      ok = check_method(Mthd, Mod),
+      handle_resource(Ref, Mod, Req, S)
+   catch
+      {error, Reason} ->
+         {reply, {error, Uri, Reason}, 'LISTEN', S}
+   end.
+
+%%%------------------------------------------------------------------
+%%%
+%%% INPUT
+%%%
+%%%------------------------------------------------------------------   
+'INPUT'({http, _Mthd, _Uri, Msg}, #fsm{buffer=Buffer}=S) ->
+   {next_state, 
+      'INPUT', 
+      S#fsm{
+         buffer = <<Buffer/binary, Msg/binary>>
+      }
+   };
+
+'RECV'({http, Uri, eof}, #fsm{req=Req, buffer=Buffer}=S) ->
+   {emit, 
+      {http, 'POST', Uri, Req, Buffer}, 'LISTEN', #fsm{}};
+
+'RECV'({http, 'PUT', Uri, eof}, #fsm{req=Req, buffer=Buffer}) ->
+   {emit, {http, 'PUT',  Uri, Req, Buffer}, 'HANDLE', #fsm{}}.
+
+
 
 %%
+%% handler resource request
+handle_resource(Ref, Mod, {http, Uri, {'HEAD', Heads}}=Req, S) ->
+   Tag = check_provided_content(proplists:get_value('Accept', Heads), Mod),
+   {emit,
+      {Ref, Tag, {'HEAD', Uri, Heads}},
+      'LISTEN',
+      S
+   };
+
+handle_resource(Ref, Mod, {http, Uri, {'GET',  Heads}}=Req, S) ->
+   Tag = check_provided_content(proplists:get_value('Accept', Heads), Mod),
+   {emit,
+      {Ref, Tag, {'GET', Uri, Heads}},
+      'LISTEN',
+      S
+   };
+
+handle_resource(Ref, Mod, {http, Uri, {'POST', Heads}}=Req, S) ->
+   {next_state, 
+      'INPUT', 
+      S#fsm{
+         request = {Ref, nil, {'POST', Uri, Heads}}, 
+         buffer  = <<>>
+      }
+   };
+
+handle_resource(Ref, Mod, {http, _, {'PUT',  _}}=Req, S) ->
+   throw({error, not_implemented});
+
+handle_resource(Ref, Mod, {http, _, {'DELETE',  _}}=Req, S) ->
+   throw({error, not_implemented});
+
+handle_resource(Ref, Mod, {http, _, {'PATCH',   _}}=Req, S) ->
+   throw({error, not_implemented});
+
+handle_resource(Ref, Mod, {http, _, {'OPTIONS', _}}=Req, S) ->
+   throw({error, not_implemented}).
+
+
 %%
-check_uri([{_, _, TUri}=Rsc | T], {http, Uri, {Mthd, Heads}}=Req, S) ->
-   case uri:match(Uri, TUri) of
-   	true  -> check_method(Rsc, Req, S);
-   	false -> check_uri(T, Req, S)
+%% 
+check_resource([{_, _, Pat}=R | T], Uri) ->
+   case uri:match(Uri, Pat) of
+      true  -> R;
+      false -> check_resource(T, Uri)
    end;
-
-check_uri([], {http, Uri, _}, S) ->
-   {reply, {error, Uri, not_available}, 'LISTEN', S}.
+check_resource([], Uri) ->
+   throw({error, not_available}).
 
 %%
-%%
-check_method({_, Mod, _}=Rsc, {http, Uri, {Mthd, Heads}}=Req, S)
- when Mthd =:= 'HEAD' orelse Mthd =:= 'GET' orelse Mthd =:= 'DELETE' orelse Mthd =:= 'OPTIONS' ->
+%% check method
+check_method(Mthd, Mod) ->
    case lists:member(Mthd, Mod:allowed_methods()) of
-      false -> 
-         {reply, {error, Uri, not_allowed}, 'LISTEN', S};
-      true  -> 
-         check_provided_content(Rsc, Req, S)
-   end.
-
-check_provided_content({Ref, Mod, _}=Rsc, {http, Uri, {Mthd, Heads}}=Req, S) ->
-   case check_content_type(Mod:content_types_provided(), proplists:get_value('Accept', Heads, [<<"*/*">>])) of
-      false -> 
-         {reply, {error, Uri, bad_mime_type}, 'LISTEN', S};
-      Tag   ->
-         {emit,
-            {Ref, Uri, {Mthd, Uri, Heads}},
-            'LISTEN',
-            S
-         }
+      false -> throw({error, not_allowed});
+      true  -> ok
    end.
 
 %%
-%%
-check_content_type([Type|Tail], Types) ->
-   case check_type(Type, Types) of
-      false -> check_content_type(Tail, Types);
+%% check provided content
+check_provided_content([], Mod) ->
+   check_provided_content([mime:new(<<"*/*">>)], Mod);
+   
+check_provided_content(Accept, Mod) ->
+   case check_content_type(Mod:content_types_provided(), Accept) of
+      false -> throw({error, not_acceptable});
+      Tag   -> Tag
+   end.
+
+check_content_type([Type|Tail], Accept) ->
+   case check_type(Type, Accept) of
+      false -> check_content_type(Tail, Accept);
       Tag   -> Tag
    end;
 

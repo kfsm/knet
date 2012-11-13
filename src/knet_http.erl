@@ -190,7 +190,7 @@ status(bad_mime_type) -> <<"415 Unsupported Media Type">>;
 %status(417) -> <<"417 Expectation Failed">>;
 %status(422) -> <<"422 Unprocessable Entity">>;
 %status(500) -> <<"500 Internal Server Error">>;
-%status(501) -> <<"501 Not Implemented">>;
+status(not_implemented) -> <<"501 Not Implemented">>;
 %status(502) -> <<"502 Bad Gateway">>;
 status(not_available) -> <<"503 Service Unavailable">>.
 %status(504) -> <<"504 Gateway Timeout">>;

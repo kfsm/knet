@@ -33,7 +33,7 @@
    'LISTEN'/2,   %% listen for incoming requests
    'REQUEST'/2,  %% receiving request
    'RESPONSE'/2, %% waiting a client response
-   'IO'/2   %% receiving payload
+   'IO'/2        %% receiving payload
 ]).
 
 %% internal state
@@ -43,7 +43,7 @@
    peer,    % remote peer
 
    % request
-   request, % active request #htreq{...}
+   request, % active request 
    chunked,                      % 
    iolen :: integer() | chunk,   % expected length of entity
    buffer,  % I/O buffer
