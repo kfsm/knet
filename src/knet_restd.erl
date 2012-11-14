@@ -2,11 +2,12 @@
 -module(knet_restd).
 
 -export([init/1, free/2, ioctl/2]).
--export(['LISTEN'/2, 'INPUT'/2]).
+-export(['LISTEN'/2, 'INPUT'/2, 'HANDLE'/2]).
 
 -record(fsm, {
-   resource,
-   request,
+   dispatch,   % resource dispatch table
+   request,    % active request
+   content,    % active content type
    buffer
 }).
 
@@ -14,7 +15,8 @@ init([Opts]) ->
    {ok,
       'LISTEN',
       #fsm{
-         resource = proplists:get_value(resource, Opts, [])
+         dispatch = proplists:get_value(resource, Opts, []),
+         buffer   = <<>>
       }
    }.
 
@@ -31,26 +33,73 @@ ioctl(_, _) ->
 %%% LISTEN
 %%%
 %%%------------------------------------------------------------------   
-'LISTEN'({Code, _Uri, _Head, _Payload}=Rsp, #fsm{}=S)
- when is_integer(Code) ->
-   {emit, Rsp, 'LISTEN', S};
-
-'LISTEN'({http, Uri, {Mthd, _}}=Req, #fsm{resource=RT}=S) -> 
+'LISTEN'({http, Uri, {Mthd, _}}=Req, #fsm{dispatch=Dispatch}=S) -> 
    try
-      {Ref, Mod, _} = check_resource(RT, Uri),
-      ok = check_method(Mthd, Mod),
-      handle_resource(Ref, Mod, Req, S)
+      {Uid, Mod, _} = check_resource(Dispatch, Uri),
+      ok = check_method(Mthd, Mod:allowed_methods(Uid)),
+      request(Uid, Mod, Req, S)
    catch
       {error, Reason} ->
          {reply, {error, Uri, Reason}, 'LISTEN', S}
    end.
+
+%%
+%% handler resource request
+request(Uid, Mod, {http, Uri, {Mthd,  Heads}}, S)
+ when Mthd =:= 'GET' orelse Mthd =:= 'HEAD' ->
+   {Ref, Content} = check_content_type(
+      head('Accept', [mime:new(<<"*/*">>)], Heads), 
+      Mod:content_types_provided(Uid)
+   ),
+   Req = {Uid, Ref, {Mthd, Uri, Heads}},
+   {emit,
+      Req,
+      'HANDLE',
+      S#fsm{
+         request = Req, 
+         content = Content
+
+      }
+   };
+
+request(Uid, Mod, {http, Uri, {Mthd, Heads}}, S)
+ when Mthd =:= 'POST' orelse Mthd =:= 'PUT' ->
+   {Ref, Content} = check_content_type(
+      head('Content-Type', Heads),
+      Mod:content_types_provided(Uid)
+   ),
+   {next_state, 
+      'INPUT', 
+      S#fsm{
+         request = {Uid, Ref, {Mthd, Uri, Heads}},
+         content = Content
+      }
+   };
+
+request(Uid, Mod, {http, Uri, {Mthd, Heads}}, S)
+ when Mthd =:= 'DELETE' ->
+   Req = {Uid, undefined, {Mthd, Uri, Heads}},
+   {emit,
+      Req,
+      'HANDLE',
+      S#fsm{
+         request = Req,
+         content = undefined
+      }
+   };
+
+request(Uid, Mod, {http, _, {'PATCH',   _}}=Req, S) ->
+   throw({error, not_implemented});
+
+request(Uid, Mod, {http, _, {'OPTIONS', _}}=Req, S) ->
+   throw({error, not_implemented}).
 
 %%%------------------------------------------------------------------
 %%%
 %%% INPUT
 %%%
 %%%------------------------------------------------------------------   
-'INPUT'({http, _Mthd, _Uri, Msg}, #fsm{buffer=Buffer}=S) ->
+'INPUT'({http, _Uri, Msg}, #fsm{buffer=Buffer}=S) when is_binary(Msg) ->
    {next_state, 
       'INPUT', 
       S#fsm{
@@ -58,57 +107,69 @@ ioctl(_, _) ->
       }
    };
 
-'RECV'({http, Uri, eof}, #fsm{req=Req, buffer=Buffer}=S) ->
+'INPUT'({http, Uri, eof}, #fsm{request={Uid, Ref, {Mthd, Uri, Heads}}, buffer=Buffer}=S) ->
    {emit, 
-      {http, 'POST', Uri, Req, Buffer}, 'LISTEN', #fsm{}};
-
-'RECV'({http, 'PUT', Uri, eof}, #fsm{req=Req, buffer=Buffer}) ->
-   {emit, {http, 'PUT',  Uri, Req, Buffer}, 'HANDLE', #fsm{}}.
-
-
-
-%%
-%% handler resource request
-handle_resource(Ref, Mod, {http, Uri, {'HEAD', Heads}}=Req, S) ->
-   Tag = check_provided_content(proplists:get_value('Accept', Heads), Mod),
-   {emit,
-      {Ref, Tag, {'HEAD', Uri, Heads}},
-      'LISTEN',
-      S
-   };
-
-handle_resource(Ref, Mod, {http, Uri, {'GET',  Heads}}=Req, S) ->
-   Tag = check_provided_content(proplists:get_value('Accept', Heads), Mod),
-   {emit,
-      {Ref, Tag, {'GET', Uri, Heads}},
-      'LISTEN',
-      S
-   };
-
-handle_resource(Ref, Mod, {http, Uri, {'POST', Heads}}=Req, S) ->
-   {next_state, 
-      'INPUT', 
+      {Uid, Ref, {Mthd, Uri, Heads, Buffer}}, 
+      'HANDLE', 
       S#fsm{
-         request = {Ref, nil, {'POST', Uri, Heads}}, 
-         buffer  = <<>>
+         buffer = <<>>
+      }
+   }.
+
+%%%------------------------------------------------------------------
+%%%
+%%% HANDLE
+%%%
+%%%------------------------------------------------------------------   
+'HANDLE'({error, Reason}, #fsm{request={_, _, {_, Uri, _}}}=S) ->
+   {emit, 
+      {error, Uri, Reason},
+      'LISTEN', 
+      S#fsm{
+         request = undefined,
+         content = undefined
       }
    };
 
-handle_resource(Ref, Mod, {http, _, {'PUT',  _}}=Req, S) ->
-   throw({error, not_implemented});
+'HANDLE'({Code, Heads, Msg}, #fsm{request={_, _, {_, Uri, _}}, content=Content}=S) ->
+   {emit, 
+      response(Code, Uri, Heads, Msg, Content),
+      'LISTEN', 
+      S#fsm{
+         request = undefined,
+         content = undefined
+      }
+   };
 
-handle_resource(Ref, Mod, {http, _, {'DELETE',  _}}=Req, S) ->
-   throw({error, not_implemented});
+'HANDLE'({Code, Msg}, #fsm{request={_, _, {_, Uri, _}}, content=Content}=S) ->
+   {emit, 
+      response(Code, Uri, [], Msg, Content),
+      'LISTEN', 
+      S#fsm{
+         request = undefined,
+         content = undefined
+      }
+   }.
 
-handle_resource(Ref, Mod, {http, _, {'PATCH',   _}}=Req, S) ->
-   throw({error, not_implemented});
+response(Code, Uri, Heads, Msg, undefined) ->
+   {Code, Uri, Heads, Msg};
 
-handle_resource(Ref, Mod, {http, _, {'OPTIONS', _}}=Req, S) ->
-   throw({error, not_implemented}).
+response(Code, Uri, Heads, Msg, Content) ->
+   case lists:keyfind('Content-Type', 1, Heads) of
+      false -> {Code, Uri, [{'Content-Type', Content} | Heads], Msg};
+      _     -> {Code, Uri, Heads, Msg}
+   end.
+ 
 
+
+%%%------------------------------------------------------------------
+%%%
+%%% assert resource request
+%%%
+%%%------------------------------------------------------------------   
 
 %%
-%% 
+%% look up resource in dispatch table
 check_resource([{_, _, Pat}=R | T], Uri) ->
    case uri:match(Uri, Pat) of
       true  -> R;
@@ -118,43 +179,64 @@ check_resource([], Uri) ->
    throw({error, not_available}).
 
 %%
-%% check method
-check_method(Mthd, Mod) ->
-   case lists:member(Mthd, Mod:allowed_methods()) of
+%% check if method is allowed by resource
+check_method(Requested, Allowed) ->
+   case lists:member(Requested, Allowed) of
       false -> throw({error, not_allowed});
       true  -> ok
    end.
 
 %%
-%% check provided content
-check_provided_content([], Mod) ->
-   check_provided_content([mime:new(<<"*/*">>)], Mod);
-   
-check_provided_content(Accept, Mod) ->
-   case check_content_type(Mod:content_types_provided(), Accept) of
-      false -> throw({error, not_acceptable});
+%% check_content_type(Expected, Supported) -> Tag
+check_content_type(Expected, [Supported|T]) ->
+   case check_type(Expected, Supported) of
+      false -> check_content_type(Expected, T);
       Tag   -> Tag
+   end;
+
+check_content_type(_, []) ->
+   throw({error, not_acceptable}).
+
+check_type([Expected|T], {_, Supported}=Type) ->
+   case mime:match(Expected, Supported) of
+      true  -> Type;
+      false -> check_type(T, Type)
+   end;
+
+check_type([], _) ->
+   false;
+
+check_type(Expected, {_, Supported}=Type) ->
+   case mime:match(Expected, Supported) of
+      true  -> Type;
+      false -> false
    end.
 
-check_content_type([Type|Tail], Accept) ->
-   case check_type(Type, Accept) of
-      false -> check_content_type(Tail, Accept);
-      Tag   -> Tag
-   end;
 
-check_content_type([], _) ->
-   false.
-
-check_type({TType, Tag}=Mime, [Type|Tail]) ->
-   case mime:match(Type, TType) of
-      true  -> Tag;
-      false -> check_type(Mime, Tail)
-   end;
-
-check_type(_, []) ->
-   false.
-
+%%%------------------------------------------------------------------
+%%%
+%%% private
+%%%
+%%%------------------------------------------------------------------   
       
+%%
+%%
+head(Name, Heads) ->
+   case lists:keyfind(Name, 1, Heads) of
+      false       -> throw({error, badarg}); 
+      {Name, Val} -> Val
+   end.
+
+%%
+%%
+head(Name, Default, Heads) ->
+   case lists:keyfind(Name, 1, Heads) of
+      false       -> Default; 
+      {Name, Val} -> Val
+   end.
+
+
+
 
    
 

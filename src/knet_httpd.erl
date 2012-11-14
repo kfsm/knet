@@ -261,28 +261,6 @@ parse_header(eoh, #fsm{request=Req, iolen=Len}=S) ->
       S#fsm{buffer= <<>>}
    };
 
-'RESPONSE'({Code, _Uri, Head}, #fsm{peer=Peer}=S)
- when is_integer(Code) ->
-   Msg = response(Code, [{'Transfer-Encoding', <<"chunked">>} | Head], S),
-   {emit,
-      {send, Peer, Msg},
-      'RESPONSE',
-      S
-   };
-
-'RESPONSE'({Code, _Uri, Head, Payload}, #fsm{peer=Peer}=S)
- when is_integer(Code) ->
-   % outgoing response with payload
-   Msg = response(Code, [{'Content-Length', knet:size(Payload)} | Head], S),
-   {emit,
-      {send, Peer, [Msg, Payload]},
-      'LISTEN',
-      S#fsm{
-         iolen = undefined,
-         buffer= <<>>
-      }
-   };
-
 'RESPONSE'({send, _Uri, Chunk}, #fsm{peer=Peer}=S)
  when is_binary(Chunk) ->
    % outgoing data chunk
@@ -296,6 +274,26 @@ parse_header(eoh, #fsm{request=Req, iolen=Len}=S) ->
    % outgoing last chunk, response with end-of-file
    {emit,
       {send, Peer, knet_http:encode_chunk(<<>>)},
+      'LISTEN',
+      S#fsm{
+         iolen = undefined,
+         buffer= <<>>
+      }
+   };
+
+'RESPONSE'({Code, _Uri, Head}, #fsm{peer=Peer}=S) ->
+   Msg = response(Code, [{'Transfer-Encoding', <<"chunked">>} | Head], S),
+   {emit,
+      {send, Peer, Msg},
+      'RESPONSE',
+      S
+   };
+
+'RESPONSE'({Code, _Uri, Head, Payload}, #fsm{peer=Peer}=S) ->
+   % outgoing response with payload
+   Msg = response(Code, [{'Content-Length', knet:size(Payload)} | Head], S),
+   {emit,
+      {send, Peer, [Msg, Payload]},
       'LISTEN',
       S#fsm{
          iolen = undefined,
@@ -335,29 +333,6 @@ parse_header(eoh, #fsm{request=Req, iolen=Len}=S) ->
       S#fsm{buffer= <<>>}
    };
 
-'IO'({Code, _Uri, Head}, #fsm{peer=Peer}=S)
- when is_integer(Code) ->
-   % outgoing response
-   Msg = response(Code, [{'Transfer-Encoding', <<"chunked">>} | Head], S),
-   {emit,
-      {send, Peer, Msg},
-      'IO',
-      S
-   };
-
-'IO'({Code, _Uri, Head, Payload}, #fsm{peer=Peer}=S)
- when is_integer(Code) ->
-   % outgoing response with payload
-   Msg = response(Code, [{'Content-Length', knet:size(Payload)} | Head], S),
-   {emit,
-      [{send, Peer, Msg}, {send, Peer, Payload}],
-      'LISTEN',
-      S#fsm{
-         iolen = undefined,
-         buffer= <<>>
-      }
-   };
-
 'IO'({send, _Uri, Data}, #fsm{peer=Peer}=S) when is_binary(Data) ->
    % outgoing data chunk
    {emit,
@@ -375,7 +350,30 @@ parse_header(eoh, #fsm{request=Req, iolen=Len}=S) ->
          iolen = undefined,
          buffer= <<>>
       }
+   };
+
+'IO'({Code, _Uri, Head}, #fsm{peer=Peer}=S) ->
+   % outgoing response
+   Msg = response(Code, [{'Transfer-Encoding', <<"chunked">>} | Head], S),
+   {emit,
+      {send, Peer, Msg},
+      'IO',
+      S
+   };
+
+'IO'({Code, _Uri, Head, Payload}, #fsm{peer=Peer}=S) ->
+   % outgoing response with payload
+   Msg = response(Code, [{'Content-Length', knet:size(Payload)} | Head], S),
+   {emit,
+      [{send, Peer, Msg}, {send, Peer, Payload}],
+      'LISTEN',
+      S#fsm{
+         iolen = undefined,
+         buffer= <<>>
+      }
    }.
+
+
 
 %%
 %%

@@ -97,14 +97,15 @@ listen({uri, http, _}=Uri, Mod, Opts) ->
    ]);
 
 listen({uri, [http, rest], _}=Uri, Mods, Opts) ->
+   % TODO: support multiple resource signatures per module
    % dispatch table
    API = lists:map(
-      fun(X) -> {Tag, Pat} = X:uri(), {Tag, X, uri:new(Pat)} end,
+      fun(X) -> {Uid, Pat} = X:uri(), {Uid, X, uri:new(Pat)} end,
       Mods
    ),
    % resource table
    Resources = lists:map(
-      fun(X) -> {Tag, _} = X:uri(), {Tag, X, [Opts]} end,
+      fun(X) -> {Uid, _} = X:uri(), {Uid, X, [Uid, Opts]} end,
       Mods
    ),
    knet_acceptor_sup:start_link([

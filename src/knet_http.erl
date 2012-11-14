@@ -51,6 +51,9 @@ decode_header('Accept', V, Rest) ->
    ),
    {{'Accept', List}, Rest};
 
+decode_header('Content-Type', V, Rest) ->
+   {{'Content-Type', mime:new(V)}, Rest};
+
 decode_header(Head, Val, Rest) ->
    {{Head, Val}, Rest}.
 
@@ -93,22 +96,29 @@ encode_chunk(Chunk) ->
 
 
 %%
-%%
+%% encode header key/value pairs
 encode_header(Headers) when is_list(Headers) ->
    [ <<(encode_header(X))/binary, "\r\n">> || X <- Headers ];
 
-encode_header({Key, Val}) when is_atom(Key), is_atom(Val) ->
-   <<(atom_to_binary(Key, utf8))/binary, ": ", (atom_to_binary(Val, utf8))/binary>>;
-
-encode_header({Key, Val}) when is_atom(Key), is_binary(Val) ->
-   <<(atom_to_binary(Key, utf8))/binary, ": ", Val/binary>>;
-
-encode_header({Key, Val}) when is_atom(Key), is_integer(Val) ->
-   <<(atom_to_binary(Key, utf8))/binary, ": ", (list_to_binary(integer_to_list(Val)))/binary>>;
-
 encode_header({'Host', {Host, Port}}) ->
-   <<"Host", ": ", Host/binary, ":", (list_to_binary(integer_to_list(Port)))/binary>>.
-   
+   <<"Host", ": ", Host/binary, ":", (list_to_binary(integer_to_list(Port)))/binary>>;
+
+encode_header({Key, Val}) when is_atom(Key) ->
+   <<(atom_to_binary(Key, utf8))/binary, ": ", (enc_head_val(Val))/binary>>.
+
+%%
+%% encode header value  
+enc_head_val(Val) when is_atom(Val) ->
+   atom_to_binary(Val, utf8);
+
+enc_head_val(Val) when is_binary(Val) ->
+   Val;
+
+enc_head_val(Val) when is_integer(Val) ->
+   list_to_binary(integer_to_list(Val));
+
+enc_head_val({mime, _, _}=Val) ->
+   mime:to_binary(Val).
 
 
 
