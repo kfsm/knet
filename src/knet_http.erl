@@ -190,6 +190,7 @@ status(not_acceptable) -> <<"406 Not Acceptable">>;
 %status(407) -> <<"407 Proxy Authentication Required">>;
 %status(408) -> <<"408 Request Timeout">>;
 status(conflict) -> <<"409 Conflict">>;
+status(duplicate)-> <<"409 Conflict">>;
 %status(410) -> <<"410 Gone">>;
 %status(411) -> <<"411 Length Required">>;
 %status(412) -> <<"412 Precondition Failed">>;
@@ -199,12 +200,12 @@ status(bad_mime_type) -> <<"415 Unsupported Media Type">>;
 %status(416) -> <<"416 Requested Range Not Satisfiable">>;
 %status(417) -> <<"417 Expectation Failed">>;
 %status(422) -> <<"422 Unprocessable Entity">>;
-%status(500) -> <<"500 Internal Server Error">>;
 status(not_implemented) -> <<"501 Not Implemented">>;
 %status(502) -> <<"502 Bad Gateway">>;
-status(not_available) -> <<"503 Service Unavailable">>.
+status(not_available) -> <<"503 Service Unavailable">>;
 %status(504) -> <<"504 Gateway Timeout">>;
 %status(505) -> <<"505 HTTP Version Not Supported">>.
+status(_) -> <<"500 Internal Server Error">>.
 
 
 
