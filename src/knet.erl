@@ -26,7 +26,7 @@
 -export([listen/2, listen/3]).
 
 -export([close/1]).% listen/1, listen/2, close/1]).
--export([connect/1, connect/3]).
+-export([connect/2, connect/3]).
 -export([ioctl/2, send/2, recv/1]).
 -export([route/2, ifget/1, ifget/2]).
 -export([size/1]).
@@ -84,14 +84,14 @@ listen(Uri, Mod) ->
 listen({uri, tcp, _}=Uri, Mod, Opts) ->
    % tcp/ip listener
    knet_acceptor_sup:start_link([
-      {knet_tcp, [{accept, uri:get(authority, Uri), Opts}]},
+      {knet_tcp, [{accept, uri:get(authority, Uri)}, Opts]},
       {Mod,      [Opts]}
    ]);
 
 listen({uri, http, _}=Uri, Mod, Opts) ->
    % http listener
    knet_acceptor_sup:start_link([
-      {knet_tcp,   [{accept, uri:get(authority, Uri), Opts}]},
+      {knet_tcp,   [{accept, uri:get(authority, Uri)}, Opts]},
       {knet_httpd, [Opts]},
       {Mod,        [Opts]}
    ]);
@@ -109,7 +109,7 @@ listen({uri, [http, rest], _}=Uri, Mods, Opts) ->
       Mods
    ),
    knet_acceptor_sup:start_link([
-      {knet_tcp,   [{accept, uri:get(authority, Uri), Opts}]},
+      {knet_tcp,   [{accept, uri:get(authority, Uri)}, Opts]},
       {knet_httpd, [Opts]},
       {knet_restd, [[{resource, API}|Opts]]},
       {'|', Resources}
@@ -120,24 +120,34 @@ listen(Uri, Mod, Opts)
    listen(uri:new(Uri), Mod, Opts).
 
 
-
-
-
 %%
 %% connect(Uri, Opts} -> Link
 %%
 %% returns a process that represents a connection to the remote peer
 %% referred to by the Uri
-connect(Spec) ->
-   konduit:start_link({fabric, Spec}).
+connect(Uri, Mod) ->
+   connect(Uri, Mod, []).
 
+connect({uri, tcp, _}=Uri, Mod, Opts) ->
+   konduit:start_link({fabric, [
+      {knet_tcp, [Opts]},
+      {Mod,      [uri:get(authority, Uri), Opts]}
+   ]});
 
-connect(tcp, Peer, Opts) ->
-   {ok, Pid} = konduit:start_link({fabric, [
-      {knet_tcp, [{connect, Peer, Opts}]}
-   ]}),
-   konduit_fabric:attachB(Pid, self()),
-   {ok, Pid}.
+connect({uri, http, _}=Uri, Mod, Opts) ->
+   % http listener
+   konduit:start_link({fabric, [
+      {knet_tcp,   [Opts]},
+      {knet_httpc, [Opts]},
+      {Mod,        [Uri, Opts]}
+   ]}).
+
+%connect(tcp, Peer, Opts) ->
+%   {ok, Pid} = konduit:start_link({fabric, [
+%      {knet_tcp, [{connect, Peer, Opts}]}
+%   ]}),
+%   konduit_fabric:attachB(Pid, self()),
+%   {ok, Pid}.
 
 
 % connect(Uri) ->

@@ -57,21 +57,59 @@
 
 %%
 %%
-init([{connect, _Peer, _Opts}=Msg]) ->
-   {ok, 'CONNECT', init(undefined, Msg), 0};
+init([Sup, {listen,  _Peer}=Msg, Opts]) ->
+   {ok, 'LISTEN', init(Msg, #fsm{sup=Sup, opts=Opts})}; 
 
-init([Sup, {listen,  _Peer, _Opts}=Msg]) ->
-   {ok, 'LISTEN', init(Sup, Msg)}; 
+init([Sup, {accept, _Peer}=Msg, Opts]) ->
+   {ok, 'ACCEPT', init(Msg, #fsm{sup=Sup, opts=Opts}), 0};
 
-init([Sup, {accept, _Peer, _Opts}=Msg]) ->
-   {ok, 'ACCEPT', init(Sup, Msg), 0};
+init([Opts]) ->
+   {ok, 'IDLE', #fsm{opts=Opts}}.
 
-init([Sup, {connect, _Peer, _Opts}=Msg]) ->
-   {ok, 'CONNECT', init(Sup, Msg), 0};
 
-init([Sup]) ->
-   {ok, 'IDLE', #fsm{sup=Sup}}.
+init({accept, Addr}, S)
+ when is_integer(Addr) ->
+   init({accept, {any, Addr}}, S); 
 
+init({accept, Addr}, #fsm{sup=Sup}=S) ->
+   Lpid = knet_acceptor_sup:server(Sup),
+   {ok, [LSock]} = konduit:ioctl(socket, knet_tcp, Lpid),
+   lager:info("tcp/ip accepting ~p (~p)", [Addr, LSock]),
+   S#fsm{
+      role = server,
+      sock = LSock,
+      addr = Addr
+   };
+
+init({listen, Port}, S)
+ when is_integer(Port) ->
+   init({listen, {any, Port}}, S); 
+
+init({listen, {<<>>, Port}}, S)
+ when is_integer(Port) ->
+   init({listen, {any, Port}}, S); 
+
+init({listen, Addr}, #fsm{sup=Sup, opts=Opts}=S) ->
+   % start tcp/ip listener
+   {IP, Port}  = Addr,
+   {ok, LSock} = gen_tcp:listen(Port, [
+      {ip, IP}, 
+      {reuseaddr, true} | opts(Opts, ?TCP_OPTS) ++ ?SO_TCP
+   ]),
+   lager:info("tcp/ip listen on ~p", [Addr]),
+   % spawn acceptor pool
+   Pool = proplists:get_value(acceptor, Opts, ?KO_TCP_ACCEPTOR),
+   spawn_link(
+      fun() ->
+         Factory = knet_acceptor_sup:factory(Sup),
+         [ konduit_sup:spawn(Factory) || _ <- lists:seq(1, Pool) ] 
+      end
+   ),
+   S#fsm{
+      role = server,
+      sock = LSock,
+      addr = Addr
+   }.
 
 
 %%
@@ -98,7 +136,7 @@ ioctl(iostat, #fsm{tconn=Tconn, trecv=Trecv, tsend=Tsend}) ->
       {recv, counter:len(Trecv)},
       {send, counter:len(Tsend)},
       {ttrx, counter:val(Trecv)},
-      {ttwx, counter:val(Tsend)}
+      {ttwx, counter:val(Tsend)}  %time to 
    ];
 ioctl(_, _) ->
    undefined.
@@ -108,10 +146,18 @@ ioctl(_, _) ->
 %%% IDLE: allows to chain tcp/ip konduit
 %%%
 %%%------------------------------------------------------------------
-'IDLE'({accept,  _Peer, _Opts}=Msg, #fsm{sup=Sup}) ->
-   {next_state, 'ACCEPT', init(Sup, Msg), 0};
-'IDLE'({connect, _Peer, _Opts}=Msg, #fsm{sup=Sup}) ->
-   {next_state, 'CONNECT', init(Sup, Msg), 0}.
+%'IDLE'({accept,  _Peer}=Msg, S) ->
+%   {next_state, 'ACCEPT', init(Msg, S), 0};
+
+'IDLE'({connect, Peer}, S) ->
+   {next_state, 
+      'CONNECT',
+      S#fsm{
+         role = client,
+         peer = Peer
+      }, 
+      0
+   }.
 
 %%%------------------------------------------------------------------
 %%%
@@ -250,63 +296,6 @@ ioctl(_, _) ->
 %%% Private
 %%%
 %%%------------------------------------------------------------------
-
-%%
-%% initializes konduit
-init(Sup, {accept, Addr, Opts}) when is_integer(Addr) ->
-   init(Sup, {accept, {any, Addr}, Opts}); 
-
-init(Sup, {accept, Addr, Opts}) ->
-   Lpid = knet_acceptor_sup:server(Sup),
-   {ok, [LSock]} = konduit:ioctl(socket, knet_tcp, Lpid),
-   lager:info("tcp/ip accepting ~p (~p)", [Addr, LSock]),
-   #fsm{
-      role = server,
-      sup  = Sup,
-      sock = LSock,
-      addr = Addr,
-      opts = Opts
-   };
-
-init(Sup, {listen, Port, Opts}) when is_integer(Port) ->
-   init(Sup, {listen, {any, Port}, Opts}); 
-
-init(Sup, {listen, {<<>>, Port}, Opts}) when is_integer(Port) ->
-   init(Sup, {listen, {any, Port}, Opts}); 
-
-init(Sup, {listen, Addr, Opts}) ->
-   % start tcp/ip listener
-   {IP, Port}  = Addr,
-   {ok, LSock} = gen_tcp:listen(Port, [
-      {ip, IP}, 
-      {reuseaddr, true} | opts(Opts, ?TCP_OPTS) ++ ?SO_TCP
-   ]),
-   lager:info("tcp/ip listen on ~p", [Addr]),
-   % spawn acceptor pool
-   Pool = proplists:get_value(acceptor, Opts, ?KO_TCP_ACCEPTOR),
-   spawn_link(
-      fun() ->
-         Factory = knet_acceptor_sup:factory(Sup),
-         [ konduit_sup:spawn(Factory) || _ <- lists:seq(1, Pool) ] 
-      end
-   ),
-   #fsm{
-      role = server,
-      sup  = Sup,
-      sock = LSock,
-      addr = Addr,
-      opts = Opts
-   };
-
-init(Sup, {connect, Peer, Opts}) ->
-   % start tcp/ip client
-   #fsm{
-      role = client,
-      sup  = Sup,
-      peer = Peer,
-      opts = Opts
-   }.
-
 
 %%
 %% check host is format acceptable by gen_tcp

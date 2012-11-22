@@ -2,14 +2,14 @@
 
 %%
 %% konduit api
--export([init/1, free/2, ioctl/2, 'ECHO'/2]).
+-export([init/1, free/2, ioctl/2, 'IDLE'/2, 'ECHO'/2]).
 
 %%
 %%
-init(_) ->
-   lager:info("echo ~p: client", [self()]),
+init([Peer, _]) ->
+   lager:info("echo ~p: client ~p", [self(), Peer]),
    random:seed(erlang:now()),
-   {ok, 'ECHO', undefined}.
+   {ok, 'IDLE', Peer, 0}.
 
 %%
 %%
@@ -23,24 +23,34 @@ ioctl(_, _) ->
 
 %%
 %%
-'ECHO'({tcp, Peer, established}, S) ->
+'IDLE'(timeout, Peer) ->
+   {reply,
+      {connect, Peer},
+      'IDLE',
+      Peer
+   };
+
+'IDLE'({tcp, Peer, established}, S) ->
    lager:info("echo ~p: established ~p", [self(), Peer]),
    {reply, 
       {send, Peer, message()}, 
       'ECHO', 
       S
-   };
+   }.
 
+%%
+%%
 'ECHO'({tcp, Peer, Msg}, S) when is_binary(Msg) ->
    lager:info("echo ~p: data ~p ~p", [self(), Peer, Msg]),
    {reply, 
-      {send, Peer, message()}, 
+      {send, Peer, <<"exit\r\n">>}, 
       'ECHO',            
 		S
    };
 
-'ECHO'(_, S) ->
-   {next_state, 'ECHO', S}.
+'ECHO'({tcp, Peer, terminated}, S) ->
+   lager:info("echo ~p: terminated ~p", [self(), Peer]),
+   {stop, normal, S}.
 
 
 message() ->

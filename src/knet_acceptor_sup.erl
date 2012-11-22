@@ -23,9 +23,9 @@ start_link([{Prot, Opts} | Tail]) ->
       transient, 1000, worker, dynamic
    }),
    % define port listener
-   [{_, Peer, Req}] = Opts, 
+   [{_, Peer}, Req] = Opts, 
    Listen = {fabric, [
-      {Prot, [Sup, {listen, Peer, Req}]}
+      {Prot, [Sup, {listen, Peer}, Req]}
    ]},
    {ok, _} = supervisor:start_child(Sup, {
       listen,
