@@ -54,10 +54,6 @@
    chunk    % chunk size to be transmitted to client
 }).
 
-
-%
--define(BUF_LEN,   19264). % length of http i/o buffer
-
 %%%------------------------------------------------------------------
 %%%
 %%% Factory
@@ -69,7 +65,7 @@ init([Opts]) ->
       #fsm{
          lib  = httpd_id(Opts),
          % length of http chunk transmitted to client
-         chunk= proplists:get_value(chunk, Opts, ?BUF_LEN), 
+         chunk= proplists:get_value(chunk, Opts, ?KO_HTTP_MSG_LEN), 
          % default headers, attached to each response
          heads= proplists:get_value(heads, Opts, [])
       }
@@ -472,8 +468,8 @@ response(Code, Heads, #fsm{lib=Lib, heads=Heads0}) ->
 %% return version of http server
 httpd_id(Opts) ->
    case lists:keyfind(server, 1, Opts) of
-      false      -> default_httpd_id();
-      {_, Httpd} -> Httpd
+      false    -> default_httpd_id();
+      {_, Val} -> Val
    end.
 
 default_httpd_id() ->

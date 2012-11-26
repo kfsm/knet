@@ -146,9 +146,6 @@ ioctl(_, _) ->
 %%% IDLE: allows to chain tcp/ip konduit
 %%%
 %%%------------------------------------------------------------------
-%'IDLE'({accept,  _Peer}=Msg, S) ->
-%   {next_state, 'ACCEPT', init(Msg, S), 0};
-
 'IDLE'({connect, Peer}, S) ->
    {next_state, 
       'CONNECT',
