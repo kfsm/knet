@@ -181,6 +181,13 @@ parse_header(#fsm{buffer=Buffer}=S) ->
       {Req, Chunk}     -> parse_header(Req, S#fsm{buffer=Chunk})
    end.
 
+parse_header({'Host', Host}=Head, #fsm{request={http, Uri, {Mthd, Heads}}}=S) ->
+   parse_header(
+      S#fsm{
+         request = {http, uri:set(authority, Host, Uri), {Mthd, [Head | Heads]}}
+      }
+   );
+
 parse_header({'Content-Length', Len}=Head, #fsm{request={http, Uri, {Mthd, Heads}}}=S) ->
    parse_header(
       S#fsm{
