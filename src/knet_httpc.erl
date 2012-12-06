@@ -217,6 +217,13 @@ parse_status_line({http_response, _Vsn, Code, _Msg}, #fsm{request={_, Uri, _}}=S
       }
    );
 
+parse_status_line({http_response, _Vsn, Code, _Msg}, #fsm{request={_, Uri, _, _}}=S) ->
+   parse_header(
+      S#fsm{
+         response={http, Uri, {Code, []}}
+      }
+   );
+
 parse_status_line({http_error, Msg}, S) ->
    {stop, Msg, S}.
 
@@ -444,11 +451,11 @@ request({Mthd, Uri, Heads, Msg},  #fsm{ua=UA, heads=Heads0}) ->
       Uri, 
       check_head_ua(UA, Heads ++ Heads0)
    ),
-   knet_http:encode_req(
+   [knet_http:encode_req(
       Mthd,
       uri:to_binary(Uri),
       [{'Content-Length', knet:size(Msg)} | HD]
-   ).
+   ), Msg].
 
 
 %%
