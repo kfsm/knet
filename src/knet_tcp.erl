@@ -132,11 +132,11 @@ ioctl(address,#fsm{addr=Addr, peer=Peer}) ->
    {Addr, Peer};   
 ioctl(iostat, #fsm{tconn=Tconn, trecv=Trecv, tsend=Tsend}) ->
    [
-      {tcp,  Tconn},
-      {recv, counter:len(Trecv)},
-      {send, counter:len(Tsend)},
-      {ttrx, counter:val(Trecv)},
-      {ttwx, counter:val(Tsend)}  %time to 
+      {tcp,  Tconn},              % time to establish tcp
+      {recv, counter:len(Trecv)}, % number of received tcp data chunks 
+      {send, counter:len(Tsend)}, % number of sent tcp data chunks 
+      {ttrx, counter:val(Trecv)}, % mean time to receive chunk
+      {ttwx, counter:val(Tsend)}  % mean time to send chunk
    ];
 ioctl(_, _) ->
    undefined.
@@ -146,9 +146,6 @@ ioctl(_, _) ->
 %%% IDLE: allows to chain tcp/ip konduit
 %%%
 %%%------------------------------------------------------------------
-%'IDLE'({accept,  _Peer}=Msg, S) ->
-%   {next_state, 'ACCEPT', init(Msg, S), 0};
-
 'IDLE'({connect, Peer}, S) ->
    {next_state, 
       'CONNECT',

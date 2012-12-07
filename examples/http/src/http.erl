@@ -24,6 +24,6 @@ server(Port) ->
    start(),
    http_sup:server(Port).
 
-client(Peer) ->
+client(Uri) ->
    start(),
-   http_sup:client(Peer).
+   knet:connect(uri:new(Uri), http_client).

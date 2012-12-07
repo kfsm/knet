@@ -6,10 +6,10 @@
 
 %%
 %%
-init([Peer]) ->
-   lager:info("echo ~p: client", [self()]),
+init([Uri, _]) ->
+   lager:info("echo ~p: http client", [self()]),
    random:seed(erlang:now()),
-   {ok, 'ECHO', Peer, 0}.
+   {ok, 'ECHO', Uri, 0}.
 
 %%
 %%
@@ -23,35 +23,33 @@ ioctl(_, _) ->
 
 %%
 %%
-'ECHO'(timeout, Peer) ->
-   lager:info("echo ~p: request ~p", [self(), Peer]),   
+'ECHO'(timeout, S) ->
+   lager:info("echo ~p: GET ~p", [self(), uri:to_binary(S)]),   
    {reply,
-      {'GET', uri:set(authority, Peer, uri:new("http:///resource")), []},
+      {'GET', S, []},
       'ECHO',
-      Peer
+      S
    };
 
-'ECHO'({http, Uri, {Code, Head}}, S) ->
-   lager:info("echo ~p: ~p code ~p", [self(), Uri, Code]),
+'ECHO'({http, Uri, {Code, Heads}}, S) ->
+   lager:info("echo ~p: status ~p", [self(), Code]),
+   lists:map(
+      fun(X) -> lager:info("   ~p", [X]) end,
+      Heads
+   ),
    {next_state, 'ECHO', S};
 
 'ECHO'({http, Uri, Msg}, S) when is_binary(Msg) ->
-   lager:info("echo ~p: data ~p ~p", [self(), Uri, Msg]),
+   lager:info("echo ~p: data ~p", [self(), uri:to_binary(Uri)]),
+   lager:info("~p", [Msg]),
    {next_state, 'ECHO', S};
 
-'ECHO'({http, Uri, eof}, Peer) ->   
-  %  {reply, 
-  %     {'GET', uri:set(authority, Peer, uri:new("http:///resource")), []},
-  %     'ECHO',            
-		% Peer
-  %  };
-  {next_state, 'ECHO', Peer, 0};
-
-'ECHO'(M, S) ->
-   lager:error("---> ~p", [M]),
-   {next_state, 'ECHO', S}.
+'ECHO'({http, Uri, eof}, S) ->   
+  {stop, normal, S}.
 
 
-message() ->
-   Size = random:uniform(2048) + 1,
-   << <<($A + random:uniform(26)):8>> || <<_:1>> <= <<0:Size>> >>.
+
+%message() ->
+%   Size = random:uniform(2048) + 1,
+%   << <<($A + random:uniform(26)):8>> || <<_:1>> <= <<0:Size>> >>.
+

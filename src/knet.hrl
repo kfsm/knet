@@ -30,7 +30,8 @@
 ]).
 
 %% list of default konduit options
--define(KO_TCP_ACCEPTOR,       2).
+-define(KO_TCP_ACCEPTOR,       2). % number of tcp acceptors
+-define(KO_HTTP_MSG_LEN,   19264). % length of http msg returned to client
 
 %% white list of socket options acceptable by konduits
 -define(UDP_OPTS, [broadcast, delay_send, dontroute, read_packets, recbuf, sndbuf]).

@@ -243,7 +243,7 @@ check_uri({absoluteURI, Scheme, Host, Port, Path}) ->
    );
 
 check_uri({abs_path, Path}) ->  
-   uri:new(Path); %TODO: ssl support
+   uri:set(schema, http, uri:new(Path)); %TODO: ssl support
 
 check_uri('*') ->
    throw({http_error, 501});
