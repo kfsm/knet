@@ -114,7 +114,7 @@ ioctl(_,_) ->
    case pns:whereis(knet, {iid(Inet), peer, Peer}) of
       % unknown peer, relay message up chain
       undefined -> 
-         lager:debug("udp: unknown peer ~p~n", [{Peer, Port}]),
+         ?DEBUG("udp: unknown peer ~p~n", [{Peer, Port}]),
          {emit, {udp, {Peer, Port}, {recv, Pckt}}, 'LISTEN', S};
       % known peer, relay message to it
       Pid       -> 
@@ -131,7 +131,7 @@ ioctl(_,_) ->
    {next_state, 'LISTEN', S};
 
 'LISTEN'({send, {IP, Port}=Peer, Pckt}, #fsm{sock=Sock, tsend=Cnt}=S) ->
-   lager:debug("udp send ~p~n~p~n", [Peer, Pckt]),
+   ?DEBUG("udp send ~p~n~p~n", [Peer, Pckt]),
    case gen_udp:send(Sock, IP, Port, Pckt) of
       ok ->
          {next_state, 'LISTEN', S#fsm{tsend=counter:add(now, Cnt)}};
@@ -152,7 +152,7 @@ ioctl(_,_) ->
 %%%------------------------------------------------------------------
 
 'ACTIVE'({send, {IP, Port}=Peer, Pckt}, #fsm{sock=Sock, tsend=Cnt}=S) ->
-   lager:debug("udp send ~p~n~p~n", [Peer, Pckt]),
+   ?DEBUG("udp send ~p~n~p~n", [Peer, Pckt]),
    case gen_udp:send(Sock, IP, Port, Pckt) of
    	ok ->
    	   {next_state, 'ACTIVE', S#fsm{tsend=counter:add(now, Cnt)}};
@@ -168,7 +168,7 @@ ioctl(_,_) ->
 
 'ACTIVE'({udp, _, IP, Port, Pckt}, #fsm{sock=Sock, trecv=Cnt}=S) ->
    % packet is received from udp socket
-   lager:debug("udp recv ~p~n~p~n", [{IP, Port}, Pckt]),
+   ?DEBUG("udp recv ~p~n~p~n", [{IP, Port}, Pckt]),
    % TODO: flexible flow control
    inet:setopts(Sock, [{active, once}]),
    {emit,
@@ -179,7 +179,7 @@ ioctl(_,_) ->
 
 'ACTIVE'({udp, Peer, Pckt}=Msg, #fsm{trecv=Cnt}=S) ->
    % packet is realyed by udp listener
-   lager:debug("udp recv ~p~n~p~n", [Peer, Pckt]),
+   ?DEBUG("udp recv ~p~n~p~n", [Peer, Pckt]),
    {emit, Msg, 'ACTIVE',
       S#fsm{trecv=counter:add(now, Cnt)}
    }.

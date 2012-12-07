@@ -216,7 +216,7 @@ ioctl(_, _) ->
    };
 
 'ESTABLISHED'({ssl, _, Data}, #fsm{peer=Peer, trecv=Cnt}=S) ->
-   lager:debug("ssl recv ~p~n~p~n", [Peer, Data]),
+   ?DEBUG("ssl recv ~p~n~p~n", [Peer, Data]),
    % TODO: flexible flow control
    ssl:setopts(S#fsm.sock, [{active, once}]),
    {emit, 
@@ -227,7 +227,7 @@ ioctl(_, _) ->
    
 
 'ESTABLISHED'({send, _Peer, Data}, #fsm{peer=Peer, tsend=Cnt}=S) ->
-   lager:debug("ssl send ~p~n~p~n", [Peer, Data]),
+   ?DEBUG("ssl send ~p~n~p~n", [Peer, Data]),
    case ssl:send(S#fsm.sock, Data) of
       ok ->
          {next_state, 'ESTABLISHED', S#fsm{tsend=counter:add(now, Cnt)}};

@@ -15,6 +15,9 @@
 %%   limitations under the License.
 %%
 
+%-define(DEBUG(Str, Args), lager:debug(Str, Args)).
+-define(DEBUG(Str, Args), ok).
+
 %% list of default default socket options
 -define(SO_TCP, [
    {active, once}, 

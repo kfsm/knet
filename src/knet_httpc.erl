@@ -46,12 +46,12 @@
 -record(fsm, {
    % transport
    prot,    % transport protocol
-   peer,    % transport protocol peer
+   peer,    % remote peer
 
    % request/response
    request, % active request   #req
    response,% active response  #rsp
-   iolen,   % expected length of data
+   iolen,   % expected length of entity
    buffer,  % I/O buffer
 
    % options
@@ -73,6 +73,8 @@
 %%% Factory
 %%%
 %%%------------------------------------------------------------------   
+%init([{Mthd, Uri, Heads}])
+
 init([Opts]) ->
    {ok,
       'IDLE',

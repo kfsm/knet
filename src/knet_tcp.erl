@@ -258,7 +258,7 @@ ioctl(_, _) ->
    };
 
 'ESTABLISHED'({tcp, _, Data}, #fsm{peer=Peer, trecv=Cnt}=S) ->
-   lager:debug("tcp/ip recv ~p~n~p~n", [Peer, Data]),
+   ?DEBUG("tcp/ip recv ~p~n~p~n", [Peer, Data]),
    % TODO: flexible flow control
    inet:setopts(S#fsm.sock, [{active, once}]),
    {emit, 
@@ -268,7 +268,7 @@ ioctl(_, _) ->
    };
    
 'ESTABLISHED'({send, _Peer, Data}, #fsm{peer=Peer, tsend=Cnt}=S) ->
-   lager:debug("tcp/ip send ~p~n~p~n", [Peer, Data]),
+   ?DEBUG("tcp/ip send ~p~n~p~n", [Peer, Data]),
    case gen_tcp:send(S#fsm.sock, Data) of
       ok ->
          {next_state, 'ESTABLISHED', S#fsm{tsend=counter:add(now, Cnt)}};
