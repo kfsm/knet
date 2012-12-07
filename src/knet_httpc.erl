@@ -160,6 +160,10 @@ ioctl(_, _) ->
 %%% ACTIVE
 %%%
 %%%------------------------------------------------------------------   
+'ACTIVE'(timeout, S) ->
+   % temporary hack here to control message timeout
+   {next_state, 'ACTIVE', S};
+
 'ACTIVE'({Prot, _Peer, terminated}, #fsm{prot=P}=S)
  when Prot =:= P ->
    {stop, normal, S};
@@ -293,7 +297,7 @@ parse_header(eoh, #fsm{response=Rsp, thttp=Thttp, trecv=Trecv}=S) ->
          thttp = counter:add(idle, Thttp),
          trecv = counter:add(now,  Trecv)
       }, 
-      0
+      0 % sometimes timeout is arrived later then data packet
    }.
 
 %%%------------------------------------------------------------------
@@ -334,7 +338,7 @@ parse_payload(#fsm{response={http, Uri, _}, iolen=Len, chunk=Clen, buffer=Buffer
          <<Chunk:Len/binary, Rest/binary>> = Buffer,
          {emit,
             [{http, Uri, Chunk}, {http, Uri, eof}],
-            'IO',
+            'ACTIVE',
             S#fsm{
                buffer = Rest
             }
@@ -368,7 +372,7 @@ parse_chunk(#fsm{response={http, Uri, _}, iolen=chunk, buffer=Buffer}=S) ->
          if 
             % this is last chunk
             Len =:= 0 -> 
-               {emit, {http, Uri, eof}, 'IO', S};
+               {emit, {http, Uri, eof}, 'ACTIVE', S};
             % this is interim chunk   
             true      ->
                parse_chunk(S#fsm{iolen=Len, buffer=Data})
