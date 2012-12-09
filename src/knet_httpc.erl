@@ -24,7 +24,7 @@
 -include("knet.hrl").
 
 %%
-%%
+%% TODO: fix request URI with/without proxy
 -export([init/1, free/2, ioctl/2]).
 -export([
    'IDLE'/2,       %% idle
@@ -447,35 +447,29 @@ http_peer(_Uri, Proxy) ->
    Proxy.
 
 %%
-%% create a http request 
-request({Mthd, Uri, Heads}, #fsm{ua=UA, heads=Heads0}) ->
-   HD = check_head_host(Uri, check_head_ua(UA, Heads ++ Heads0)),
-   knet_http:encode_req(Mthd, uri:to_binary(Uri), HD); 
+%%
+http_uri(Uri, undefined) ->
+   uri:get(path, Uri);
 
-request({Mthd, Uri, Heads, Msg},  #fsm{ua=UA, heads=Heads0}) ->
+http_uri(Uri, _) ->    
+   uri:to_binary(Uri).
+
+%%
+%% create a http request 
+request({Mthd, Uri, Heads}, #fsm{proxy=Proxy, ua=UA, heads=Heads0}) ->
+   HD = check_head_host(Uri, check_head_ua(UA, Heads ++ Heads0)),
+   knet_http:encode_req(Mthd, http_uri(Uri, Proxy), HD); 
+
+request({Mthd, Uri, Heads, Msg},  #fsm{proxy=Proxy, ua=UA, heads=Heads0}) ->
    HD = check_head_host(
       Uri, 
       check_head_ua(UA, Heads ++ Heads0)
    ),
    [knet_http:encode_req(
       Mthd,
-      uri:to_binary(Uri),
+      http_uri(Uri, Proxy),
       [{'Content-Length', knet:size(Msg)} | HD]
    ), Msg].
-
-
-%%
-%%
-resource(Uri, Opts) ->
-   case lists:keyfind(proxy, 1, Opts) of
-      false           -> uri:get(path, Uri);
-      {proxy, _Proxy} -> Uri
-   end.
-
-%%
-%%
-btoi(X) ->
-   list_to_integer(binary_to_list(X)).
 
 
 
