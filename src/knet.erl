@@ -23,6 +23,7 @@
 -include("knet.hrl").
 
 -export([start/0, stop/0]).
+-export([new/1, new/2]).
 -export([listen/2, listen/3]).
 
 -export([close/1]).% listen/1, listen/2, close/1]).
@@ -74,6 +75,28 @@ size(Data)
 %%% 
 %%%
 %%%------------------------------------------------------------------
+
+
+%%
+%% return a knet peer connector
+new(Iid) ->
+   new(Iid, []).
+
+new(tcp, Opts) ->
+   {ok, Pid} = konduit:start_link({fabric, [
+      {knet_tcp,   [Opts]}
+   ]}),
+   konduit_fabric:linkB(Pid, self()),
+   {ok, Pid};
+
+new(http, Opts) ->
+   {ok, Pid} = konduit:start_link({fabric, [
+      {knet_tcp,   [Opts]},
+      {knet_httpc, [Opts]}
+   ]}),
+   konduit_fabric:linkB(Pid, self()),
+   {ok, Pid}.
+
 
 %%
 %% listen(Uri, Mod, Opts) -> {ok, Pid}
@@ -140,14 +163,13 @@ connect({uri, http, _}=Uri, Mod, Opts) ->
       {knet_tcp,   [Opts]},
       {knet_httpc, [Opts]},
       {Mod,        [Uri, Opts]}
-   ]}).
+   ]});
 
-%connect(tcp, Peer, Opts) ->
-%   {ok, Pid} = konduit:start_link({fabric, [
-%      {knet_tcp, [{connect, Peer, Opts}]}
-%   ]}),
-%   konduit_fabric:attachB(Pid, self()),
-%   {ok, Pid}.
+connect(Uri, Mod, Opts)
+ when is_binary(Uri) orelse is_list(Uri) ->
+   connect(uri:new(Uri), Mod, Opts).
+
+
 
 
 % connect(Uri) ->
