@@ -1,0 +1,23 @@
+{application, udp,
+   [
+      {description, "knet udp example application"},
+      {vsn,         "0.1.0"},
+      {modules,     [
+         udp,
+         udp_sup,
+         udp_app
+      ]},
+      {registered,  []},
+      {applications,[
+         kernel,
+         stdlib,
+         compiler,
+         syntax_tools,
+         lager,
+         konduit,
+         knet
+      ]},
+      {mod, {udp_app, []}},
+      {env, []}
+   ]
+}.  

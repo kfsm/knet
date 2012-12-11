@@ -35,7 +35,7 @@
 
 %% internal state
 -record(fsm, {
-   role  :: client | server,
+   role  :: client | server, % @depricated
    sup,    % supervisor of konduit hierarchy
 
    tconn,  % time to connect
@@ -96,7 +96,7 @@ init({listen, Addr}, #fsm{sup=Sup, opts=Opts}=S) ->
       {ip, IP}, 
       {reuseaddr, true} | opts(Opts, ?TCP_OPTS) ++ ?SO_TCP
    ]),
-   lager:info("tcp/ip listen on ~p", [Addr]),
+   lager:info("tcp listen on ~p", [Addr]),
    % spawn acceptor pool
    Pool = proplists:get_value(acceptor, Opts, ?KO_TCP_ACCEPTOR),
    spawn_link(
