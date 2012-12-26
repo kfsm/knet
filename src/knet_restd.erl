@@ -186,24 +186,25 @@ check_method(Requested, Allowed) ->
       true  -> ok
    end.
 
-%%
+
 %% check_content_type(Expected, Supported) -> Tag
-check_content_type(Expected, [Supported|T]) ->
+check_content_type([Expected|T], Supported) ->
    case check_type(Expected, Supported) of
-      false -> check_content_type(Expected, T);
+      false -> check_content_type(T, Supported);
       Tag   -> Tag
    end;
 
-check_content_type(_, []) ->
+check_content_type([], _) ->
    throw({error, not_acceptable}).
 
-check_type([Expected|T], {_, Supported}=Type) ->
+check_type(Expected, [{_, Supported}=Type|T]) ->
+   %lager:error("check: ~p  ~p", [Expected, Supported]),
    case mime:match(Expected, Supported) of
       true  -> Type;
-      false -> check_type(T, Type)
+      false -> check_type(Expected, T)
    end;
 
-check_type([], _) ->
+check_type(_, []) ->
    false;
 
 check_type(Expected, {_, Supported}=Type) ->
