@@ -331,13 +331,13 @@ parse_data(#fsm{chunked=true}=S) ->
 parse_data(#fsm{chunked=false}=S) ->
    parse_payload(S).
 
-parse_payload(#fsm{response={http, Uri, _}, iolen=Len, chunk=Clen, buffer=Buffer}=S) ->
+parse_payload(#fsm{response={http, Uri, {Code, _}}, iolen=Len, chunk=Clen, buffer=Buffer}=S) ->
    case size(Buffer) of
       % eof is reached, received buffers exceed expected payload
       Size when Size >= Len ->
          <<Chunk:Len/binary, Rest/binary>> = Buffer,
          {emit,
-            [{http, Uri, Chunk}, {http, Uri, eof}],
+            [{http, Uri, Chunk}, {http, Uri, {eof, Code}}],
             'ACTIVE',
             S#fsm{
                buffer = Rest
@@ -360,7 +360,7 @@ parse_payload(#fsm{response={http, Uri, _}, iolen=Len, chunk=Clen, buffer=Buffer
 
 %%
 %%
-parse_chunk(#fsm{response={http, Uri, _}, iolen=chunk, buffer=Buffer}=S) ->
+parse_chunk(#fsm{response={http, Uri, {Code, _}}, iolen=chunk, buffer=Buffer}=S) ->
    case binary:split(Buffer, <<"\r\n">>) of  
       % chunk header is not received
       [_]          -> 
@@ -372,7 +372,7 @@ parse_chunk(#fsm{response={http, Uri, _}, iolen=chunk, buffer=Buffer}=S) ->
          if 
             % this is last chunk
             Len =:= 0 -> 
-               {emit, {http, Uri, eof}, 'ACTIVE', S};
+               {emit, {http, Uri, {eof, Code}}, 'ACTIVE', S};
             % this is interim chunk   
             true      ->
                parse_chunk(S#fsm{iolen=Len, buffer=Data})

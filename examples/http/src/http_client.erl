@@ -31,6 +31,9 @@ ioctl(_, _) ->
       S
    };
 
+'ECHO'({http, Uri, {eof, _}}, S) ->   
+  {stop, normal, S};
+
 'ECHO'({http, Uri, {Code, Heads}}, S) ->
    lager:info("echo ~p: status ~p", [self(), Code]),
    lists:map(
@@ -42,10 +45,8 @@ ioctl(_, _) ->
 'ECHO'({http, Uri, Msg}, S) when is_binary(Msg) ->
    lager:info("echo ~p: data ~p", [self(), uri:to_binary(Uri)]),
    lager:info("~p", [Msg]),
-   {next_state, 'ECHO', S};
+   {next_state, 'ECHO', S}.
 
-'ECHO'({http, Uri, eof}, S) ->   
-  {stop, normal, S}.
 
 
 
