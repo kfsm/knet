@@ -11,7 +11,7 @@
 %%
 %% start_link(Spec) -> {ok, Pid}
 %%
-start_link([{Prot, Opts} | Tail]) ->
+start_link([{Prot, Opts} | Tail]=LL) ->
    {ok, Sup} = supervisor:start_link(?MODULE, []),
    % define acceptor factory, supervisor Pid injected into protocol options
    Acceptor  = {fabric, [
@@ -19,8 +19,8 @@ start_link([{Prot, Opts} | Tail]) ->
    ]},
    {ok, _} = supervisor:start_child(Sup, {
       factory,
-      {konduit_sup, start_link, [Acceptor]},
-      transient, 1000, worker, dynamic
+      {konduit_sup, start_link, [temporary, Acceptor]},
+      permanent, 1000, supervisor, dynamic
    }),
    % define port listener
    [{_, Peer}, Req] = Opts, 
