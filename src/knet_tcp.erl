@@ -212,11 +212,11 @@ ioctl(_, _) ->
    % accept a socket
    case gen_tcp:accept(LSock) of
       {ok, Sock} ->
+         % acceptor is consumed, spawn a new one
+         konduit_sup:spawn(knet_acceptor_sup:factory(Sup)),
          {ok, Peer} = inet:peername(Sock),
          {ok, Addr} = inet:sockname(Sock),
          lager:info("tcp/ip accepted ~p, local addr ~p", [Peer, Addr]),
-         % acceptor is consumed, spawn a new one
-         konduit_sup:spawn(knet_acceptor_sup:factory(Sup)),
          {emit, 
             {tcp, Peer, established},
             'ESTABLISHED', 
@@ -230,6 +230,8 @@ ioctl(_, _) ->
             } 
          };
       {error, Reason} ->
+         % acceptor is consumed, spawn a new one
+         konduit_sup:spawn(knet_acceptor_sup:factory(Sup)),
          {stop, Reason, S}
    end.
    
