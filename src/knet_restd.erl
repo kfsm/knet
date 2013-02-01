@@ -66,7 +66,7 @@ request(Uid, Mod, {http, Uri, {Mthd, Heads}}, S)
  when Mthd =:= 'POST' orelse Mthd =:= 'PUT' ->
    {Ref, Content} = check_content_type(
       [head('Content-Type', Heads)],  % TODO: ugly fix, re-do content match policy
-      Mod:content_types_provided(Uid)
+      Mod:content_types_accepted(Uid)
    ),
    {next_state, 
       'INPUT', 
