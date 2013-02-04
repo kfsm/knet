@@ -94,8 +94,11 @@ init({listen, Addr}, #fsm{sup=Sup, opts=Opts}=S) ->
    {IP, Port}  = Addr,
    {ok, LSock} = gen_tcp:listen(Port, [
       {ip, IP}, 
-      {reuseaddr, true} | opts(Opts, ?TCP_OPTS) ++ ?SO_TCP
+      %{reuseaddr, true} | opts(Opts, ?TCP_OPTS) ++ ?SO_TCP
+      binary, {active, false}, {packet, raw},
+         {reuseaddr, true}, {nodelay, true}
    ]),
+   
    lager:info("tcp listen on ~p", [Addr]),
    % spawn acceptor pool
    Pool = proplists:get_value(acceptor, Opts, ?KO_TCP_ACCEPTOR),
@@ -210,6 +213,8 @@ ioctl(_, _) ->
 %%%------------------------------------------------------------------
 'ACCEPT'(timeout, #fsm{sock=LSock, sup=Sup}=S) ->
    % accept a socket
+   Lpid = knet_acceptor_sup:server(Sup),
+   {ok, [LLL]} = konduit:ioctl(socket, knet_tcp, Lpid),
    case gen_tcp:accept(LSock) of
       {ok, Sock} ->
          % acceptor is consumed, spawn a new one
