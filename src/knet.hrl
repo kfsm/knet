@@ -19,10 +19,7 @@
 -define(DEBUG(Str, Args), ok).
 
 %% list of default default socket options
--define(SO_TCP, [
-   {active, once}, 
-   {mode, binary} 
-]).
+-define(SO_TCP, [binary, {active, once}, {packet, raw},  {nodelay, true}]). 
 
 -define(SO_UDP, [
    {active, once}, 
@@ -35,8 +32,8 @@
 -define(KO_HTTP_MSG_LEN,   19264). % length of http msg returned to client
 
 %% white list of socket options acceptable by konduits
--define(UDP_OPTS, [broadcast, delay_send, dontroute, read_packets, recbuf, sndbuf]).
--define(TCP_OPTS, [delay_send, nodelay, dontroute, keepalive, packet, packet_size, recbuf, send_timeout, sndbuf]).
+-define(UDP_OPTS, [broadcast, delay_send, dontroute, read_packets, recbuf, sndbuf, binary]).
+-define(TCP_OPTS, [delay_send, nodelay, dontroute, keepalive, packet, packet_size, recbuf, send_timeout, sndbuf, binary, active]).
 -define(SSL_OPTS, [verify, verify_fun, fail_if_no_peer_cert, depth, cert, certfile, key, keyfile, password, cacert, cacertfile, ciphers]).
 
 %% default timers

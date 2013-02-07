@@ -26,5 +26,7 @@ server(Port) ->
 
 client(Peer) ->
    start(),
-   Uri = uri:set(authority, Peer, uri:new(tcp)),
-   knet:connect(Uri, tcp_client).
+   knet_start:connect([
+      {knet_tcp,   []},
+      {tcp_client, [Peer]}
+   ]).

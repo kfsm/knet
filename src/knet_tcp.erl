@@ -35,12 +35,12 @@
 
 %% internal state
 -record(fsm, {
-   role  :: client | server, % @depricated
    sup,    % supervisor of konduit hierarchy
 
-   tconn,  % time to connect
-   trecv,  % inter packet arrival time 
-   tsend,  % inter packet transmission time
+   % TODO: move to adb
+   % tconn,  % time to connect
+   % trecv,  % inter packet arrival time 
+   % tsend,  % inter packet transmission time
 
    inet,   % inet family
    sock,   % tcp/ip socket
@@ -57,63 +57,45 @@
 
 %%
 %%
-init([Sup, {listen,  _Peer}=Msg, Opts]) ->
-   {ok, 'LISTEN', init(Msg, #fsm{sup=Sup, opts=Opts})}; 
+init([listen, Sup | Opts]) ->
+   {ok, 'LISTEN', listen(#fsm{sup=Sup, opts=Opts})}; 
 
-init([Sup, {accept, _Peer}=Msg, Opts]) ->
-   {ok, 'ACCEPT', init(Msg, #fsm{sup=Sup, opts=Opts}), 0};
+init([accept, Sup | Opts]) ->
+   {ok, 'ACCEPT', accept(#fsm{sup=Sup, opts=Opts}), 0};
 
-init([Opts]) ->
+init(Opts) ->
    {ok, 'IDLE', #fsm{opts=Opts}}.
 
-
-init({accept, Addr}, S)
- when is_integer(Addr) ->
-   init({accept, {any, Addr}}, S); 
-
-init({accept, Addr}, #fsm{sup=Sup}=S) ->
-   Lpid = knet_acceptor_sup:server(Sup),
-   {ok, [LSock]} = konduit:ioctl(socket, knet_tcp, Lpid),
-   lager:info("tcp/ip accepting ~p (~p)", [Addr, LSock]),
+%%
+accept(#fsm{sup=Sup, opts=Opts}=S) ->
+   {ok, [LSock]} = konduit:ioctl(socket, knet_tcp, knet:listener(Sup)),
+   Addr = addr(opts:val(addr, Opts)),
+   lager:info("tcp/ip accepting ~p (pid ~p, sock ~p)", [Addr, self(), LSock]),
    S#fsm{
-      role = server,
-      sock = LSock,
-      addr = Addr
-   };
-
-init({listen, Port}, S)
- when is_integer(Port) ->
-   init({listen, {any, Port}}, S); 
-
-init({listen, {<<>>, Port}}, S)
- when is_integer(Port) ->
-   init({listen, {any, Port}}, S); 
-
-init({listen, Addr}, #fsm{sup=Sup, opts=Opts}=S) ->
-   % start tcp/ip listener
-   {IP, Port}  = Addr,
-   {ok, LSock} = gen_tcp:listen(Port, [
-      {ip, IP}, 
-      %{reuseaddr, true} | opts(Opts, ?TCP_OPTS) ++ ?SO_TCP
-      binary, {active, false}, {packet, raw},
-         {reuseaddr, true}, {nodelay, true}
-   ]),
-   
-   lager:info("tcp listen on ~p", [Addr]),
-   % spawn acceptor pool
-   Pool = proplists:get_value(acceptor, Opts, ?KO_TCP_ACCEPTOR),
-   spawn_link(
-      fun() ->
-         Factory = knet_acceptor_sup:factory(Sup),
-         [ konduit_sup:spawn(Factory) || _ <- lists:seq(1, Pool) ] 
-      end
-   ),
-   S#fsm{
-      role = server,
       sock = LSock,
       addr = Addr
    }.
 
+%%
+listen(#fsm{sup=Sup, opts=Opts}=S) ->
+   % start tcp/ip listener
+   {IP, Port}  = addr(opts:val(addr, Opts)),
+   {ok, LSock} = gen_tcp:listen(Port, 
+      [{active, false}, {reuseaddr, true} | opts:filter(lists:delete(active, ?TCP_OPTS), Opts ++ ?SO_TCP)]
+   ),   
+   lager:info("tcp listen on ~p (pid ~p)", [{IP, Port}, self()]),
+   % spawn acceptor pool
+   Pool = proplists:get_value(acceptor, Opts, ?KO_TCP_ACCEPTOR),
+   spawn_link(
+      fun() ->
+         ASup = knet:acceptor(Sup),
+         [ supervisor:start_child(ASup, []) || _ <- lists:seq(1, Pool) ] 
+      end
+   ),
+   S#fsm{
+      sock = LSock,
+      addr = addr(opts:val(addr, Opts))
+   }.
 
 %%
 %%
@@ -123,7 +105,7 @@ free(Reason, S) ->
          % socket is not active
          ok;
       _ ->
-         lager:info("tcp/ip terminated ~p, reason ~p", [S#fsm.peer, Reason]),
+         lager:info("tcp/ip terminated ~p (pid ~p), reason ~p", [S#fsm.peer, self(), Reason]),
          gen_tcp:close(S#fsm.sock)
    end.
 
@@ -133,14 +115,14 @@ ioctl(socket, #fsm{sock=Sock}) ->
    Sock;
 ioctl(address,#fsm{addr=Addr, peer=Peer}) ->
    {Addr, Peer};   
-ioctl(iostat, #fsm{tconn=Tconn, trecv=Trecv, tsend=Tsend}) ->
-   [
-      {tcp,  Tconn},              % time to establish tcp
-      {recv, counter:len(Trecv)}, % number of received tcp data chunks 
-      {send, counter:len(Tsend)}, % number of sent tcp data chunks 
-      {ttrx, counter:val(Trecv)}, % mean time to receive chunk
-      {ttwx, counter:val(Tsend)}  % mean time to send chunk
-   ];
+% ioctl(iostat, #fsm{tconn=Tconn, trecv=Trecv, tsend=Tsend}) ->
+%    [
+%       {tcp,  Tconn},              % time to establish tcp
+%       {recv, counter:len(Trecv)}, % number of received tcp data chunks 
+%       {send, counter:len(Tsend)}, % number of sent tcp data chunks 
+%       {ttrx, counter:val(Trecv)}, % mean time to receive chunk
+%       {ttwx, counter:val(Tsend)}  % mean time to send chunk
+%    ];
 ioctl(_, _) ->
    undefined.
 
@@ -153,7 +135,6 @@ ioctl(_, _) ->
    {next_state, 
       'CONNECT',
       S#fsm{
-         role = client,
          peer = Peer
       }, 
       0
@@ -176,28 +157,26 @@ ioctl(_, _) ->
    % socket connect timeout
    T  = proplists:get_value(timeout, Opts, ?T_TCP_CONNECT),    
    T1 = erlang:now(),
-   case gen_tcp:connect(check_host(Host), Port, opts(Opts, ?TCP_OPTS) ++ ?SO_TCP, T) of
+   case gen_tcp:connect(check_host(Host), Port, opts:filter(?TCP_OPTS, Opts ++ ?SO_TCP), T) of
       {ok, Sock} ->
          {ok, Peer} = inet:peername(Sock),
          {ok, Addr} = inet:sockname(Sock),
          Tconn = timer:now_diff(erlang:now(), T1),
-         lager:info("tcp/ip connected ~p, local addr ~p in ~p usec", [Peer, Addr, Tconn]),
-         %pns:register(knet, {iid(S#fsm.inet), established, Addr, Peer}, self()),
+         lager:info("tcp/ip connected ~p, local addr ~p, pid ~p in ~p usec", [Peer, Addr, self(), Tconn]),
          {emit, 
             {tcp, Peer, established},
             'ESTABLISHED', 
             S#fsm{
-               role   = client,
                sock   = Sock,
                addr   = Addr,
-               peer   = Peer,
-               tconn  = Tconn,
-               trecv  = counter:new(time),
-               tsend  = counter:new(time)
+               peer   = Peer
+               % tconn  = Tconn,
+               % trecv  = counter:new(time),
+               % tsend  = counter:new(time)
             }
          };
       {error, Reason} ->
-         lager:error("tcp/ip connect ~p, error ~p", [{Host, Port}, Reason]),
+         lager:error("tcp/ip connect ~p (pid ~p), error ~p", [{Host, Port}, self(), Reason]),
          {emit,
             {tcp, {Host, Port}, {error, Reason}},
             'IDLE',
@@ -213,30 +192,31 @@ ioctl(_, _) ->
 %%%------------------------------------------------------------------
 'ACCEPT'(timeout, #fsm{sock=LSock, sup=Sup}=S) ->
    % accept a socket
-   Lpid = knet_acceptor_sup:server(Sup),
-   {ok, [LLL]} = konduit:ioctl(socket, knet_tcp, Lpid),
+   %Lpid = knet_acceptor_sup:server(Sup),
+   %{ok, [LLL]} = konduit:ioctl(socket, knet_tcp, Lpid),
    case gen_tcp:accept(LSock) of
       {ok, Sock} ->
          % acceptor is consumed, spawn a new one
-         konduit_sup:spawn(knet_acceptor_sup:factory(Sup)),
+         supervisor:start_child(knet:acceptor(Sup), []),
+         inet:setopts(Sock, [{active, once}]),
          {ok, Peer} = inet:peername(Sock),
          {ok, Addr} = inet:sockname(Sock),
-         lager:info("tcp/ip accepted ~p, local addr ~p", [Peer, Addr]),
+         lager:info("tcp/ip accepted ~p, local addr ~p, pid ~p", [Peer, Addr, self()]),
          {emit, 
             {tcp, Peer, established},
             'ESTABLISHED', 
             S#fsm{
                sock  = Sock,
                addr  = Addr,
-               peer  = Peer,
-               tconn = 0,
-               trecv = counter:new(time),
-               tsend = counter:new(time)
+               peer  = Peer
+               % tconn = 0,
+               % trecv = counter:new(time),
+               % tsend = counter:new(time)
             } 
          };
       {error, Reason} ->
          % acceptor is consumed, spawn a new one
-         konduit_sup:spawn(knet_acceptor_sup:factory(Sup)),
+         supervisor:start_child(knet:acceptor(Sup), []),
          {stop, Reason, S}
    end.
    
@@ -261,21 +241,24 @@ ioctl(_, _) ->
       S
    };
 
-'ESTABLISHED'({tcp, _, Data}, #fsm{peer=Peer, trecv=Cnt}=S) ->
+'ESTABLISHED'({tcp, _, Data}, #fsm{peer=Peer}=S) ->
    ?DEBUG("tcp/ip recv ~p~n~p~n", [Peer, Data]),
    % TODO: flexible flow control
    inet:setopts(S#fsm.sock, [{active, once}]),
    {emit, 
       {tcp, Peer, Data},
       'ESTABLISHED',
-      S#fsm{trecv=counter:add(now, Cnt)}
+      S %S#fsm{trecv=counter:add(now, Cnt)}
    };
    
-'ESTABLISHED'({send, _Peer, Data}, #fsm{peer=Peer, tsend=Cnt}=S) ->
+'ESTABLISHED'({send, _Peer, Data}, #fsm{peer=Peer}=S) ->
    ?DEBUG("tcp/ip send ~p~n~p~n", [Peer, Data]),
    case gen_tcp:send(S#fsm.sock, Data) of
       ok ->
-         {next_state, 'ESTABLISHED', S#fsm{tsend=counter:add(now, Cnt)}};
+         {next_state, 
+            'ESTABLISHED', 
+            S %S#fsm{tsend=counter:add(now, Cnt)}
+         };
       {error, Reason} ->
          lager:error("tcp/ip error ~p, peer ~p", [Reason, Peer]),
          {reply,
@@ -297,9 +280,17 @@ ioctl(_, _) ->
    
 %%%------------------------------------------------------------------
 %%%
-%%% Private
+%%% private
 %%%
 %%%------------------------------------------------------------------
+
+%%
+%%
+addr(Addr)
+ when is_integer(Addr) ->
+   {any, Addr}; 
+addr(Addr) ->
+   Addr.
 
 %%
 %% check host is format acceptable by gen_tcp
@@ -307,9 +298,3 @@ check_host(Host) when is_binary(Host) ->
    binary_to_list(Host);
 check_host(Host) ->
    Host.   
-
-%%
-%% perform white list filtering of supplied konduit options
-opts(Opts, Wlist) ->
-   lists:filter(fun({X, _}) -> lists:member(X, Wlist) end, Opts).
-

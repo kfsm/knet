@@ -22,12 +22,17 @@ init([]) ->
 %%
 %% server specification
 server(Port) ->
-   Uri = uri:set(port, Port, uri:new(tcp)),
    supervisor:start_child(?MODULE, {
       server,
-      {knet, listen, [Uri, tcp_echo]},
+      {knet, start_link, [tcp(Port)]},
       permanent, 1000, supervisor, dynamic
    }).
+
+tcp(Port) ->
+   [
+      {knet_tcp, [{addr, Port}]},
+      {tcp_echo, []}
+   ].
 
 
 

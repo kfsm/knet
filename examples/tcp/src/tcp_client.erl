@@ -6,7 +6,7 @@
 
 %%
 %%
-init([Peer, _]) ->
+init([Peer]) ->
    lager:info("echo ~p: client ~p", [self(), Peer]),
    random:seed(erlang:now()),
    {ok, 'IDLE', Peer, 0}.

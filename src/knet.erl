@@ -22,125 +22,95 @@
 
 -include("knet.hrl").
 
--export([start/0, stop/0]).
--export([new/1, new/2]).
--export([listen/2, listen/3]).
+-export([start/0, start/1]).
+-export([connect/1, start_link/1]).
+-export([listener/1, acceptor/1]).
 
--export([close/1]).% listen/1, listen/2, close/1]).
+
+-export([close/1]).
 -export([connect/2, connect/3]).
 -export([ioctl/2, send/2, recv/1]).
 -export([route/2, ifget/1, ifget/2]).
 -export([size/1]).
 
 %%
+%% listen(Uri, Mod, Opts) -> {ok, Pid}
 %%
-start() ->
-   AppFile = code:where_is_file(atom_to_list(?MODULE) ++ ".app"),
-   {ok, [{application, _, List}]} = file:consult(AppFile), 
-   Apps = proplists:get_value(applications, List, []),
-   lists:foreach(
-      fun(X) -> 
-         %?DEBUG([{app, X}]), 
-         case application:start(X) of
-            ok -> ok;
-            {error, {already_started, _}} -> ok
-         end
-      end,
-      lists:delete(kernel, lists:delete(stdlib, Apps))
-   ),
-   application:start(?MODULE).
+start_link(Stack)
+ when is_list(Stack) ->
+   knet_daemon_sup:start_link(Stack);
 
-%%
-%%
-stop() ->
-   AppFile = code:where_is_file(atom_to_list(?MODULE) ++ ".app"),
-   {ok, [{application, _, List}]} = file:consult(AppFile), 
-   Apps = proplists:get_value(applications, List, []),
-   application:stop(?MODULE),
-   lists:foreach(
-      fun(X) -> application:stop(X) end,
-      lists:reverse(lists:delete(kernel, lists:delete(stdlib, Apps)))
-   ).
-
-%% used by http
-size(Data)
- when is_binary(Data) ->
-   erlang:size(Data);
-size(Data)
- when is_list(Data) ->
-   lists:foldl(fun(X, Acc) -> Acc + knet:size(X) end, 0, Data). 
-   
-%%%------------------------------------------------------------------
-%%%
-%%% 
-%%%
-%%%------------------------------------------------------------------
+start_link(Stack)
+ when is_atom(Stack) ->
+   knet_daemon_sup:start_link(opts:val(Stack, knet)).
 
 
 %%
 %% return a knet peer connector
-new(Iid) ->
-   new(Iid, []).
-
-new(tcp, Opts) ->
-   {ok, Pid} = konduit:start_link({fabric, [
-      {knet_tcp,   [Opts]}
-   ]}),
+connect(Stack)
+ when is_list(Stack) ->
+   {ok, Pid} = konduit:start_link({fabric, Stack}),
    konduit_fabric:linkB(Pid, self()),
    {ok, Pid};
 
-new(http, Opts) ->
-   {ok, Pid} = konduit:start_link({fabric, [
-      {knet_tcp,   [Opts]},
-      {knet_httpc, [Opts]}
-   ]}),
+connect(Stack)
+ when is_atom(Stack) ->
+   {ok, Pid} = konduit:start_link({fabric, opts:val(Stack, knet)}),
    konduit_fabric:linkB(Pid, self()),
    {ok, Pid}.
 
+%%
+%%
+listener(Sup) ->
+   {_, Pid, _, _} = lists:keyfind(listener, 1, supervisor:which_children(Sup)),
+   Pid.
 
 %%
-%% listen(Uri, Mod, Opts) -> {ok, Pid}
 %%
-listen(Uri, Mod) ->
-   listen(Uri, Mod, []).
+acceptor(Sup) ->
+   {_, Pid, _, _} = lists:keyfind(acceptor, 1, supervisor:which_children(Sup)),
+   Pid.
 
-listen({uri, tcp, _}=Uri, Mod, Opts) ->
-   % tcp/ip listener
-   knet_acceptor_sup:start_link([
-      {knet_tcp, [{accept, uri:get(authority, Uri)}, Opts]},
-      {Mod,      [Opts]}
-   ]);
 
-listen({uri, http, _}=Uri, Mod, Opts) ->
-   % http listener
-   knet_acceptor_sup:start_link([
-      {knet_tcp,   [{accept, uri:get(authority, Uri)}, Opts]},
-      {knet_httpd, [Opts]},
-      {Mod,        [Opts]}
-   ]);
+%    listen(Uri, Mod, []).
 
-listen({uri, [http, rest], _}=Uri, Mods, Opts) ->
-   % TODO: support multiple resource signatures per module
-   % dispatch table
-   API = lists:map(
-      fun(X) -> {Uid, Pat} = X:uri(), {Uid, X, uri:new(Pat)} end,
-      Mods
-   ),
-   % resource table
-   Resources = lists:map(
-      fun(X) -> {Uid, _} = X:uri(), {Uid, X, [Uid, Opts]} end,
-      Mods
-   ),
-   knet_acceptor_sup:start_link([
-      {knet_tcp,   [{accept, uri:get(authority, Uri)}, Opts]},
-      {knet_httpd, [Opts]},
-      {knet_restd, [[{resource, API}|Opts]]},
-      {'|', Resources}
-   ]);
+% listen({uri, tcp, _}=Uri, Mod, Opts) ->
+%    % tcp/ip listener
+%    knet_acceptor_sup:start_link([
+%       {knet_tcp, [{accept, uri:get(authority, Uri)}, Opts]},
+%       {Mod,      [Opts]}
+%    ]);
 
-listen(Uri, Mod, Opts)
- when is_list(Uri) orelse is_binary(Uri) ->
-   listen(uri:new(Uri), Mod, Opts).
+% listen({uri, http, _}=Uri, Mod, Opts) ->
+%    % http listener
+%    knet_acceptor_sup:start_link([
+%       {knet_tcp,   [{accept, uri:get(authority, Uri)}, Opts]},
+%       {knet_httpd, [Opts]},
+%       {Mod,        [Opts]}
+%    ]);
+
+% listen({uri, [http, rest], _}=Uri, Mods, Opts) ->
+%    % TODO: support multiple resource signatures per module
+%    % dispatch table
+%    API = lists:map(
+%       fun(X) -> {Uid, Pat} = X:uri(), {Uid, X, uri:new(Pat)} end,
+%       Mods
+%    ),
+%    % resource table
+%    Resources = lists:map(
+%       fun(X) -> {Uid, _} = X:uri(), {Uid, X, [Uid, Opts]} end,
+%       Mods
+%    ),
+%    knet_acceptor_sup:start_link([
+%       {knet_tcp,   [{accept, uri:get(authority, Uri)}, Opts]},
+%       {knet_httpd, [Opts]},
+%       {knet_restd, [[{resource, API}|Opts]]},
+%       {'|', Resources}
+%    ]);
+
+% listen(Uri, Mod, Opts)
+%  when is_list(Uri) orelse is_binary(Uri) ->
+%    listen(uri:new(Uri), Mod, Opts).
 
 
 %%
@@ -344,7 +314,16 @@ close(_) ->
 %%%  utility 
 %%%
 %%%------------------------------------------------------------------   
-   
+
+%% used by http
+size(Data)
+ when is_binary(Data) ->
+   erlang:size(Data);
+size(Data)
+ when is_list(Data) ->
+   lists:foldl(fun(X, Acc) -> Acc + knet:size(X) end, 0, Data). 
+
+
 %%
 %% get specified options of network interface
 ifget(Opts) when is_list(Opts) ->
@@ -403,6 +382,51 @@ route(IP, Family) when is_tuple(IP) ->
       _  -> R
    end.
    
+%%%------------------------------------------------------------------
+%%%
+%%% command line bootstrap
+%%%
+%%%------------------------------------------------------------------
+start() ->
+   start([]).
+
+start(Config) ->
+   setenv(Config),
+   boot(?MODULE).
+
+boot(kernel) -> ok;
+boot(stdlib) -> ok;
+boot(App) when is_atom(App) ->
+   AppFile = code:where_is_file(atom_to_list(App) ++ ".app"),
+   {ok, [{application, _, List}]} = file:consult(AppFile), 
+   Apps = proplists:get_value(applications, List, []),
+   lists:foreach(
+      fun(X) -> 
+         ok = case boot(X) of
+            {error, {already_started, X}} -> ok;
+            Ret -> Ret
+         end
+      end,
+      Apps
+   ),
+   application:start(App).
+
+%% configure application from file
+setenv({App, Opts})
+ when is_list(Opts) ->
+   lists:foreach(
+      fun({K, V}) -> application:set_env(App, K, V) end,
+      Opts
+   );
+setenv([X|_]=File)
+ when is_number(X) ->
+   {ok, [Cfg]} = file:consult(File),
+   lists:foreach(fun setenv/1, Cfg);
+setenv(Opts)
+ when is_list(Opts) ->
+   setenv({?MODULE, Opts}).
+
+
    
 %%%------------------------------------------------------------------
 %%%

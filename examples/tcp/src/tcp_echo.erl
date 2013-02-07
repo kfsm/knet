@@ -37,5 +37,6 @@ ioctl(_, _) ->
 		S
    };
 
-'ECHO'(_, S) ->
+'ECHO'(M, S) ->
+   io:format("-> ~p~n", [M]),
    {next_state, 'ECHO', S}.
