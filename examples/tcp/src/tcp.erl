@@ -26,7 +26,7 @@ server(Port) ->
 
 client(Peer) ->
    start(),
-   knet_start:connect([
+   knet:connect([
       {knet_tcp,   []},
       {tcp_client, [Peer]}
    ]).

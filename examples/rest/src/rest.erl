@@ -2,7 +2,7 @@
 %%
 -module(rest).
 
--export([server/1, client/1]).
+-export([server/1]).
 
 start() ->
    AppFile = code:where_is_file(atom_to_list(?MODULE) ++ ".app"),
@@ -24,6 +24,6 @@ server(Port) ->
    start(),
    rest_sup:server(Port).
 
-client(Peer) ->
-   start(),
-   rest_sup:client(Peer).
+% client(Peer) ->
+%    start(),
+%    rest_sup:client(Peer).

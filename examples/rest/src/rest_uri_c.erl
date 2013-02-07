@@ -2,8 +2,7 @@
 
 %%
 %% 
--export([init/1, free/2, ioctl/2, 'ECHO'/2]).
--export([uri/0, allowed_methods/1, content_types_provided/1, content_types_accepted/1]).
+-export([uri/0, allowed_methods/1, content_provided/1, content_accepted/1, get/3, put/4, delete/3]).
 
 
 %%%------------------------------------------------------------------
@@ -12,17 +11,24 @@
 %%%
 %%%------------------------------------------------------------------   
 uri() ->
-   {c, "/c/_"}.
+   [
+      {c, "/c/_"},
+      {i, "/i/_"}
+   ].
 
-allowed_methods(_Uid) ->
-   ['GET', 'PUT', 'DELETE'].
+allowed_methods(c) ->
+   ['GET', 'PUT', 'DELETE'];
 
-content_types_provided(_Uid) ->
+allowed_methods(i) ->
+   ['GET'].
+
+
+content_provided(_Uid) ->
    [
       {text, 'text/plain'}
    ].
 
-content_types_accepted(_Uid) ->
+content_accepted(_Uid) ->
    [
       {text, 'text/plain'}
    ].
@@ -30,58 +36,36 @@ content_types_accepted(_Uid) ->
 
 %%
 %%
-init([Uid, _]) ->
-   lager:info("echo ~p: ~p resource ~p", [self(), ?MODULE, Uid]),
-   {ok, 'ECHO', undefined}.
-
-%%
-%%
-free(_, _) ->
-   ok.
-
-%%
-%%
-ioctl(_, _) ->
-   undefined.
-
-
-%%
-%%
-'ECHO'({c, text, {'GET', Uri, _Heads}}, S) -> 
+get({c, text}, Uri, _Heads) -> 
    lager:info("echo ~p: GET ~p", [self(), uri:to_binary(Uri)]),
    [_, Key] = uri:get(segments, Uri),
    case ets:lookup(storage, Key) of
-      [] ->
-         {reply,
-            {error, not_found},
-            'ECHO',
-            S
-         };
-      [{_, Val}] ->
-         {reply,
-            {ok, Val},
-            'ECHO',
-            S
-         }
+      []         -> not_found;
+      [{_, Val}] -> {ok, Val}
    end;
 
-'ECHO'({c, text, {'PUT', Uri, _Heads, Val}}, S) -> 
+get({i, text}, Uri, _Heads) -> 
    lager:info("echo ~p: GET ~p", [self(), uri:to_binary(Uri)]),
+   [_, Key] = uri:get(segments, Uri),
+   case ets:lookup(storage, Key) of
+      []         -> not_found;
+      [{_, Val}] -> {ok, <<Key/binary, $=, Val/binary>>}
+   end.
+
+%%
+%%
+put({c, text}, Uri, _Heads, Val) -> 
+   lager:info("echo ~p: PUT ~p", [self(), uri:to_binary(Uri)]),
    [_, Key] = uri:get(segments, Uri),
    ets:insert(storage, {Key, Val}),
-   {reply,
-      {created, Val},
-      'ECHO',
-      S
-   };
+   {created, Val}.
 
-'ECHO'({c, _, {'DELETE', Uri, _Heads}}, S) -> 
-   lager:info("echo ~p: GET ~p", [self(), uri:to_binary(Uri)]),
+
+%%
+%%
+delete({c, _}, Uri, _Heads) -> 
+   lager:info("echo ~p: DELETE ~p", [self(), uri:to_binary(Uri)]),
    [_, Key] = uri:get(segments, Uri),
    ets:delete(storage, Key),
-   {reply,
-      {ok, [{'Content-Type', 'text/plain'}], <<"ok">>},
-      'ECHO',
-      S
-   }.
+   {ok, Key}.
 

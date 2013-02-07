@@ -1,9 +1,9 @@
+
 -module(rest_uri_a).
 
 %%
 %% 
--export([init/1, free/2, ioctl/2, 'ECHO'/2]).
--export([uri/0, allowed_methods/1, content_types_provided/1, content_types_accepted/1]).
+-export([uri/0, allowed_methods/1, content_provided/1, content_accepted/1, get/3]).
 
 %%%------------------------------------------------------------------
 %%%
@@ -17,49 +17,25 @@ uri() ->
 allowed_methods(_Uid) ->
    ['GET'].
 
-content_types_provided(_Uid) ->
+content_provided(_Uid) ->
    [
       {text, 'text/plain'},
       {json, 'application/json'}
    ].
 
-content_types_accepted(_Uid) ->
+content_accepted(_Uid) ->
    [].
 
-
 %%
 %%
-init([Uid, _]) ->
-   lager:info("echo ~p: ~p resource ~p", [self(), ?MODULE, Uid]),
-   {ok, 'ECHO', undefined}.
-
-%%
-%%
-free(_, _) ->
-   ok.
-
-%%
-%%
-ioctl(_, _) ->
-   undefined.
-
-%%
-%%
-'ECHO'({a, text, {'GET', Uri, Heads}}, S) -> 
+get({a, text}, Uri, Heads) -> 
    lager:info("echo ~p: GET ~p~n~p~n", [self(), uri:to_binary(Uri), Heads]),
-   {reply,
-     {ok, text_message()},
-     'ECHO',
-     S
-   };
+   {ok, text_message()};
 
-'ECHO'({a, json, {'GET', Uri, Heads}}, S) -> 
+get({a, json}, Uri, Heads) -> 
    lager:info("echo ~p: GET ~p~n~p~n", [self(), uri:to_binary(Uri), Heads]),
-   {reply,
-     {ok, json_message()},
-     'ECHO',
-     S
-   }.
+   {ok, json_message()}.
+
 
 
 text_message() ->
