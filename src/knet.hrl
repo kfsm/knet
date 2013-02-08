@@ -15,19 +15,13 @@
 %%   limitations under the License.
 %%
 
-%-define(DEBUG(Str, Args), lager:debug(Str, Args)).
--define(DEBUG(Str, Args), ok).
-
 %% list of default default socket options
 -define(SO_TCP, [binary, {active, once}, {nodelay, true}]). 
-
--define(SO_UDP, [
-   {active, once}, 
-   {mode, binary}
-]).
+-define(SO_UDP, [binary, {active, once}, {nodelay, true}]).
 
 %% list of default konduit options
 -define(KO_TCP_ACCEPTOR,       2). % number of tcp acceptors
+-define(KO_SSL_ACCEPTOR,       2). % number of ssl acceptors
 -define(KO_UDP_ACCEPTOR,       2). % number of udp acceptors
 -define(KO_HTTP_MSG_LEN,   19264). % length of http msg returned to client
 
@@ -46,6 +40,27 @@
 -define(HTTP_HEADER_LEN,   2048). % max allowed size of single header
 
 
+-define(DEBUG(Str, Args), lager:debug(Str, Args)).
+-define(DEBUG(Prot, Addr, Peer, Deb),
+   lager:debug(
+      "~s debug: ~p ~p (pid ~p)~n~p~n", 
+      [Prot, Addr, Peer, self(), Deb]
+   )
+).
+
+-define(INFO(Prot, Action, Addr, Peer),
+   lager:info(
+      "~s ~s: ~p ~p (pid ~p)", 
+      [Prot, Action, Addr, Peer, self()]
+   )
+).
+
+-define(ERROR(Prot, Reason, Addr, Peer),
+   lager:error(
+      "~s error: ~p ~p ~p (pid ~p)", 
+      [Prot, Reason, Addr, Peer, self()]
+   )
+).
 
 
 

@@ -25,6 +25,8 @@
 -export([start/0, start/1]).
 -export([connect/1, start_link/1]).
 -export([listener/1, acceptor/1]).
+% utility
+-export([addr/1, host/1]).
 
 
 -export([close/1]).
@@ -314,6 +316,26 @@ close(_) ->
 %%%  utility 
 %%%
 %%%------------------------------------------------------------------   
+
+
+%%
+%% check that address is tuple {Host, Port}
+addr(Addr)
+ when is_integer(Addr) ->
+   {any, Addr}; 
+addr(Addr) ->
+   Addr.
+
+%%
+%% check host is list, acceptable by inet
+host(Host) 
+ when is_binary(Host) ->
+   binary_to_list(Host);
+host(Host) ->
+   Host.   
+
+
+
 
 %% used by http
 size(Data)
