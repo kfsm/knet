@@ -44,7 +44,9 @@ ioctl(_, _) ->
       ok  = check_method(Mthd, Mod:allowed_methods(Tag)),
       request(Mod, Tag, Req, S)
    catch
-      {error, Reason} ->
+      {error, {badmatch, {error, Reason}}} ->
+         {reply, {error, Uri, Reason}, 'LISTEN', S};
+      {error, Reason} -> 
          {reply, {error, Uri, Reason}, 'LISTEN', S}
    end.
 
@@ -127,20 +129,33 @@ request(_Mod, _Tag, {http, _, {_, _}}=Req, S) ->
    };
 
 'INPUT'({http, _Uri, eof}, #fsm{method='POST', mod=Mod, tag=Tag, uri=Uri, heads=Heads, buffer=Msg}=S) ->
-   {reply,
-      response(Mod:post(Tag, Uri, Heads, Msg), S),
-      'LISTEN',
-      S
-   };
+   try
+      {reply,
+         response(Mod:post(Tag, Uri, Heads, Msg), S),
+         'LISTEN',
+         S
+      };
+   catch
+      {error, {badmatch, {error, Reason}}} ->
+         {reply, {error, Uri, Reason}, 'LISTEN', S};
+      {error, Reason} -> 
+         {reply, {error, Uri, Reason}, 'LISTEN', S}
+   end;
+
 
 'INPUT'({http, _Uri, eof}, #fsm{method='PUT', mod=Mod, tag=Tag, uri=Uri, heads=Heads, buffer=Msg}=S) ->
-   {reply,
-      response(Mod:put(Tag, Uri, Heads, Msg), S),
-      'LISTEN',
-      S
-   }.
-
-
+   try
+      {reply,
+         response(Mod:put(Tag, Uri, Heads, Msg), S),
+         'LISTEN',
+         S
+      };
+   catch
+      {error, {badmatch, {error, Reason}}} ->
+         {reply, {error, Uri, Reason}, 'LISTEN', S};
+      {error, Reason} -> 
+         {reply, {error, Uri, Reason}, 'LISTEN', S}
+   end.
 
 
 %%%------------------------------------------------------------------
