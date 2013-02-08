@@ -134,7 +134,7 @@ request(_Mod, _Tag, {http, _, {_, _}}=Req, S) ->
          response(Mod:post(Tag, Uri, Heads, Msg), S),
          'LISTEN',
          S
-      };
+      }
    catch
       {error, {badmatch, {error, Reason}}} ->
          {reply, {error, Uri, Reason}, 'LISTEN', S};
@@ -149,7 +149,7 @@ request(_Mod, _Tag, {http, _, {_, _}}=Req, S) ->
          response(Mod:put(Tag, Uri, Heads, Msg), S),
          'LISTEN',
          S
-      };
+      }
    catch
       {error, {badmatch, {error, Reason}}} ->
          {reply, {error, Uri, Reason}, 'LISTEN', S};
