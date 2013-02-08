@@ -78,7 +78,8 @@ request(Mod, Tag, {http, Uri, {'POST',  Heads}}, S) ->
          uri     = Uri,
          mod     = Mod,
          tag     = {Tag, Ref},
-         content = Content
+         content = Content,
+         buffer  = <<>>
       }
    };
 
@@ -92,7 +93,8 @@ request(Mod, Tag, {http, Uri, {'PUT',  Heads}}, S) ->
          uri     = Uri,
          mod     = Mod,
          tag     = {Tag, Ref},
-         content = Content
+         content = Content,
+         buffer  = <<>>
       }
    };
 
@@ -105,13 +107,13 @@ request(Mod, Tag, {http, Uri, {'DELETE', Heads}}, S) ->
       S
    };
 
-request(_Mod, _Tag, {http, _, {'PATCH',   _}}=Req, S) ->
+request(_Mod, _Tag, {http, _, {'PATCH',   _}}, _S) ->
    throw({error, not_implemented});
 
-request(_Mod, _Tag, {http, _, {'OPTIONS', _}}=Req, S) ->
+request(_Mod, _Tag, {http, _, {'OPTIONS', _}}, _S) ->
    throw({error, not_implemented});
 
-request(_Mod, _Tag, {http, _, {_, _}}=Req, S) ->
+request(_Mod, _Tag, {http, _, {_, _}}, _S) ->
    throw({error, not_implemented}).
 
 %%%------------------------------------------------------------------
@@ -240,7 +242,7 @@ response({Code, Heads, Msg}, #fsm{uri=Uri, content=Content}) ->
       _     -> {Code, Uri, Heads, Msg}
    end;
 
-response(Code, #fsm{uri=Uri, content=Content}) ->
+response(Code, #fsm{uri=Uri}) ->
    {Code, Uri, [], <<>>}.
 
 
