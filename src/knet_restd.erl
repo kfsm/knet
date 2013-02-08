@@ -44,7 +44,7 @@ ioctl(_, _) ->
       ok  = check_method(Mthd, Mod:allowed_methods(Tag)),
       request(Mod, Tag, Req, S)
    catch
-      {error, {badmatch, {error, Reason}}} ->
+      {badmatch, {error, Reason}} ->
          {reply, {error, Uri, Reason}, 'LISTEN', S};
       {error, Reason} -> 
          {reply, {error, Uri, Reason}, 'LISTEN', S}
@@ -136,7 +136,7 @@ request(_Mod, _Tag, {http, _, {_, _}}=Req, S) ->
          S
       }
    catch
-      {error, {badmatch, {error, Reason}}} ->
+      {badmatch, {error, Reason}} ->
          {reply, {error, Uri, Reason}, 'LISTEN', S};
       {error, Reason} -> 
          {reply, {error, Uri, Reason}, 'LISTEN', S}
@@ -151,7 +151,7 @@ request(_Mod, _Tag, {http, _, {_, _}}=Req, S) ->
          S
       }
    catch
-      {error, {badmatch, {error, Reason}}} ->
+      {badmatch, {error, Reason}} ->
          {reply, {error, Uri, Reason}, 'LISTEN', S};
       {error, Reason} -> 
          {reply, {error, Uri, Reason}, 'LISTEN', S}
