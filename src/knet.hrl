@@ -19,7 +19,7 @@
 -define(DEBUG(Str, Args), ok).
 
 %% list of default default socket options
--define(SO_TCP, [binary, {active, once}, {packet, raw},  {nodelay, true}]). 
+-define(SO_TCP, [binary, {active, once}, {nodelay, true}]). 
 
 -define(SO_UDP, [
    {active, once}, 
