@@ -1,7 +1,7 @@
 {application, knet,
    [
       {description, "konduit network library"},
-      {vsn,         "0.3.2"},
+      {vsn,         "0.4.0"},
       {modules,     [
          knet,
          knet_udp,
