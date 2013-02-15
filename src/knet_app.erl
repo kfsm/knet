@@ -20,21 +20,10 @@
 -behaviour(application).
 -author(dmkolesnikov@gmail.com).
 
--export([
-   start/2,
-   stop/1
-]).
+-export([start/2, stop/1]).
 
 start(_Type, _Args) -> 
-   % establish pts table for statistic
-   % pts:new(knet, [readonly]),
-   case knet_sup:start_link() of
-      {ok, Pid} -> 
-         %{ok, _} = konduit_sup:new(dns, [], self(), dns_resolver),
-         {ok,Pid};
-      Other     -> 
-         {error, Other}
-   end. 
+   knet_sup:start_link(). 
 
 stop(_State) ->
         ok.
