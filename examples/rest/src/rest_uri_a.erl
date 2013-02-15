@@ -3,7 +3,8 @@
 
 %%
 %% 
--export([uri/0, allowed_methods/1, content_provided/1, content_accepted/1, get/3]).
+-export([uri/0, allowed_methods/1, content_provided/1, content_accepted/1]).
+-export(['GET'/3]).
 
 %%%------------------------------------------------------------------
 %%%
@@ -28,11 +29,11 @@ content_accepted(_Uid) ->
 
 %%
 %%
-get({a, text}, Uri, Heads) -> 
+'GET'({a, text}, Uri, Heads) -> 
    lager:info("echo ~p: GET ~p~n~p~n", [self(), uri:to_binary(Uri), Heads]),
    {ok, text_message()};
 
-get({a, json}, Uri, Heads) -> 
+'GET'({a, json}, Uri, Heads) -> 
    lager:info("echo ~p: GET ~p~n~p~n", [self(), uri:to_binary(Uri), Heads]),
    {ok, json_message()}.
 

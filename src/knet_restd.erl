@@ -55,7 +55,7 @@ ioctl(_, _) ->
 request(Mod, Tag, {http, Uri, {'GET',  Heads}}, S) ->
    {Ref, Content} = check_content_type(opts:val('Accept', ?DEF_HEAD, Heads), Mod:content_provided(Tag)),
    {reply,
-      response(Mod:get({Tag, Ref}, Uri, Heads), S#fsm{method='GET', uri=Uri, tag={Tag, Ref}, content=Content}),
+      response(Mod:'GET'({Tag, Ref}, Uri, Heads), S#fsm{method='GET', uri=Uri, tag={Tag, Ref}, content=Content}),
       'LISTEN',
       S
    };
@@ -63,7 +63,7 @@ request(Mod, Tag, {http, Uri, {'GET',  Heads}}, S) ->
 request(Mod, Tag, {http, Uri, {'HEAD',  Heads}}, S) ->
    {Ref, Content} = check_content_type(opts:val('Accept', ?DEF_HEAD, Heads), Mod:content_provided(Tag)),
    {reply,
-      response(Mod:get({Tag, Ref}, Uri, Heads), S#fsm{method='HEAD', uri=Uri, tag={Tag, Ref}, content=Content}),
+      response(Mod:'GET'({Tag, Ref}, Uri, Heads), S#fsm{method='HEAD', uri=Uri, tag={Tag, Ref}, content=Content}),
       'LISTEN',
       S
    };
@@ -102,7 +102,7 @@ request(Mod, Tag, {http, Uri, {'PUT',  Heads}}, S) ->
 request(Mod, Tag, {http, Uri, {'DELETE', Heads}}, S) ->
    {Ref, Content} = hd(Mod:content_provided(Tag)),
    {reply,
-      response(Mod:delete({Tag, Ref}, Uri, Heads), S#fsm{method='DELETE', tag={Tag, Ref}, content=Content}),
+      response(Mod:'DELETE'({Tag, Ref}, Uri, Heads), S#fsm{method='DELETE', tag={Tag, Ref}, content=Content}),
       'LISTEN',
       S
    };
@@ -130,25 +130,10 @@ request(_Mod, _Tag, {http, _, {_, _}}, _S) ->
       }
    };
 
-'INPUT'({http, _Uri, eof}, #fsm{method='POST', mod=Mod, tag=Tag, uri=Uri, heads=Heads, buffer=Msg}=S) ->
+'INPUT'({http, _Uri, eof}, #fsm{method=Mthd, mod=Mod, tag=Tag, uri=Uri, heads=Heads, buffer=Msg}=S) ->
    try
       {reply,
-         response(Mod:post(Tag, Uri, Heads, Msg), S),
-         'LISTEN',
-         S
-      }
-   catch
-      {badmatch, {error, Reason}} ->
-         {reply, {error, Uri, Reason}, 'LISTEN', S};
-      {error, Reason} -> 
-         {reply, {error, Uri, Reason}, 'LISTEN', S}
-   end;
-
-
-'INPUT'({http, _Uri, eof}, #fsm{method='PUT', mod=Mod, tag=Tag, uri=Uri, heads=Heads, buffer=Msg}=S) ->
-   try
-      {reply,
-         response(Mod:put(Tag, Uri, Heads, Msg), S),
+         response(Mod:Mthd(Tag, Uri, Heads, Msg), S),
          'LISTEN',
          S
       }

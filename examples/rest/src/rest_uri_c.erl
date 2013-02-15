@@ -2,7 +2,8 @@
 
 %%
 %% 
--export([uri/0, allowed_methods/1, content_provided/1, content_accepted/1, get/3, put/4, delete/3]).
+-export([uri/0, allowed_methods/1, content_provided/1, content_accepted/1]).
+-export(['GET'/3, 'PUT'/4, 'DELETE'/3]).
 
 
 %%%------------------------------------------------------------------
@@ -36,7 +37,7 @@ content_accepted(_Uid) ->
 
 %%
 %%
-get({c, text}, Uri, _Heads) -> 
+'GET'({c, text}, Uri, _Heads) -> 
    lager:info("echo ~p: GET ~p", [self(), uri:to_binary(Uri)]),
    [_, Key] = uri:get(segments, Uri),
    case ets:lookup(storage, Key) of
@@ -44,7 +45,7 @@ get({c, text}, Uri, _Heads) ->
       [{_, Val}] -> {ok, Val}
    end;
 
-get({i, text}, Uri, _Heads) -> 
+'GET'({i, text}, Uri, _Heads) -> 
    lager:info("echo ~p: GET ~p", [self(), uri:to_binary(Uri)]),
    [_, Key] = uri:get(segments, Uri),
    case ets:lookup(storage, Key) of
@@ -54,7 +55,7 @@ get({i, text}, Uri, _Heads) ->
 
 %%
 %%
-put({c, text}, Uri, _Heads, Val) -> 
+'PUT'({c, text}, Uri, _Heads, Val) -> 
    lager:info("echo ~p: PUT ~p", [self(), uri:to_binary(Uri)]),
    [_, Key] = uri:get(segments, Uri),
    ets:insert(storage, {Key, Val}),
@@ -63,7 +64,7 @@ put({c, text}, Uri, _Heads, Val) ->
 
 %%
 %%
-delete({c, _}, Uri, _Heads) -> 
+'DELETE'({c, _}, Uri, _Heads) -> 
    lager:info("echo ~p: DELETE ~p", [self(), uri:to_binary(Uri)]),
    [_, Key] = uri:get(segments, Uri),
    ets:delete(storage, Key),

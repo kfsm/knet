@@ -2,28 +2,41 @@
 %%
 -module(rest).
 
--export([server/1]).
-
+-export([start/0]).
+%%%------------------------------------------------------------------
+%%%
+%%% command line bootstrap
+%%%
+%%%------------------------------------------------------------------
 start() ->
-   AppFile = code:where_is_file(atom_to_list(?MODULE) ++ ".app"),
+   start(filename:join([code:priv_dir(?MODULE), "rest.config"])).
+start(Config) ->
+   config(Config),
+   boot(?MODULE).
+
+boot(kernel) -> ok;
+boot(stdlib) -> ok;
+boot(App) when is_atom(App) ->
+   AppFile = code:where_is_file(atom_to_list(App) ++ ".app"),
    {ok, [{application, _, List}]} = file:consult(AppFile), 
    Apps = proplists:get_value(applications, List, []),
    lists:foreach(
       fun(X) -> 
-         ok = case application:start(X) of
+         ok = case boot(X) of
             {error, {already_started, X}} -> ok;
             Ret -> Ret
          end
       end,
       Apps
    ),
-   application:start(?MODULE).
+   application:start(App).
 
-
-server(Port) ->
-   start(),
-   rest_sup:server(Port).
-
-% client(Peer) ->
-%    start(),
-%    rest_sup:client(Peer).
+%% configure application from file
+config({App, Cfg}) ->
+   lists:foreach(
+      fun({K, V}) -> application:set_env(App, K, V) end,
+      Cfg
+   );
+config(File) ->
+   {ok, [Cfg]} = file:consult(File),
+   lists:foreach(fun config/1, Cfg).

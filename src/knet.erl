@@ -40,24 +40,13 @@
 %%
 start_link(Stack)
  when is_list(Stack) ->
-   knet_daemon_sup:start_link(Stack);
-
-start_link(Stack)
- when is_atom(Stack) ->
-   knet_daemon_sup:start_link(opts:val(Stack, knet)).
-
+   knet_daemon_sup:start_link(Stack).
 
 %%
 %% return a knet peer connector
 connect(Stack)
  when is_list(Stack) ->
    {ok, Pid} = konduit:start_link({fabric, Stack}),
-   konduit_fabric:linkB(Pid, self()),
-   {ok, Pid};
-
-connect(Stack)
- when is_atom(Stack) ->
-   {ok, Pid} = konduit:start_link({fabric, opts:val(Stack, knet)}),
    konduit_fabric:linkB(Pid, self()),
    {ok, Pid}.
 

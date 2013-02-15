@@ -1,6 +1,7 @@
 -module(rest_uri_b).
 
--export([uri/0, allowed_methods/1, content_provided/1, content_accepted/1, get/3, post/4]).
+-export([uri/0, allowed_methods/1, content_provided/1, content_accepted/1]).
+-export(['GET'/3, 'POST'/4]).
 
 
 %%%------------------------------------------------------------------
@@ -28,17 +29,17 @@ content_accepted(_Uid) ->
 
 %%
 %%
-get({b, text}, Uri, Heads) -> 
+'GET'({b, text}, Uri, Heads) -> 
    lager:info("echo ~p: GET ~p~n~p~n", [self(), uri:to_binary(Uri), Heads]),
    {ok, text_message()};
 
-get({b, json}, Uri, Heads) -> 
+'GET'({b, json}, Uri, Heads) -> 
    lager:info("echo ~p: GET ~p~n~p~n", [self(), uri:to_binary(Uri), Heads]),
    {ok, json_message()}.
 
 %%
 %%
-post({b, text}, Uri, Heads, Msg) ->
+'POST'({b, text}, Uri, Heads, Msg) ->
    lager:info("echo ~p: POST ~p~n~p~n", [self(), uri:to_binary(Uri), Heads]),
    {created, Msg}.
 

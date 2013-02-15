@@ -29,7 +29,9 @@
 %%
 %%
 start_link() ->
-   supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+   {ok, Sup} = supervisor:start_link({local, ?MODULE}, ?MODULE, []),
+   lists:foreach(fun launch/1, application:get_all_env(knet)),
+   {ok, Sup}.
    
 init([]) -> 
    {ok,
@@ -38,3 +40,14 @@ init([]) ->
          []
       }
    }.
+
+launch({included_applications, _}) ->
+   ok;
+launch({Service, Stack}) ->
+   lager:info("knet: launch service ~s", [Service]),
+   supervisor:start_child(?MODULE, {
+      Service,
+      {knet, start_link, [Stack]},
+      permanent, 60000, supervisor, dynamic
+   }).
+
