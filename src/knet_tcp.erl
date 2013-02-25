@@ -46,6 +46,7 @@
    sock,   % tcp/ip socket
    peer,   % peer address  
    addr,   % local address
+   packet, % frame output stream into packet(s)
    opts    % connection option
 }). 
 
@@ -64,15 +65,22 @@ init([accept, Sup | Opts]) ->
    {ok, 'ACCEPT', accept(#fsm{sup=Sup, opts=Opts}), 0};
 
 init(Opts) ->
-   {ok, 'IDLE', #fsm{opts=Opts}}.
+   {ok, 
+      'IDLE', 
+      #fsm{
+         packet = opts:val(packet, 0, Opts),
+         opts   = Opts
+      }
+   }.
 
 accept(#fsm{sup=Sup, opts=Opts}=S) ->
    {ok, [LSock]} = konduit:ioctl(socket, knet_tcp, knet:listener(Sup)),
    Addr = knet:addr(opts:val(addr, Opts)),
    ?INFO(tcp, accept, local, Addr),
    S#fsm{
-      sock = LSock,
-      addr = Addr
+      sock   = LSock,
+      addr   = Addr,
+      packet = opts:val(packet, 0, Opts)
    }.
 
 listen(#fsm{sup=Sup, opts=Opts}=S) ->
@@ -247,7 +255,34 @@ sock_accept(#fsm{sock=LSock, sup=Sup}) ->
       'ESTABLISHED',
       S %S#fsm{trecv=counter:add(now, Cnt)}
    };
+
    
+'ESTABLISHED'({send, _Peer, Pckt},#fsm{sock=Sock, addr=Addr, peer=Peer, packet=Packet}=S)
+ when is_list(Pckt), Packet >= 1, Packet =< 4 ->
+   ?DEBUG(tcp, Addr, Peer, Pckt),
+   Result = lists:foldl(
+      fun
+      (X,  ok) -> gen_tcp:send(Sock, X);
+      (_, Err) -> Err
+      end,
+      ok,
+      Pckt
+   ),
+   case Result of
+      ok ->
+         {next_state, 
+            'ESTABLISHED', 
+            S
+         };
+      {error, Reason} ->
+         ?ERROR(tcp, Reason, Addr, Peer),
+         {reply,
+            {tcp, Peer, {error, Reason}},
+            'IDLE',
+            S
+         }
+   end;
+
 'ESTABLISHED'({send, _Peer, Pckt},#fsm{sock=Sock, addr=Addr, peer=Peer}=S) ->
    ?DEBUG(tcp, Addr, Peer, Pckt),
    case gen_tcp:send(Sock, Pckt) of
@@ -273,5 +308,6 @@ sock_accept(#fsm{sock=LSock, sup=Sup}) ->
       'IDLE',
       S
    }.   
+
 
 
