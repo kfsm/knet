@@ -47,7 +47,14 @@ ioctl(_, _) ->
       _:{badmatch, {error, Reason}} ->
          {reply, {error, Uri, Reason}, 'LISTEN', S};
       _:{error, Reason} -> 
-         {reply, {error, Uri, Reason}, 'LISTEN', S}
+         {reply, {error, Uri, Reason}, 'LISTEN', S};
+      _:badarg ->
+         {reply, {error, Uri, badarg}, 'LISTEN', S};
+      _:{badarg, _} ->
+         {reply, {error, Uri, badarg}, 'LISTEN', S};
+      _:Reason ->
+         io:format("internal error: ~p~n", [Reason]),
+         {reply, {error, Uri, 500}, 'LISTEN', S}
    end.
 
 %%
@@ -141,7 +148,14 @@ request(_Mod, _Tag, {http, _, {_, _}}, _S) ->
       _:{badmatch, {error, Reason}} ->
          {reply, {error, Uri, Reason}, 'LISTEN', S};
       _:{error, Reason} -> 
-         {reply, {error, Uri, Reason}, 'LISTEN', S}
+         {reply, {error, Uri, Reason}, 'LISTEN', S};
+      _:badarg ->
+         {reply, {error, Uri, badarg}, 'LISTEN', S};
+      _:{badarg, _} ->
+         {reply, {error, Uri, badarg}, 'LISTEN', S};
+      _:Reason ->
+         io:format("internal error: ~p~n", [Reason]),
+         {reply, {error, Uri, 500}, 'LISTEN', S}
    end.
 
 
