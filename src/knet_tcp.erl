@@ -36,18 +36,18 @@
 %% internal state
 -record(fsm, {
    sup,    % supervisor of konduit hierarchy
-
-   % TODO: move to adb
-   % tconn,  % time to connect
-   % trecv,  % inter packet arrival time 
-   % tsend,  % inter packet transmission time
-
    inet,   % inet family
+
    sock,   % tcp/ip socket
+   sopt,   % tcp socket options   
+   pool,   % tcp acceptor pool
+   timeout,% tcp socket timeout 
+
    peer,   % peer address  
    addr,   % local address
-   packet, % frame output stream into packet(s)
-   opts    % connection option
+
+   packet,   % frame i/o streams into packet(s)
+   opts      % connection option
 }). 
 
 %%%------------------------------------------------------------------
@@ -59,53 +59,58 @@
 %%
 %% init tcp/ip konduit
 init([listen, Sup | Opts]) ->
-   {ok, 'LISTEN', listen(#fsm{sup=Sup, opts=Opts})}; 
+   {ok, 
+      'LISTEN', 
+      listen(
+         config(Opts, #fsm{sup=Sup})
+      )
+   }; 
 
 init([accept, Sup | Opts]) ->
-   {ok, 'ACCEPT', accept(#fsm{sup=Sup, opts=Opts}), 0};
+   {ok, 
+      'ACCEPT',  
+      accept(
+         config(Opts, #fsm{sup=Sup})
+      ), 
+      0
+   };
 
 init(Opts) ->
    {ok, 
       'IDLE', 
-      #fsm{
-         packet = opts:val(packet, 0, Opts),
-         opts   = Opts
-      }
-   }.
+      config(Opts, #fsm{})
+   }. 
 
-accept(#fsm{sup=Sup, opts=Opts}=S) ->
+%% init fsm into accept mode
+accept(#fsm{sup=Sup, addr=Addr}=S) ->
    {ok, [LSock]} = konduit:ioctl(socket, knet_tcp, knet:listener(Sup)),
-   Addr = knet:addr(opts:val(addr, Opts)),
    ?INFO(tcp, accept, local, Addr),
    S#fsm{
-      sock   = LSock,
-      addr   = Addr,
-      packet = opts:val(packet, 0, Opts)
+      sock   = LSock
    }.
 
-listen(#fsm{sup=Sup, opts=Opts}=S) ->
+%% init fsm into listen mode
+listen(#fsm{addr={IP, Port}}=S) ->
    % start tcp/ip listener
-   {IP, Port}  = knet:addr(opts:val(addr, Opts)),
-   {ok, LSock} = gen_tcp:listen(Port, 
-      [{active, false}, {reuseaddr, true}, {ip, IP} | opts:filter(lists:delete(active, ?TCP_OPTS), Opts ++ ?SO_TCP)]
-   ),   
+   {ok, LSock} = gen_tcp:listen(Port, get_sopt_listener(S)),   
    ?INFO(tcp, listen, local, {IP, Port}),
-   % spawn acceptor pool
-   Pool = proplists:get_value(acceptor, Opts, ?KO_TCP_ACCEPTOR),
+   acceptor_pool(S),
+   S#fsm{
+      sock = LSock
+   }.
+
+acceptor_pool(#fsm{sup=Sup, pool=Pool}) ->
+   %% due to dead-lock acceptor pool has to be started asynchronously
    spawn_link(
       fun() ->
          ASup = knet:acceptor(Sup),
          [ supervisor:start_child(ASup, []) || _ <- lists:seq(1, Pool) ] 
       end
-   ),
-   S#fsm{
-      sock = LSock,
-      addr = {IP, Port}
-   }.
+   ).
 
 %%
 %%
-free(Reason, #fsm{sock=Sock, addr=Addr, peer=Peer}=S) ->
+free(_Reason, #fsm{sock=Sock, addr=Addr, peer=Peer}) ->
    case erlang:port_info(Sock) of
       undefined -> 
          ok;
@@ -120,14 +125,6 @@ ioctl(socket, #fsm{sock=Sock}) ->
    Sock;
 ioctl(address,#fsm{addr=Addr, peer=Peer}) ->
    {Addr, Peer};   
-% ioctl(iostat, #fsm{tconn=Tconn, trecv=Trecv, tsend=Tsend}) ->
-%    [
-%       {tcp,  Tconn},              % time to establish tcp
-%       {recv, counter:len(Trecv)}, % number of received tcp data chunks 
-%       {send, counter:len(Tsend)}, % number of sent tcp data chunks 
-%       {ttrx, counter:val(Trecv)}, % mean time to receive chunk
-%       {ttwx, counter:val(Tsend)}  % mean time to send chunk
-%    ];
 ioctl(_, _) ->
    undefined.
 
@@ -158,72 +155,54 @@ ioctl(_, _) ->
 %%% CONNECT
 %%%
 %%%------------------------------------------------------------------
-'CONNECT'(timeout, #fsm{peer={Host, Port}, opts=Opts}=S) ->
-   % socket connect timeout
-   T  = proplists:get_value(timeout, Opts, ?T_TCP_CONNECT),    
-   %T1 = erlang:now(),
-   case gen_tcp:connect(knet:host(Host), Port, opts:filter(?TCP_OPTS, Opts ++ ?SO_TCP), T) of
-      {ok, Sock} ->
-         {ok, Peer} = inet:peername(Sock),
-         {ok, Addr} = inet:sockname(Sock),
-         ?INFO(tcp, connected, Addr, Peer),
-         %Tconn = timer:now_diff(erlang:now(), T1),
-         {emit, 
-            {tcp, Peer, established},
-            'ESTABLISHED', 
-            S#fsm{
-               sock   = Sock,
-               addr   = Addr,
-               peer   = Peer
-               % tconn  = Tconn,
-               % trecv  = counter:new(time),
-               % tsend  = counter:new(time)
-            }
-         };
-      {error, Reason} ->
-         ?ERROR(tcp, Reason, {Host, Port}, undefined),
-         {emit,
-            {tcp, {Host, Port}, {error, Reason}},
-            'IDLE',
-            S
-         }
-   end.
+'CONNECT'(timeout, #fsm{peer={Host, Port}, sopt=SO, timeout=Tout}=S) ->
+   maybe_established(gen_tcp:connect(knet:host(Host), Port, SO, Tout), S).
+
+maybe_established({ok, Sock}, S) ->
+   established(set_sock(Sock, S));
+
+maybe_established({error, Reason}, #fsm{peer=Peer}=S) ->   
+   ?ERROR(tcp, Reason, Peer, undefined),
+   {emit,
+      {tcp, Peer, {error, Reason}},
+      'IDLE',
+      S
+   }.
    
+established(#fsm{peer=Peer, addr=Addr}=S) ->
+   ?INFO(tcp, connected, Addr, Peer),
+   {emit, 
+      {tcp, Peer, established},
+      'ESTABLISHED',
+      S
+   }. 
 
 %%%------------------------------------------------------------------
 %%%
 %%% ACCEPT
 %%%
 %%%------------------------------------------------------------------
-'ACCEPT'(timeout, S) ->
-   {ok, Sock} = sock_accept(S),
+'ACCEPT'(timeout, #fsm{sock=LSock}=S) ->
+   maybe_accepted(gen_tcp:accept(LSock), S).
+   
+maybe_accepted({ok, Sock}, #fsm{sup=Sup}=S) ->
+   % acceptor is consumed start a new one
+   {ok, _} = supervisor:start_child(knet:acceptor(Sup), []),
    ok = inet:setopts(Sock, [{active, once}]),
-   {ok, Peer} = inet:peername(Sock),
-   {ok, Addr} = inet:sockname(Sock),
+   accepted(set_sock(Sock, S));
+
+maybe_accepted({error, Reason}, #fsm{sup=Sup}=S) ->
+   % acceptor is consumed start a new one
+   {ok, _} = supervisor:start_child(knet:acceptor(Sup), []),
+   {stop, {error, Reason}, S}.
+
+accepted(#fsm{peer=Peer, addr=Addr}=S) ->
    ?INFO(tcp, accepted, Addr, Peer),
    {emit, 
       {tcp, Peer, established},
-      'ESTABLISHED', 
-      S#fsm{
-         sock  = Sock,
-         addr  = Addr,
-         peer  = Peer
-         % tconn = 0,
-         % trecv = counter:new(time),
-         % tsend = counter:new(time)
-      } 
-   }.
-   
-sock_accept(#fsm{sock=LSock, sup=Sup}) ->
-   % accept socket and spawns acceptor
-   case gen_tcp:accept(LSock) of
-      {ok, Sock} ->
-         {ok, _} = supervisor:start_child(knet:acceptor(Sup), []),
-         {ok, Sock};
-      {error, Reason} ->
-         {ok, _} = supervisor:start_child(knet:acceptor(Sup), []),
-         {error, Reason}
-   end.
+      'ESTABLISHED',
+      S
+   }. 
 
 %%%------------------------------------------------------------------
 %%%
@@ -253,52 +232,11 @@ sock_accept(#fsm{sock=LSock, sup=Sup}) ->
    {emit, 
       {tcp, Peer, Pckt},
       'ESTABLISHED',
-      S %S#fsm{trecv=counter:add(now, Cnt)}
+      S
    };
-
    
-'ESTABLISHED'({send, _Peer, Pckt},#fsm{sock=Sock, addr=Addr, peer=Peer, packet=Packet}=S)
- when is_list(Pckt), Packet >= 1, Packet =< 4 ->
-   ?DEBUG(tcp, Addr, Peer, Pckt),
-   Result = lists:foldl(
-      fun
-      (X,  ok) -> gen_tcp:send(Sock, X);
-      (_, Err) -> Err
-      end,
-      ok,
-      Pckt
-   ),
-   case Result of
-      ok ->
-         {next_state, 
-            'ESTABLISHED', 
-            S
-         };
-      {error, Reason} ->
-         ?ERROR(tcp, Reason, Addr, Peer),
-         {reply,
-            {tcp, Peer, {error, Reason}},
-            'IDLE',
-            S
-         }
-   end;
-
-'ESTABLISHED'({send, _Peer, Pckt},#fsm{sock=Sock, addr=Addr, peer=Peer}=S) ->
-   ?DEBUG(tcp, Addr, Peer, Pckt),
-   case gen_tcp:send(Sock, Pckt) of
-      ok ->
-         {next_state, 
-            'ESTABLISHED', 
-            S %S#fsm{tsend=counter:add(now, Cnt)}
-         };
-      {error, Reason} ->
-         ?ERROR(tcp, Reason, Addr, Peer),
-         {reply,
-            {tcp, Peer, {error, Reason}},
-            'IDLE',
-            S
-         }
-   end;
+'ESTABLISHED'({send, _Peer, Pckt}, #fsm{}=S) ->
+   maybe_sent(send(Pckt, S), S);
    
 'ESTABLISHED'({terminate, _Peer}, #fsm{sock=Sock, addr=Addr, peer=Peer}=S) ->
    ?INFO(tcp, terminated, Addr, Peer),
@@ -309,5 +247,77 @@ sock_accept(#fsm{sock=LSock, sup=Sup}) ->
       S
    }.   
 
+maybe_sent(ok, S) ->
+   {next_state, 
+      'ESTABLISHED', 
+      S
+   };
+
+maybe_sent({error, Reason}, #fsm{peer=Peer, addr=Addr}=S) ->
+   ?ERROR(tcp, Reason, Addr, Peer),
+   {reply,
+      {tcp, Peer, {error, Reason}},
+      'IDLE',
+      S
+   }.
+
+send([Pckt | Tail], #fsm{packet=Packet}=S)
+ when Packet >= 1, Packet =< 4 ->
+   case send(Pckt, S) of
+      ok    -> send(Tail, S);
+      Error -> Error
+   end;
+
+send([], #fsm{packet=Packet})
+ when Packet >= 1, Packet =< 4 ->
+   ok;
+
+send(Pckt, #fsm{sock=Sock, addr=Addr, peer=Peer}) ->
+   ?DEBUG(tcp, Addr, Peer, Pckt),
+   gen_tcp:send(Sock, Pckt).
+
+%%%------------------------------------------------------------------
+%%%
+%%% private
+%%%
+%%%------------------------------------------------------------------
+
+%%
+%% configure state machine
+config(Opts, S) ->
+   set_sopt(Opts, 
+      S#fsm{
+         addr    = knet:addr(opts:val(addr, undefined,  Opts)),
+         pool    = opts:val(acceptor, ?KO_TCP_ACCEPTOR, Opts),
+         timeout = opts:val(timeout,  ?T_TCP_CONNECT,   Opts),    
+         packet  = opts:val(packet,   0,                Opts)
+      }
+   ).
+
+set_sopt(Opts, #fsm{addr={IP, _}}=S) ->
+   S#fsm{
+      % white list gen_tcp opts + add default one
+      sopt = [{ip, IP} | opts:filter(?TCP_OPTS, Opts ++ ?SO_TCP)] 
+   };
+
+set_sopt(Opts, #fsm{}=S) ->
+   S#fsm{
+      sopt = opts:filter(?TCP_OPTS, Opts ++ ?SO_TCP)
+   }.
+
+get_sopt_listener(#fsm{sopt=SO}) ->
+   % socket opts for listener socket requires {active, false}
+   [{active, false}, {reuseaddr, true} | lists:keydelete(active, 1, SO)].
+
+
+set_sock(Sock, S) ->
+   {ok, Peer} = inet:peername(Sock),
+   {ok, Addr} = inet:sockname(Sock),
+   S#fsm{
+      sock   = Sock,
+      addr   = Addr,
+      peer   = Peer
+   }.
+               
 
 

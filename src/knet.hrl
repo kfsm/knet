@@ -20,7 +20,7 @@
 -define(SO_UDP, [binary, {active, once}, {nodelay, true}]).
 
 %% list of default konduit options
--define(KO_TCP_ACCEPTOR,       2). % number of tcp acceptors
+-define(KO_TCP_ACCEPTOR,      10). % number of tcp acceptors
 -define(KO_SSL_ACCEPTOR,       2). % number of ssl acceptors
 -define(KO_UDP_ACCEPTOR,       2). % number of udp acceptors
 -define(KO_HTTP_MSG_LEN,   19264). % length of http msg returned to client

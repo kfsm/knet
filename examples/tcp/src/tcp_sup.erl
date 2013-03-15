@@ -30,6 +30,7 @@ server(Port) ->
 
 tcp(Port) ->
    [
+      %{knet_tcp, [{addr, Port},{recbuf, 1024},{packet, line}]},
       {knet_tcp, [{addr, Port}]},
       {tcp_echo, []}
    ].
