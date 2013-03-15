@@ -46,7 +46,9 @@
    peer,   % peer address  
    addr,   % local address
 
-   packet,   % frame i/o streams into packet(s)
+   packet, % frame i/o streams into packet(s)
+   chunk,  % partially received frame   
+
    opts      % connection option
 }). 
 
@@ -229,11 +231,7 @@ accepted(#fsm{peer=Peer, addr=Addr}=S) ->
    ?DEBUG(tcp, Addr, Peer, Pckt),
    % TODO: flexible flow control
    ok = inet:setopts(Sock, [{active, once}]),
-   {emit, 
-      {tcp, Peer, Pckt},
-      'ESTABLISHED',
-      S
-   };
+   maybe_recv(Pckt, S);
    
 'ESTABLISHED'({send, _Peer, Pckt}, #fsm{}=S) ->
    maybe_sent(send(Pckt, S), S);
@@ -247,6 +245,8 @@ accepted(#fsm{peer=Peer, addr=Addr}=S) ->
       S
    }.   
 
+%%
+%%
 maybe_sent(ok, S) ->
    {next_state, 
       'ESTABLISHED', 
@@ -276,6 +276,31 @@ send(Pckt, #fsm{sock=Sock, addr=Addr, peer=Peer}) ->
    ?DEBUG(tcp, Addr, Peer, Pckt),
    gen_tcp:send(Sock, Pckt).
 
+%%
+%%
+maybe_recv(Pckt, #fsm{packet=line, peer=Peer, chunk=Chunk}=S) ->
+   case binary:last(Pckt) of
+      $\n ->   
+         {emit, 
+            {tcp, Peer, erlang:iolist_to_binary(lists:reverse([Pckt | Chunk]))},
+            'ESTABLISHED',
+            S#fsm{chunk=[]}
+         };
+      _   ->
+         {next_state, 
+            'ESTABLISHED',
+            S#fsm{chunk=[Pckt | Chunk]}
+         }
+   end;
+
+maybe_recv(Pckt, #fsm{peer=Peer}=S) ->
+   {emit, 
+      {tcp, Peer, Pckt},
+      'ESTABLISHED',
+      S
+   }.
+
+
 %%%------------------------------------------------------------------
 %%%
 %%% private
@@ -290,7 +315,8 @@ config(Opts, S) ->
          addr    = knet:addr(opts:val(addr, undefined,  Opts)),
          pool    = opts:val(acceptor, ?KO_TCP_ACCEPTOR, Opts),
          timeout = opts:val(timeout,  ?T_TCP_CONNECT,   Opts),    
-         packet  = opts:val(packet,   0,                Opts)
+         packet  = opts:val(packet,   0,                Opts),
+         chunk   = []
       }
    ).
 
