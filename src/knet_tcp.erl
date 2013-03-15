@@ -77,6 +77,13 @@ init([accept, Sup | Opts]) ->
       0
    };
 
+init([connect | Opts]) ->
+   {ok, 
+      'CONNECT',  
+      config(Opts, #fsm{}),
+      0
+   };
+
 init(Opts) ->
    {ok, 
       'IDLE', 
@@ -313,6 +320,7 @@ config(Opts, S) ->
    set_sopt(Opts, 
       S#fsm{
          addr    = knet:addr(opts:val(addr, undefined,  Opts)),
+         peer    = knet:addr(opts:val(peer, undefined,  Opts)),
          pool    = opts:val(acceptor, ?KO_TCP_ACCEPTOR, Opts),
          timeout = opts:val(timeout,  ?T_TCP_CONNECT,   Opts),    
          packet  = opts:val(packet,   0,                Opts),
