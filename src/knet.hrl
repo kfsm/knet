@@ -39,6 +39,7 @@
 -define(HTTP_URL_LEN,      2048). % max allowed size of request line
 -define(HTTP_HEADER_LEN,   2048). % max allowed size of single header
 
+-ifdef(VERBOSE).
 
 -define(DEBUG(Str, Args), lager:debug(Str, Args)).
 -define(DEBUG(Prot, Addr, Peer, Deb),
@@ -62,5 +63,12 @@
    )
 ).
 
+-else.
 
+-define(DEBUG(Str, Args),  ok).
+-define(DEBUG(Prot, Addr, Peer, Deb),   ok).
+-define(INFO(Prot, Action, Addr, Peer), ok).
+-define(ERROR(Prot, Reason, Addr, Peer),ok).
+
+-endif.
 
