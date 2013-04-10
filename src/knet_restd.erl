@@ -53,7 +53,7 @@ ioctl(_, _) ->
       _:{badarg, _} ->
          {reply, {error, Uri, badarg}, 'LISTEN', S};
       _:Reason ->
-         io:format("internal error: ~p~n", [Reason]),
+         lager:error("knet failed: ~p ~p", [Reason, erlang:get_stacktrace()]),
          {reply, {error, Uri, 500}, 'LISTEN', S}
    end.
 
@@ -154,7 +154,7 @@ request(_Mod, _Tag, {http, _, {_, _}}, _S) ->
       _:{badarg, _} ->
          {reply, {error, Uri, badarg}, 'LISTEN', S};
       _:Reason ->
-         io:format("internal error: ~p~n", [Reason]),
+         lager:error("knet failed: ~p ~p", [Reason, erlang:get_stacktrace()]),
          {reply, {error, Uri, 500}, 'LISTEN', S}
    end.
 
