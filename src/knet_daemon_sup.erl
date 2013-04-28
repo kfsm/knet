@@ -34,7 +34,8 @@ listener([{Prot, Opts} | _Stack]) ->
 %%
 %%
 acceptor([{Prot, Opts} | Stack]) ->
-   Acceptor  = {fabric, [
+   %Acceptor  = {fabric, [
+   Acceptor  = {pipeline, [
       {Prot, [accept, self() | Opts]} | Stack
    ]},
    {
