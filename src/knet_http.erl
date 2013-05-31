@@ -25,39 +25,124 @@
 % assert interface
 -export([check_method/1, check_uri/1, check_io/2]).
 % decode interface
--export([decode_header/1]). 
+-export([decode_request/1, decode_header/1, encode_response/2, encode_error/1]). 
 % encode interface
--export([encode_req/3, encode_rsp/2, encode_chunk/1]).
+-export([encode_req/3, encode_chunk/1]).
 -export([status/1]).
 
 
 %%
-%% decode_header() -> more | {error, Reason} | {eoh, Rest} | {{Head, Val}, Rest}
-decode_header(Bin) ->
-   case erlang:decode_packet(httph_bin, Bin, []) of
-      {more,  _}       -> more;
-      {error, _}=Err   -> Err;
-      {ok, http_eoh, Rest} -> {eoh, Rest};
-      {ok, {http_header, _I, H, _R, V}, Rest} -> decode_header(H, V, Rest) 
-   end.
+%% decode http request
+-spec(decode_request/1 :: (datum:q()) -> {any(), datum:q()}).
 
-decode_header('Content-Length', V, Rest) ->
-   {{'Content-Length', list_to_integer(binary_to_list(V))}, Rest};
+decode_request(Queue) ->
+   decode_request(<<>>, Queue).   
 
-decode_header('Accept', V, Rest) ->
+decode_request(Head,    {})
+ when size(Head) < ?HTTP_URL_LEN ->
+   {undefined, deq:new([Head])};
+
+decode_request(Head, Queue)
+ when size(Head) < ?HTTP_URL_LEN ->
+   {Tail, Q} = deq:deq(Queue),
+   Chunk     = erlang:iolist_to_binary([Head, Tail]),
+   case erlang:decode_packet(http_bin, Chunk, []) of
+      {more,  _} -> 
+         decode_request(Chunk, Q);
+      {error, _} -> 
+         throw({http_error, 400}); 
+      {ok, {http_error, _}=R, _} ->
+         throw({http_error, 400});          
+      {ok, Req, Bin} -> 
+         {Req, deq:poke(Bin, Q)}
+   end;
+
+decode_request(_, _) -> 
+   throw({http_error, 414}).
+
+
+%%
+%% decode http header
+-spec(decode_header/1 :: (datum:q()) -> {undefined, datum:q()} | {eoh, datum:q()} | {{atom(), any()}, datum:q()}).
+
+decode_header(Queue) ->
+   decode_header(<<>>, Queue).
+
+decode_header(Head,    {})
+ when size(Head) < ?HTTP_URL_LEN ->
+   {undefined, deq:new([Head])};
+
+decode_header(Head, Queue)
+ when size(Head) < ?HTTP_URL_LEN ->
+   {Tail, Q} = deq:deq(Queue),
+   Chunk     = erlang:iolist_to_binary([Head, Tail]),
+   case erlang:decode_packet(httph_bin, Chunk, []) of
+      {more,  _} -> 
+         decode_header(Chunk, Q);
+      {error, _} -> 
+         throw({http_error, 400}); 
+      {ok, {http_error, _}=R, _} ->
+         throw({http_error, 400}); 
+      {ok, http_eoh, Bin} -> 
+         {eoh, deq:poke(Bin, Q)};
+      {ok, {http_header, _I, H, _R, V}, Bin} -> 
+         {parse_header(H, V), deq:poke(Bin, Q)}
+   end;
+
+decode_header(_, _) -> 
+   throw({http_error, 414}).
+
+%% parse HTTP header values
+parse_header('Content-Length', V) ->
+   %% content-length is parsed to integer
+   {'Content-Length', list_to_integer(binary_to_list(V))};
+
+parse_header('Accept', V) ->
+   %% set of accepted mime(s) converted to mime tuple
    List = lists:map(
       fun(X) -> mime:new(X) end,
       binary:split(V, <<$,>>, [trim, global])
    ),
-   {{'Accept', List}, Rest};
+   {'Accept', List};
 
-decode_header('Content-Type', V, Rest) ->
-   {{'Content-Type', mime:new(V)}, Rest};
+parse_header('Content-Type', V) ->
+   %% content-type is converted to mime tuple
+   {'Content-Type', mime:new(V)};
 
-decode_header(Head, Val, Rest) ->
-   {{Head, Val}, Rest}.
+%% TODO: parse 'Host'
+parse_header(Head, Val) ->
+   {Head, Val}.
 
 
+%%
+%% encode response
+-spec(encode_response/2 :: (integer(), list()) -> binary()).
+
+encode_response(Code, Heads) ->
+   case lists:keyfind('Server', 1, Heads) of
+      false ->
+         erlang:iolist_to_binary([
+            ?HTTP_VERSION, $ , status(Code), $\r, $\n,
+           encode_header([{'Server', ?HTTP_SERVER} | Heads]),
+           $\r, $\n
+         ]);
+      _     -> 
+         erlang:iolist_to_binary([
+            ?HTTP_VERSION, $ , status(Code), $\r, $\n,
+           encode_header(Heads),
+           $\r, $\n
+         ])
+   end.
+
+%%
+%% encode error response
+encode_error(Code) ->
+   Err = knet_http:status(Code),
+   Msg = knet_http:encode_response(Code, [
+      {'Content-Length', erlang:size(Err)}, 
+      {'Content-Type', 'text/plain'}
+   ]),
+   erlang:iolist_to_binary([Msg, $\r, $\n, Err]).
 
 %%
 %% encode_req(...) -> iolist()
@@ -73,16 +158,6 @@ encode_req(Mthd, Uri, Req)
    ].
 
 
-%%
-%% encode_rsp(Code, Rsp) -> iolist()
-%%   Code = integer()
-%%   Rsp  = [header()]
-encode_rsp(Code, Rsp) ->
-   [
-     <<"HTTP/1.1 ", (status(Code))/binary, "\r\n">>,
-     encode_header(Rsp),
-     <<$\r, $\n>>
-   ].
 
 %%
 %% encode_chunk(Chunk) -> iolist()
@@ -97,29 +172,38 @@ encode_chunk(Chunk) ->
 
 %%
 %% encode header key/value pairs
-encode_header(Headers) when is_list(Headers) ->
+encode_header(Headers)
+ when is_list(Headers) ->
    [ <<(encode_header(X))/binary, "\r\n">> || X <- Headers ];
 
 encode_header({'Host', {Host, Port}}) ->
    <<"Host", ": ", Host/binary, ":", (list_to_binary(integer_to_list(Port)))/binary>>;
 
-encode_header({Key, Val}) when is_atom(Key) ->
+encode_header({Key, Val})
+ when is_atom(Key) ->
    <<(atom_to_binary(Key, utf8))/binary, ": ", (enc_head_val(Val))/binary>>.
 
 %%
 %% encode header value  
-enc_head_val(Val) when is_atom(Val) ->
+enc_head_val(Val)
+ when is_atom(Val) ->
    atom_to_binary(Val, utf8);
 
-enc_head_val(Val) when is_binary(Val) ->
+enc_head_val(Val)
+ when is_binary(Val) ->
    Val;
 
-enc_head_val(Val) when is_integer(Val) ->
+enc_head_val(Val)
+ when is_integer(Val) ->
    list_to_binary(integer_to_list(Val));
 
 enc_head_val({mime, _, _}=Val) ->
-   mime:to_binary(Val).
+   mime:to_binary(Val);
 
+enc_head_val([H|Tail]) ->
+   iolist_to_binary(
+      [enc_head_val(H) | lists:map(fun(X) -> [$,, enc_head_val(X)] end, Tail) ]
+   ).
 
 
 %%
@@ -270,6 +354,11 @@ check_io(Len, Buf)
    Buf;
 check_io(_, _)   -> 
    throw({http_error, 414}).
+
+
+
+
+
 
 
 

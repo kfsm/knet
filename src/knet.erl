@@ -326,7 +326,7 @@ host(Host) ->
 
 
 
-%% used by http
+%% used by http @depricated
 size(Data)
  when is_binary(Data) ->
    erlang:size(Data);

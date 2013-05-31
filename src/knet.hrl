@@ -20,7 +20,7 @@
 -define(SO_UDP, [binary, {active, once}, {nodelay, true}]).
 
 %% list of default konduit options
--define(KO_TCP_ACCEPTOR,      10). % number of tcp acceptors
+-define(KO_TCP_ACCEPTOR,       2). % number of tcp acceptors
 -define(KO_SSL_ACCEPTOR,       2). % number of ssl acceptors
 -define(KO_UDP_ACCEPTOR,       2). % number of udp acceptors
 -define(KO_HTTP_MSG_LEN,   19264). % length of http msg returned to client
@@ -28,6 +28,14 @@
 %% white list of socket options acceptable by konduits
 -define(UDP_OPTS, [broadcast, delay_send, dontroute, read_packets, recbuf, sndbuf, binary]).
 -define(TCP_OPTS, [delay_send, nodelay, dontroute, keepalive, packet, packet_size, recbuf, send_timeout, sndbuf, binary, active]).
+
+-define(SO_TCP_ALLOWED, [
+   delay_send, nodelay, dontroute, keepalive, 
+   packet, packet_size, recbuf, send_timeout, 
+   sndbuf, binary, active
+]).
+
+
 -define(SSL_OPTS, [verify, verify_fun, fail_if_no_peer_cert, depth, cert, certfile, key, keyfile, password, cacert, cacertfile, ciphers]).
 
 %% default timers
@@ -36,12 +44,17 @@
 -define(T_HTTP_WAIT,       20000).  %% http server response time
 
 %% default buffers
--define(HTTP_URL_LEN,      2048). % max allowed size of request line
--define(HTTP_HEADER_LEN,   2048). % max allowed size of single header
+-define(HTTP_URL_LEN,             2048). % max allowed size of request line
+-define(HTTP_HEADER_LEN,          2048). % max allowed size of single header
+-define(HTTP_SERVER,        <<"knet">>). % default identity of HTTP server
+-define(HTTP_VERSION,   <<"HTTP/1.1">>). % HTTP protocol version
+
+
+-define(VERBOSE, true).
 
 -ifdef(VERBOSE).
+-define(DEBUG(Str, Args), lager:info(Str, Args)).
 
--define(DEBUG(Str, Args), lager:debug(Str, Args)).
 -define(DEBUG(Prot, Addr, Peer, Deb),
    lager:debug(
       "~s debug: ~p ~p (pid ~p)~n~p~n", 
@@ -71,4 +84,5 @@
 -define(ERROR(Prot, Reason, Addr, Peer),ok).
 
 -endif.
+
 

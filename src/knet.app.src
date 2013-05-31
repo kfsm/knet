@@ -20,7 +20,8 @@
          compiler,
          syntax_tools,
          lager,
-         konduit
+         konduit,
+         pts
       ]},
       {mod, {knet_app, []}},
       {env, []}
