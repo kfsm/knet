@@ -1,0 +1,18 @@
+{application, tcpd,
+   [
+      {description, "knet example: tcp daemon"},
+      {vsn,         "0.2.0"},
+      {modules,     [
+         tcpd,
+         tcpd_sup,
+         tcpd_app
+      ]},
+      {registered,  []},
+      {applications,[
+         kernel, stdlib, sasl, lager,
+         plib, kfsm, knet 
+      ]},
+      {mod, {tcpd_app, []}},
+      {env, []}
+   ]
+}.  

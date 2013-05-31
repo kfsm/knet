@@ -1,0 +1,18 @@
+{application, httpd,
+   [
+      {description, "knet example: http daemon"},
+      {vsn,         "0.2.0"},
+      {modules,     [
+         httpd,
+         httpd_sup,
+         httpd_app
+      ]},
+      {registered,  []},
+      {applications,[
+         kernel, stdlib, sasl, lager,
+         plib, kfsm, knet 
+      ]},
+      {mod, {httpd_app, []}},
+      {env, []}
+   ]
+}.  
