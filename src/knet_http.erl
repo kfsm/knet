@@ -15,7 +15,7 @@
 %%   limitations under the License.
 %%
 %%  @description
-%%      http konduit utility functions
+%%      knet http common functions
 -module(knet_http).
 -author('Dmitry Kolesnikov <dmkolesnikov@gmail.com>').
 -author('Mario Cardona <marioxcardona@gmail.com>').
@@ -25,7 +25,7 @@
 % assert interface
 -export([check_method/1, check_uri/1, check_io/2]).
 % decode interface
--export([decode_request/1, decode_header/1, encode_response/2, encode_error/1]). 
+-export([decode_request/1, decode_header/1, encode_response/2]). 
 % encode interface
 -export([encode_req/3, encode_chunk/1]).
 -export([status/1]).
@@ -134,15 +134,6 @@ encode_response(Code, Heads) ->
          ])
    end.
 
-%%
-%% encode error response
-encode_error(Code) ->
-   Err = knet_http:status(Code),
-   Msg = knet_http:encode_response(Code, [
-      {'Content-Length', erlang:size(Err)}, 
-      {'Content-Type', 'text/plain'}
-   ]),
-   erlang:iolist_to_binary([Msg, $\r, $\n, Err]).
 
 %%
 %% encode_req(...) -> iolist()

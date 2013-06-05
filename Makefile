@@ -1,5 +1,21 @@
 .PHONY: deps test
 
+ifeq ($(id),)
+export id=knet
+endif
+
+BB=../basho_bench
+
+FLAGS=\
+	-name ${id}@127.0.0.1 \
+	-setcookie nocookie \
+	-pa ./deps/*/ebin \
+	-pa ./examples/*/ebin \
+	-pa ./ebin \
+	+K true +A 160 -sbt ts
+# +sbwt very_long
+
+
 all: rebar deps compile
 
 compile:
@@ -25,9 +41,13 @@ dialyzer: compile
 	@dialyzer -Wno_return -c apps/riak_kv/ebin
 
 run:
-	erl -pa ./deps/*/ebin -pa ./examples/*/ebin -pa ./ebin +K true +A 160 
+	erl ${FLAGS}
 
 rebar:
 	curl -O http://cloud.github.com/downloads/basho/rebar/rebar
 	chmod ugo+x rebar
 
+benchmark:
+	$(BB)/basho_bench -N bb@127.0.0.1 -C nocookie priv/${id}.benchmark
+	$(BB)/priv/summary.r -i tests/current
+	open tests/current/summary.png

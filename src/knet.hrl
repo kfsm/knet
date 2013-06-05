@@ -15,6 +15,12 @@
 %%   limitations under the License.
 %%
 
+%%
+%% configurable features
+-define(VERBOSE,  true).
+-define(PROFILE,  true).
+
+
 %% list of default default socket options
 -define(SO_TCP, [binary, {active, once}, {nodelay, true}]). 
 -define(SO_UDP, [binary, {active, once}, {nodelay, true}]).
@@ -49,9 +55,6 @@
 -define(HTTP_SERVER,        <<"knet">>). % default identity of HTTP server
 -define(HTTP_VERSION,   <<"HTTP/1.1">>). % HTTP protocol version
 
-
--define(VERBOSE, true).
-
 -ifdef(VERBOSE).
 -define(DEBUG(Str, Args), lager:info(Str, Args)).
 
@@ -83,6 +86,22 @@
 -define(INFO(Prot, Action, Addr, Peer), ok).
 -define(ERROR(Prot, Reason, Addr, Peer),ok).
 
+-endif.
+
+%%%------------------------------------------------------------------
+%%%
+%%% KPI
+%%%
+%%%------------------------------------------------------------------   
+
+-ifdef(PROFILE).
+   -define(COUNTER(X), clue:counter(X)).
+   -define(INC(X),     clue:inc(X)).
+   -define(INC(X,Y),   clue:inc(X,Y)).
+-else.
+   -define(COUNTER(X), true).
+   -define(INC(X),     true).
+   -define(INC(X,Y),   true).
 -endif.
 
 

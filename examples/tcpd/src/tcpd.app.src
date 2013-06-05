@@ -9,8 +9,11 @@
       ]},
       {registered,  []},
       {applications,[
-         kernel, stdlib, sasl, lager,
-         plib, kfsm, knet 
+         kernel, 
+         stdlib, 
+         sasl, 
+         lager,
+         knet 
       ]},
       {mod, {tcpd_app, []}},
       {env, []}

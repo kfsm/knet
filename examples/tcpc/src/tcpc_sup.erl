@@ -1,6 +1,6 @@
 %%
 %%
--module(tcpd_sup).
+-module(tcpc_sup).
 -behaviour(supervisor).
 
 -export([
@@ -16,14 +16,14 @@ init([]) ->
    {ok,
       {
          {one_for_one, 4, 1800},
-         [tcpd()]
+         [tcpc()]
       }
    }.
 
-tcpd() ->
-   Service = {tcpd_io_sup, start_link, [opts:get(addr, tcpd)]},
+tcpc() ->
    {
-      tcpd,
-      {knet_tcpd_sup, start_link, [Service]},
+      tcpc,
+      {tcpc_io_sup, start_link, [[opts:get(peer, tcpc)]]},
       permanent, 30000, supervisor, dynamic
    }.
+

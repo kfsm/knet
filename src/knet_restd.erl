@@ -1,126 +1,97 @@
-
+%% @description
+%%    server-side RESTfull konduit
 -module(knet_restd).
+-behaviour(kfsm).
 
--export([init/1, free/2, ioctl/2]).
--export(['LISTEN'/2, 'INPUT'/2]).
+-export([
+   start_link/1, %start_link/2
+   init/1, free/2,
+   'LISTEN'/3, 'INPUT'/3
+]).
 
 -record(fsm, {
-   resource,   % resource dispatch table
+   resource,   % unique identity of resource dispatch table
+   queue,      % i/o queue accumulates HTTP entity
+
+   handler,    % request handler
    method,     % request method
-   heads,      % request headers
-   uri,        % request uri
-   mod,        % active resource
-   tag,        % active resource tag
-   content,    % active content type
-   buffer
+   head,       % request headers
+   content,    % accepted content type
+   uri         % request uri
 }).
 -define(DEF_HEAD, [mime:new(<<"*/*">>)]).
 
-init(Opts) ->
+%%%------------------------------------------------------------------
+%%%
+%%% Factory
+%%%
+%%%------------------------------------------------------------------   
+
+start_link(Resource) ->
+   kfsm_pipe:start_link(?MODULE, Resource).
+
+init(Resource) ->
    {ok,
       'LISTEN',
       #fsm{
-         resource = Opts,
-         buffer   = <<>>
+         resource = Resource,
+         queue    = deq:new()
       }
    }.
 
 free(_, _) ->
    ok.
 
-%%
-%%
-ioctl(_, _) ->
-   undefined.
-
 %%%------------------------------------------------------------------
 %%%
 %%% LISTEN
 %%%
 %%%------------------------------------------------------------------   
-'LISTEN'({http, Uri, {Mthd, _}}=Req, #fsm{resource=Resource}=S) -> 
+'LISTEN'({http, Uri, {Mthd, _}}=Req, Pipe, S) -> 
    try
-      {Tag, Mod} = check_resource(Uri, Resource),
-      ok  = check_method(Mthd, Mod:allowed_methods(Tag)),
-      request(Mod, Tag, Req, S)
-   catch
-      _:{badmatch, {error, Reason}} ->
-         {reply, {error, Uri, Reason}, 'LISTEN', S};
-      _:{error, Reason} -> 
-         {reply, {error, Uri, Reason}, 'LISTEN', S};
-      _:badarg ->
-         {reply, {error, Uri, badarg}, 'LISTEN', S};
-      _:{badarg, _} ->
-         {reply, {error, Uri, badarg}, 'LISTEN', S};
-      _:Reason ->
-         lager:error("knet failed: ~p ~p", [Reason, erlang:get_stacktrace()]),
-         {reply, {error, Uri, 500}, 'LISTEN', S}
-   end.
+      %Mod 
+      Mod = check_resource(Uri, S#fsm.resource),
+      ok  = check_method(Mthd,  Mod:allowed_methods()),
+      request(Mod, Req, Pipe, S)
+   catch _:Reason ->
+      pipe:a(Pipe, http_failure(Reason, Uri)),
+      {next_state, 'LISTEN', S}
+   end;
+
+'LISTEN'(_, _, S) ->
+   {next_state, 'LISTEN', S}.
 
 %%
 %% handler resource request
-request(Mod, Tag, {http, Uri, {'GET',  Heads}}, S) ->
-   {Ref, Content} = check_content_type(opts:val('Accept', ?DEF_HEAD, Heads), Mod:content_provided(Tag)),
-   {reply,
-      response(Mod:'GET'({Tag, Ref}, Uri, Heads), S#fsm{method='GET', uri=Uri, tag={Tag, Ref}, content=Content}),
-      'LISTEN',
-      S
-   };
+request(Mod, {http, Uri, {Mthd,  Head}}, Pipe, S)
+ when Mthd =:= 'GET' orelse Mthd =:= 'DELETE' orelse Mthd =:= 'HEAD' ->
+   {Ref, Content} = check_content_type(
+      opts:val('Accept', ?DEF_HEAD, Head), 
+      Mod:content_provided()
+   ),
+   pipe:a(Pipe, 
+      http_response(Mod:Mthd(Ref, Uri, Head), Uri, Content)
+   ),
+   {next_state, 'LISTEN', S};
 
-request(Mod, Tag, {http, Uri, {'HEAD',  Heads}}, S) ->
-   {Ref, Content} = check_content_type(opts:val('Accept', ?DEF_HEAD, Heads), Mod:content_provided(Tag)),
-   {reply,
-      response(Mod:'GET'({Tag, Ref}, Uri, Heads), S#fsm{method='HEAD', uri=Uri, tag={Tag, Ref}, content=Content}),
-      'LISTEN',
-      S
-   };
-
-request(Mod, Tag, {http, Uri, {'POST',  Heads}}, S) ->
-   {Ref, Content} = check_content_type(opts:val('Content-Type', Heads), Mod:content_accepted(Tag)),
+request(Mod, {http, Uri, {Mthd,  Head}}, Pipe, S)
+ when Mthd =:= 'PUT' orelse Mthd =:= 'POST' orelse Mthd =:= 'PATCH' ->
+   Content = check_content_type(
+      opts:val('Content-Type', Head), 
+      Mod:content_accepted()
+   ),
    {next_state, 
-      'INPUT', 
+      'INPUT',
       S#fsm{
-         method  = 'POST',
-         heads   = Heads,
+         handler = Mod,
+         method  = Mthd,
+         head    = Head,
          uri     = Uri,
-         mod     = Mod,
-         tag     = {Tag, Ref},
-         content = Content,
-         buffer  = <<>>
+         content = Content
       }
    };
 
-request(Mod, Tag, {http, Uri, {'PUT',  Heads}}, S) ->
-   {Ref, Content} = check_content_type(opts:val('Content-Type', Heads), Mod:content_accepted(Tag)),
-   {next_state, 
-      'INPUT', 
-      S#fsm{
-         method  = 'PUT',
-         heads   = Heads,
-         uri     = Uri,
-         mod     = Mod,
-         tag     = {Tag, Ref},
-         content = Content,
-         buffer  = <<>>
-      }
-   };
-
-
-request(Mod, Tag, {http, Uri, {'DELETE', Heads}}, S) ->
-   {Ref, Content} = hd(Mod:content_provided(Tag)),
-   {reply,
-      response(Mod:'DELETE'({Tag, Ref}, Uri, Heads), S#fsm{method='DELETE', tag={Tag, Ref}, content=Content}),
-      'LISTEN',
-      S
-   };
-
-request(_Mod, _Tag, {http, _, {'PATCH',   _}}, _S) ->
-   throw({error, not_implemented});
-
-request(_Mod, _Tag, {http, _, {'OPTIONS', _}}, _S) ->
-   throw({error, not_implemented});
-
-request(_Mod, _Tag, {http, _, {_, _}}, _S) ->
+request(_Mod, {http, _, {_, _}}, _Pipe, _S) ->
    throw({error, not_implemented}).
 
 %%%------------------------------------------------------------------
@@ -128,34 +99,20 @@ request(_Mod, _Tag, {http, _, {_, _}}, _S) ->
 %%% INPUT
 %%%
 %%%------------------------------------------------------------------   
-'INPUT'({http, _Uri, Msg}, #fsm{buffer=Buffer}=S)
+'INPUT'({http, _Uri, Msg}, Pipe, S)
  when is_binary(Msg) ->
-   {next_state, 
-      'INPUT', 
-      S#fsm{
-         buffer = <<Buffer/binary, Msg/binary>>
-      }
-   };
+   {next_state, 'INPUT', S#fsm{queue = deq:enq(Msg, S#fsm.queue)}}; 
 
-'INPUT'({http, _Uri, eof}, #fsm{method=Mthd, mod=Mod, tag=Tag, uri=Uri, heads=Heads, buffer=Msg}=S) ->
+'INPUT'({http, Uri, eof}, Pipe, #fsm{handler=Mod, method=Mthd, content={Ref, Content}}=S) ->
    try
-      {reply,
-         response(Mod:Mthd(Tag, Uri, Heads, Msg), S),
-         'LISTEN',
-         S
-      }
-   catch
-      _:{badmatch, {error, Reason}} ->
-         {reply, {error, Uri, Reason}, 'LISTEN', S};
-      _:{error, Reason} -> 
-         {reply, {error, Uri, Reason}, 'LISTEN', S};
-      _:badarg ->
-         {reply, {error, Uri, badarg}, 'LISTEN', S};
-      _:{badarg, _} ->
-         {reply, {error, Uri, badarg}, 'LISTEN', S};
-      _:Reason ->
-         lager:error("knet failed: ~p ~p", [Reason, erlang:get_stacktrace()]),
-         {reply, {error, Uri, 500}, 'LISTEN', S}
+      Msg = erlang:iolist_to_binary(deq:list(S#fsm.queue)),
+      pipe:a(Pipe, 
+         http_response(Mod:Mthd(Ref, S#fsm.uri, S#fsm.head, Msg), S#fsm.uri, Content)
+      ),
+      {next_state, 'LISTEN', S#fsm{queue = deq:new()}}
+   catch _:Reason ->
+      pipe:a(Pipe, http_failure(Reason, Uri)),
+      {next_state, 'LISTEN', S}
    end.
 
 
@@ -166,35 +123,21 @@ request(_Mod, _Tag, {http, _, {_, _}}, _S) ->
 %%%------------------------------------------------------------------   
 
 %%
-%% find resource corresponding to uri
+%% find resource corresponding to uri (module per resource)
 check_resource(ReqUri, [Resource | Tail]) ->
-   case check_uri(ReqUri, Resource:uri()) of
-      false -> check_resource(ReqUri, Tail);
-      Tag   -> {Tag, Resource}
+   case uri:match(ReqUri, Resource:uri()) of
+      true  -> Resource;
+      false -> check_resource(ReqUri, Tail)
    end;
 
 check_resource(_ReqUri, []) ->
    throw({error, not_available}).
 
-%%
-%% find resource tag corresponding to uri
-check_uri(ReqUri, {Tag, Uri}) ->
-   case uri:match(ReqUri, Uri) of
-      true  -> Tag;
-      false -> false
-   end;
-
-check_uri(ReqUri, [{Tag, Uri} | Tail]) ->
-   case uri:match(ReqUri, Uri) of
-      true  -> Tag;
-      false -> check_uri(ReqUri, Tail)
-   end;
-
-check_uri(_ReqUri, []) ->
-   false.
 
 %%
 %% check if method is allowed by resource
+check_method(Requested, ['*']) ->
+   ok;
 check_method(Requested, Allowed) ->
    case lists:member(Requested, Allowed) of
       false -> throw({error, not_allowed});
@@ -228,23 +171,33 @@ check_type(_, []) ->
    false.
 
 
-
-
 %%
 %%
-response({Code, Msg}, #fsm{uri=Uri, content=Content}) ->
+http_response({Code, Msg}, Uri, Content) ->
    {Code, Uri, [{'Content-Type', Content}], Msg};
 
-response({Code, Heads, Msg}, #fsm{uri=Uri, content=Content}) ->
+http_response({Code, Heads, Msg}, Uri, Content) ->
    case lists:keyfind('Content-Type', 1, Heads) of
       false -> {Code, Uri, [{'Content-Type', Content} | Heads], Msg};
       _     -> {Code, Uri, Heads, Msg}
    end;
 
-response(Code, #fsm{uri=Uri}) ->
+http_response(Code, Uri, _Content) ->
    {Code, Uri, [], <<>>}.
 
-
+%%
+%% failure on HTTP request
+http_failure({badmatch, {error, Reason}}, Uri) ->
+   {Reason, Uri, [], undefined};
+http_failure({error, Reason}, Uri) -> 
+   {Reason, Uri, [], undefined};
+http_failure(badarg, Uri) ->
+   {badarg, Uri, [], undefined};
+http_failure({badarg, _}, Uri) ->
+   {badarg, Uri, [], undefined};
+http_failure(Reason, Uri) ->
+   lager:error("knet failed: ~p ~p", [Reason, erlang:get_stacktrace()]),
+   {500,    Uri, [], undefined}.
 
    
 

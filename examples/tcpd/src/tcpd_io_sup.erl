@@ -1,6 +1,6 @@
 %% @description
 %%    echo acceptor supervisor
--module(httpd_io_sup).
+-module(tcpd_io_sup).
 -behaviour(supervisor).
 
 -export([
@@ -17,16 +17,11 @@ start_link(Opts) ->
       permanent, 30000, worker, dynamic
    }),
    {ok,   B} = supervisor:start_child(Sup, {
-      httpd,
-      {knet_httpd, start_link, []},
+      echo,
+      {tcpd_echo, start_link, []},
       permanent, 30000, worker, dynamic
    }),
    pipe:make([A, B]),
-   pipe:bind(B,  b, 
-      fun({http, Uri, _}) ->
-         pns:whereis(knet, {vhost, uri:get(authority, Uri)}) 
-      end
-   ),
    {ok, Sup}.
 
    

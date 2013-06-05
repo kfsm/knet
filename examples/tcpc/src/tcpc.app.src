@@ -1,0 +1,20 @@
+{application, tcpc,
+   [
+      {description, "knet example: tcp client"},
+      {vsn,         "0.2.0"},
+      {modules,     [
+         tcpc,
+         tcpc_sup,
+         tcpc_app
+      ]},
+      {registered,  []},
+      {applications,[
+         kernel,
+         stdlib,
+         lager,
+         knet
+      ]},
+      {mod, {tcpc_app, []}},
+      {env, []}
+   ]
+}.  

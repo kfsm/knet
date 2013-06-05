@@ -52,7 +52,7 @@
 
 }).
 
-%% TODO: fix - continue
+%% TODO: fix Expect: 100 - continue
 
 %%%------------------------------------------------------------------
 %%%
@@ -102,7 +102,13 @@ free(_, _) ->
       handle_request(Pipe, S#fsm{queue = deq:enq(Pckt, S#fsm.queue)})
    catch
       {http_error, Code} ->
-         pipe:'<'(Pipe, {send, Peer, knet_http:encode_error(Code)}),
+         Payload = knet_http:status(Code),
+         Msg     = knet_http:encode_response(Code, [
+            {'Content-Length', erlang:size(Payload)}, 
+            {'Content-Type', 'text/plain'}
+         ]),
+         pipe:'<'(Pipe, {send, Peer, Msg}),
+         pipe:'<'(Pipe, {send, Peer, Payload}),
          {next_state, 'LISTEN, S'}
    end;
 
@@ -143,7 +149,13 @@ check_request({http_request, Mthd, Uri, _Vsn}, S) ->
       handle_header(Pipe, S#fsm{queue = deq:enq(Pckt, S#fsm.queue)})
    catch
       {http_error, Code} -> 
-         pipe:'<'(Pipe, {send, Peer, knet_http:encode_error(Code)}),
+         Payload = knet_http:status(Code),
+         Msg     = knet_http:encode_response(Code, [
+            {'Content-Length', erlang:size(Payload)}, 
+            {'Content-Type', 'text/plain'}
+         ]),
+         pipe:'<'(Pipe, {send, Peer, Msg}),
+         pipe:'<'(Pipe, {send, Peer, Payload}),
          {next_state, 'LISTEN', S}
    end.
 
@@ -219,6 +231,16 @@ handle_message(Pipe, S) ->
    pipe:'>'(Pipe, {send, S#fsm.peer, Payload}),
    {next_state, 'LISTEN', S};
 
+'RESPONSE'({Code, _Uri, Head, undefined}, Pipe, S) ->
+   Payload = knet_http:status(Code),
+   Msg     = knet_http:encode_response(Code, [
+      {'Content-Length', erlang:size(Payload)}, 
+      {'Content-Type', 'text/plain'}
+   ]),
+   pipe:'>'(Pipe, {send, S#fsm.peer, Msg}),
+   pipe:'>'(Pipe, {send, S#fsm.peer, Payload}),
+   {next_state, 'LISTEN', S};
+
 %%
 %% chunked HTTP response
 'RESPONSE'({send, _Uri, eof}, Pipe, S) ->
@@ -259,6 +281,17 @@ handle_message(Pipe, S) ->
    pipe:'>'(Pipe, {send, S#fsm.peer, Msg}),
    pipe:'>'(Pipe, {send, S#fsm.peer, Payload}),
    {next_state, 'LISTEN', S};
+
+'ENTITY'({Code, _Uri, Head, undefined}, Pipe, S) ->
+   Payload = knet_http:status(Code),
+   Msg     = knet_http:encode_response(Code, [
+      {'Content-Length', erlang:size(Payload)}, 
+      {'Content-Type', 'text/plain'}
+   ]),
+   pipe:'>'(Pipe, {send, S#fsm.peer, Msg}),
+   pipe:'>'(Pipe, {send, S#fsm.peer, Payload}),
+   {next_state, 'LISTEN', S};
+
 
 %%
 %% chunked HTTP response
@@ -309,6 +342,16 @@ handle_entity(Pipe, #fsm{length=Len}=S) ->
  when is_binary(Payload) ->
    % outgoing response with payload
    Msg = knet_http:encode_response(Code, [{'Content-Length', erlang:size(Payload)} | Head]),
+   pipe:'>'(Pipe, {send, S#fsm.peer, Msg}),
+   pipe:'>'(Pipe, {send, S#fsm.peer, Payload}),
+   {next_state, 'LISTEN', S};
+
+'CHUNK'({Code, _Uri, Head, undefined}, Pipe, S) ->
+   Payload = knet_http:status(Code),
+   Msg     = knet_http:encode_response(Code, [
+      {'Content-Length', erlang:size(Payload)}, 
+      {'Content-Type', 'text/plain'}
+   ]),
    pipe:'>'(Pipe, {send, S#fsm.peer, Msg}),
    pipe:'>'(Pipe, {send, S#fsm.peer, Payload}),
    {next_state, 'LISTEN', S};

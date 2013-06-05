@@ -1,6 +1,6 @@
 %% @description
 %%    echo acceptor supervisor
--module(tcpd_echo_sup).
+-module(restd_io_sup).
 -behaviour(supervisor).
 
 -export([
@@ -17,11 +17,16 @@ start_link(Opts) ->
       permanent, 30000, worker, dynamic
    }),
    {ok,   B} = supervisor:start_child(Sup, {
-      echo,
-      {tcpd_echo, start_link, []},
+      httpd,
+      {knet_httpd, start_link, []},
       permanent, 30000, worker, dynamic
    }),
-   pipe:make([A, B]),
+   {ok,   C} = supervisor:start_child(Sup, {
+      restd,
+      {knet_restd, start_link, [[restd_uri_a, restd_uri_b]]},
+      permanent, 30000, worker, dynamic
+   }),
+   pipe:make([A, B, C]),
    {ok, Sup}.
 
    
