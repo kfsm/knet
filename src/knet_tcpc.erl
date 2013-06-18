@@ -22,7 +22,7 @@
 
 -export([
    start_link/1, init/1, free/2, 
-   'IDLE'/3, 'ESTABLISHED'/3 %, 'CHUNKED'/3
+   'IDLE'/3, 'ESTABLISHED'/3
 ]).
 
 %% internal state
@@ -72,36 +72,21 @@ free(Reason, S) ->
 %%%------------------------------------------------------------------   
 
 'IDLE'({connect, Peer}, Pipe, S) ->
-   'IDLE'(connect, Pipe, S#fsm{peer=Peer});
-
-'IDLE'(connect, Pipe, #fsm{peer=undefined}=S) ->
-   pipe:a(Pipe, {tcp, undefined, badarg}),
-   {next_state, 'IDLE', S};
-
-'IDLE'(connect, Pipe, #fsm{peer={Host, Port}}=S) ->
-   case gen_tcp:connect(knet:host(Host), Port, S#fsm.sopt, S#fsm.timeout) of
-      {ok, Sock} ->
-         {ok, Peer} = inet:peername(Sock),
-         {ok, Addr} = inet:sockname(Sock),
-         ok = inet:setopts(Sock, [{active, once}]),
-         ?DEBUG("knet tcp/c ~p: established ~p (local ~p)", [self(), Peer, Addr]),
-         pipe:a(Pipe, {tcp, Peer, established}),
-         {next_state, 'ESTABLISHED', S#fsm{sock=Sock, addr=Addr, peer=Peer}};
-      {error, Reason} ->
-         ?DEBUG("knet tcp/c ~p: terminated ~p (reason ~p)", [self(), S#fsm.peer, Reason]),
-         pipe:a(Pipe, {tcp, S#fsm.peer, {terminated, Reason}}),
-         {stop, normal, S}
+   case handle_connect(Pipe, Peer, S) of
+      {ok,   NS} -> {next_state, 'ESTABLISHED', NS};
+      {error, _} -> {stop, normal, S}
    end;
-
-   % State = case opts:val(packet, undefined, S#fsm.sopt) of
-   %    line -> 'CHUNKED';
-   %    _    -> 'ESTABLISHED'
-   % end,
 
 'IDLE'(shutdown, Pipe, S) ->
    ?DEBUG("knet tcp/c ~p: terminated ~p (reason normal)", [self(), S#fsm.peer]),
    pipe:a(Pipe, {tcp, S#fsm.peer, {terminated, normal}}),
-   {stop, normal, S}.
+   {stop, normal, S};
+
+'IDLE'({send, Peer, _}=Msg, Pipe, S) ->
+   case handle_connect(Pipe, Peer, S) of
+      {ok,   NS} -> 'ESTABLISHED'(Msg, Pipe, NS);
+      {error, _} -> {stop, normal, S}
+   end.
 
 %%%------------------------------------------------------------------
 %%%
@@ -134,71 +119,36 @@ free(Reason, S) ->
 'ESTABLISHED'({send, _Peer, Pckt}, Pipe, S) ->
    case gen_tcp:send(S#fsm.sock, Pckt) of
       ok    ->
+         pipe:a(Pipe, {tcp, S#fsm.peer, ack}), 
          {next_state, 'ESTABLISHED', S};
       {error, Reason} ->
          ?DEBUG("knet tcp/d ~p: terminated ~p (reason ~p)", [self(), S#fsm.peer, Reason]),
-         pipe:c(Pipe, {tcp, S#fsm.peer, {terminated, Reason}}),
+         pipe:a(Pipe, {tcp, S#fsm.peer, {terminated, Reason}}),
          {stop, normal, S}
    end.
 
-% %%%------------------------------------------------------------------
-% %%%
-% %%% CHUNKED
-% %%%
-% %%%------------------------------------------------------------------   
+%%%------------------------------------------------------------------
+%%%
+%%% private
+%%%
+%%%------------------------------------------------------------------   
 
-% %% gen_tcp has line packet mode but if line do not fit to buffer it is framed
-% 'CHUNKED'({tcp_error, _, Reason}, S) ->
-%    ?DEBUG("knet tcp/c ~p: terminated ~p (reason ~p)", [self(), S#fsm.peer, Reason]),
-%    {stop, normal,
-%       {tcp, S#fsm.peer, {terminated, Reason}},
-%       S
-%    };
-   
-% 'CHUNKED'({tcp_closed, Reason}, S) ->
-%    ?DEBUG("knet tcp/c ~p: terminated ~p (reason ~p)", [self(), S#fsm.peer, Reason]),
-%    {stop, normal,
-%       {tcp, S#fsm.peer, {terminated, normal}},
-%       S
-%    };
+handle_connect(Pipe, {Host, Port}, S) ->
+   case gen_tcp:connect(knet:host(Host), Port, S#fsm.sopt, S#fsm.timeout) of
+      {ok, Sock} ->
+         {ok, Peer} = inet:peername(Sock),
+         {ok, Addr} = inet:sockname(Sock),
+         ok = inet:setopts(Sock, [{active, once}]),
+         ?DEBUG("knet tcp/c ~p: established ~p (local ~p)", [self(), Peer, Addr]),
+         pipe:a(Pipe, {tcp, Peer, established}),
+         {ok, S#fsm{sock=Sock, addr=Addr, peer=Peer}};
+      {error, Reason} ->
+         ?DEBUG("knet tcp/c ~p: terminated ~p (reason ~p)", [self(), S#fsm.peer, Reason]),
+         pipe:a(Pipe, {tcp, S#fsm.peer, {terminated, Reason}}),
+         {error, Reason}
+   end;
 
-% 'CHUNKED'({tcp, _, Pckt}, S) ->
-%    ?DEBUG("knet tcp/c ~p: recv ~p~n~p", [self(), S#fsm.peer, Pckt]),
-%    % TODO: flexible flow control
-%    ok = inet:setopts(S#fsm.sock, [{active, once}]),
-%    case binary:last(Pckt) of
-%       $\n ->   
-%          {reply, 
-%             {tcp, S#fsm.peer, erlang:iolist_to_binary(lists:reverse([Pckt | S#fsm.chunk]))},
-%             'CHUNKED',
-%             S#fsm{chunk=[]}
-%          };
-%       _   ->
-%          {next_state, 
-%             'CHUNKED',
-%             S#fsm{chunk=[Pckt | S#fsm.chunk]}
-%          }
-%    end;
+handle_connect(Pipe, _, S) ->
+   pipe:a(Pipe, {tcp, undefined, badarg}),
+   {error, badarg}.
 
-% 'CHUNKED'({send, Pckt}, S) ->
-%    case gen_tcp:send(S#fsm.sock, Pckt) of
-%       ok    ->
-%          {reply, 
-%             {tcp, S#fsm.peer, ack},
-%             'CHUNKED', 
-%             S
-%          };
-%       {error, Reason} ->
-%          ?DEBUG("knet tcp/c ~p: terminated ~p (reason ~p)", [self(), S#fsm.peer, Reason]),
-%          {stop, normal,
-%             {tcp, S#fsm.peer, {terminated, Reason}},
-%             S
-%          }
-%    end;
-   
-% 'CHUNKED'(terminate, S) ->
-%    ?DEBUG("knet tcp/c ~p: terminated ~p (reason normal)", [self(), S#fsm.peer]),
-%    {stop, normal,
-%       {tcp, S#fsm.peer, {terminated, normal}},
-%       S
-%    }.   

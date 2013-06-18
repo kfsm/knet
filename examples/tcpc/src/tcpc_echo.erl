@@ -16,7 +16,7 @@ start_link() ->
 init(_) ->
    lager:info("echo ~p: client", [self()]),
    random:seed(erlang:now()),
-   erlang:send_after(1000, self(), init),
+   erlang:send_after(1000, self(), run),
    {ok, 'ECHO', undefined}.
 
 free(_, _) ->
@@ -24,8 +24,9 @@ free(_, _) ->
 
 %%
 %%
-'ECHO'(init, Pipe, S) ->
-   pipe:a(Pipe, connect),
+'ECHO'(run, Pipe, S) ->
+   lager:info("echo ~p: run idle ~p", [self()]),
+   pipe:a(Pipe, {send, undefined, message()}),
    {next_state, 'ECHO', S};
 
 'ECHO'({tcp, Peer, established}, Pipe, S) ->

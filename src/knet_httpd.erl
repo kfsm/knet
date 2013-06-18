@@ -28,28 +28,24 @@
 -include("knet.hrl").
 
 -export([
-   start_link/0, init/1, free/2, 
+   start_link/0, 
+   init/1, free/2, 
    'IDLE'/3,     %% idle
    'LISTEN'/3,   %% listen for incoming requests
-   'REQUEST'/3,  %% receiving request
-   'RESPONSE'/3, %% waiting a client response
-   'ENTITY'/3,   %% receiving HTTP entity
-   'CHUNK'/3     %% receiving HTTP chunk
+   'REQUEST'/3,  %% handling request
+   'RESPONSE'/3  %% handling response
 ]).
 
 %% internal state
 -record(fsm, {
    % transport 
-   prot,    % transport protocol (used for pattern match)
-   peer,    % remote peer
+   peer     = undefined :: any(),           % remote peer
+   scheme   = http      :: http | https,    % schema
+   url      = undefined :: any(),    %
 
-   method :: atom(),    % request method
-   head   :: list(),    % request headers 
-   url    :: binary(),  % request url
-
-   length :: integer(), % entity / chunk length
-   queue  :: datum:q()  % i/o queue
-
+   enc      = undefined :: htstream:http(), % http encoder (outbound)
+   dec      = undefined :: htstream:http(), % http decoder (inbound) 
+   iobuffer = <<>>      :: binary()
 }).
 
 %% TODO: fix Expect: 100 - continue
@@ -63,10 +59,10 @@ start_link() ->
    kfsm_pipe:start_link(?MODULE, []).
 
 init(_) ->
-   {ok,
-      'IDLE',
+   {ok, 'IDLE',
       #fsm{
-         queue = deq:new()
+         enc = htstream:new(),
+         dec = htstream:new() 
       }
    }.
 
@@ -78,334 +74,104 @@ free(_, _) ->
 %%% IDLE
 %%%
 %%%------------------------------------------------------------------   
-'IDLE'({Prot, Peer, established}, _Pipe, S) ->
-   {next_state, 
-      'LISTEN', 
-      S#fsm{
-         prot = Prot,
-         peer = Peer
-      }
-   }.
+'IDLE'({tcp, Peer,  established}, _Pipe, S) ->
+   {next_state, 'LISTEN', S#fsm{peer=Peer, scheme=http}};
+
+'IDLE'({ssl, Peer,  established}, _Pipe, S) ->
+   {next_state, 'LISTEN', S#fsm{peer=Peer, scheme=https}}.
 
 %%%------------------------------------------------------------------
 %%%
 %%% LISTEN - listen for request arrival
 %%%
 %%%------------------------------------------------------------------   
-'LISTEN'({Prot, _Peer, {terminated, _}}, _Pipe, S)
- when S#fsm.prot =:= Prot ->
-   {stop, normal, S};
-
 'LISTEN'({Prot, Peer, Pckt}, Pipe, S)
- when S#fsm.prot =:= Prot, is_binary(Pckt) ->
-   try 
-      handle_request(Pipe, S#fsm{queue = deq:enq(Pckt, S#fsm.queue)})
-   catch
-      {http_error, Code} ->
-         Payload = knet_http:status(Code),
-         Msg     = knet_http:encode_response(Code, [
-            {'Content-Length', erlang:size(Payload)}, 
-            {'Content-Type', 'text/plain'}
-         ]),
-         pipe:'<'(Pipe, {send, Peer, Msg}),
-         pipe:'<'(Pipe, {send, Peer, Payload}),
-         {next_state, 'LISTEN, S'}
+ when (Prot =:= tcp orelse Prot =:= ssl), is_binary(Pckt) ->
+   try
+      {Input, Buffer, Http} = htstream:decode(iolist_to_binary([S#fsm.iobuffer, Pckt]), S#fsm.dec),
+      handle_listen(htstream:state(Http), Input, Pipe, S#fsm{iobuffer=Buffer, dec=Http})
+   catch _:Reason ->
+      handle_failure(Reason, Pipe, S),
+      {next_state, 'LISTEN', S}
    end;
 
-'LISTEN'(_, _Pipe, S) ->
+'LISTEN'({Prot, _Peer, {terminated, _}}, _Pipe, S)
+ when Prot =:= tcp orelse Prot =:= ssl ->
+   {stop, normal, S}.
+
+%%
+%% handle listen state
+handle_listen(eof, {Method, Uri, Heads}, Pipe, S) ->
+   % end of http request, no payload
+   Url = make_url(Uri, Heads, S#fsm.scheme),
+   _   = pipe:b(Pipe, {http, Url, {Method, Heads}}),
+   {next_state, 'RESPONSE', S#fsm{url=Url}};
+
+handle_listen(payload, {Method, Uri, Heads}, Pipe, S) ->
+   % http request with payload
+   Url = make_url(Uri, Heads, S#fsm.scheme),
+   _   = pipe:b(Pipe, {http, Url, {Method, Heads}}),
+   {Chunk, Buffer, Http} = htstream:parse(S#fsm.iobuffer, S#fsm.dec),
+   handle_request(htstream:state(Http), Chunk, Pipe, S#fsm{url=Url, iobuffer=Buffer, dec=Http});
+
+handle_listen(_, Chunk, Pipe, S) ->
    {next_state, 'LISTEN', S}.
 
-%%
-handle_request(Pipe, S) ->
-   case knet_http:decode_request(S#fsm.queue) of
-      % request line is received yet
-      {undefined, Queue} ->
-         {next_state, 'LISTEN', S#fsm{queue=Queue}};
-
-      % request line is received
-      {Request,   Queue} ->
-         handle_header(Pipe, check_request(Request, S#fsm{queue=Queue}))
-   end.
-
-check_request({http_request, Mthd, Uri, _Vsn}, S) ->
-   S#fsm{
-      method = knet_http:check_method(Mthd),
-      head   = [],
-      url    = knet_http:check_uri(Uri)
-   }.
-
 %%%------------------------------------------------------------------
 %%%
-%%% REQUEST - handler HTTP request
+%%% REQUEST - request processing
 %%%
 %%%------------------------------------------------------------------   
+
+'REQUEST'({Prot, Peer, Pckt}, Pipe, S)
+ when (Prot =:= tcp orelse Prot =:= ssl), is_binary(Pckt) ->
+   try
+      {Chunk, Buffer, Http} = htstream:decode(iolist_to_binary([S#fsm.iobuffer, Pckt]), S#fsm.dec),
+      handle_request(htstream:state(Http), Chunk, Pipe, S#fsm{iobuffer=Buffer, dec=Http})
+   catch _:Reason ->
+      handle_failure(Reason, Pipe, S),
+      {next_state, 'LISTEN', S}
+   end;
+
 'REQUEST'({Prot, _Peer, {terminated, _}}, _Pipe, S)
- when S#fsm.prot =:= Prot ->
+ when Prot =:= tcp orelse Prot =:= ssl ->
    {stop, normal, S};
 
-'REQUEST'({Prot,  Peer, Pckt}, Pipe, S)
- when S#fsm.prot =:= Prot, is_binary(Pckt) ->
-   try
-      handle_header(Pipe, S#fsm{queue = deq:enq(Pckt, S#fsm.queue)})
-   catch
-      {http_error, Code} -> 
-         Payload = knet_http:status(Code),
-         Msg     = knet_http:encode_response(Code, [
-            {'Content-Length', erlang:size(Payload)}, 
-            {'Content-Type', 'text/plain'}
-         ]),
-         pipe:'<'(Pipe, {send, Peer, Msg}),
-         pipe:'<'(Pipe, {send, Peer, Payload}),
-         {next_state, 'LISTEN', S}
-   end.
+'REQUEST'(Msg, Pipe, S) ->
+   handle_response(Msg, Pipe, 'REQUEST', S). 
 
-handle_header(Pipe, S) ->
-   case knet_http:decode_header(S#fsm.queue) of
-      % header line is not received
-      {undefined, Queue} ->
-         {next_state, 'REQUEST', S#fsm{queue=Queue}};
-      % end-of-header is received
-      {eoh,  Queue} ->
-         pipe:'>'(Pipe, {http, S#fsm.url, {S#fsm.method, S#fsm.head}}),
-         handle_message(Pipe, S#fsm{queue=Queue});
-      % header is received
-      {{'Host', Auth}=Head, Queue} ->
-         handle_header(Pipe, 
-            S#fsm{
-               queue = Queue, 
-               url   = uri:set(authority, Auth, S#fsm.url), 
-               head  = [Head | S#fsm.head]
-            }
-         );
-      {Head, Queue} -> 
-         handle_header(Pipe, S#fsm{queue=Queue, head=[Head | S#fsm.head]})
-   end.
-
-
-handle_message(_Pipe, #fsm{method = Mthd}=S)
- when Mthd =:= 'GET' orelse Mthd =:= 'HEAD' orelse Mthd =:= 'DELETE' ->
+handle_request(eof, [], Pipe, S) ->
+   _   = pipe:b(Pipe, {http, S#fsm.url, eof}),
    {next_state, 'RESPONSE', S};
-handle_message(Pipe,  #fsm{method = Mthd}=S)
- when Mthd =:= 'PUT' orelse Mthd =:= 'POST' orelse Mthd =:= 'PATCH' ->
-   case opts:get(['Content-Length', 'Transfer-Encoding'], S#fsm.head) of
-      % chunked encoding
-      {'Transfer-Encoding',  _}  ->
-         handle_chunk(Pipe, S#fsm{length = undefined});
-      % Content-Length encoding
-      {'Content-Length', Length} -> 
-         handle_entity(Pipe, S#fsm{length = Length})
-   end;
-handle_message(Pipe, S) ->
-   case opts:get(['Content-Length', 'Transfer-Encoding'], undefined, S#fsm.head) of
-      undefined ->
-         {next_state, 'RESPONSE', S};
-      % chunked encoding
-      {'Transfer-Encoding',  _}  ->
-         handle_chunk(Pipe, S#fsm{length = undefined});
-      % Content-Length encoding
-      {'Content-Length', Length} -> 
-         handle_entity(Pipe, S#fsm{length = Length})
-   end.
+
+handle_request(eof, Chunk, Pipe, S) ->
+   _   = pipe:b(Pipe, {http, S#fsm.url, iolist_to_binary(Chunk)}),
+   _   = pipe:b(Pipe, {http, S#fsm.url, eof}),
+   {next_state, 'RESPONSE', S};
+
+handle_request(entity, [], _Pipe, S) ->
+   {next_state, 'REQUEST', S};
+
+handle_request(entity, Chunk, Pipe, S) ->
+   _   = pipe:b(Pipe, {http, S#fsm.url, iolist_to_binary(Chunk)}),
+   {next_state, 'REQUEST', S}.
 
 %%%------------------------------------------------------------------
 %%%
-%%% RESPONSE - handle HTTP response to client
+%%% RESPONSE - response processing
 %%%
 %%%------------------------------------------------------------------   
-
-'RESPONSE'({Prot,  _Peer, Pckt}, _Pipe, #fsm{length=Len}=S)
- when S#fsm.prot =:= Prot, is_binary(Pckt) ->
-   {next_state, 'RESPONSE', S#fsm{queue=deq:enq(Pckt, S#fsm.queue)}};
 
 'RESPONSE'({Prot, _Peer, {terminated, _}}, _Pipe, S)
- when S#fsm.prot =:= Prot ->
+ when Prot =:= tcp orelse Prot =:= ssl ->
    {stop, normal, S};
 
-%%
-%% complete HTTP response
-'RESPONSE'({Code, _Uri, Head, Payload}, Pipe, S)
- when is_binary(Payload) ->
-   % outgoing response with payload
-   Msg = knet_http:encode_response(Code, [{'Content-Length', erlang:size(Payload)} | Head]),
-   pipe:'>'(Pipe, {send, S#fsm.peer, Msg}),
-   pipe:'>'(Pipe, {send, S#fsm.peer, Payload}),
-   {next_state, 'LISTEN', S};
+'RESPONSE'({Prot, Peer, Pckt}, Pipe, S)
+ when (Prot =:= tcp orelse Prot =:= ssl), is_binary(Pckt) ->
+   {next_state, 'RESPONSE', S#fsm{iobuffer=iolist_to_binary([S#fsm.iobuffer, Pckt])}};
 
-'RESPONSE'({Code, _Uri, Head, undefined}, Pipe, S) ->
-   Payload = knet_http:status(Code),
-   Msg     = knet_http:encode_response(Code, [
-      {'Content-Length', erlang:size(Payload)}, 
-      {'Content-Type', 'text/plain'}
-   ]),
-   pipe:'>'(Pipe, {send, S#fsm.peer, Msg}),
-   pipe:'>'(Pipe, {send, S#fsm.peer, Payload}),
-   {next_state, 'LISTEN', S};
-
-%%
-%% chunked HTTP response
-'RESPONSE'({send, _Uri, eof}, Pipe, S) ->
-   pipe:'>'(Pipe, {send, S#fsm.peer, knet_http:encode_chunk(<<>>)}),
-   {next_state, 'LISTEN', S};
-
-'RESPONSE'({send, _Uri, <<>>}, Pipe, S) ->
-   pipe:'>'(Pipe, {send, S#fsm.peer, knet_http:encode_chunk(<<>>)}),
-   {next_state, 'LISTEN', S};
-
-'RESPONSE'({send, _Uri, Chunk}, Pipe, S)
- when is_binary(Chunk) ->
-   % outgoing data chunk
-   pipe:'>'(Pipe, {send, S#fsm.peer, knet_http:encode_chunk(Chunk)}),
-   {next_state, 'RESPONSE', S};
-
-'RESPONSE'({Code, _Uri, Head}, Pipe, S) ->
-   Msg = knet_http:encode_response(Code, [{'Transfer-Encoding', <<"chunked">>} | Head]),
-   pipe:'>'(Pipe, {send, S#fsm.peer, Msg}),
-   {next_state, 'RESPONSE', S}.
-
-%%%------------------------------------------------------------------
-%%%
-%%% ENTITY - receive HTTP entity
-%%%
-%%%------------------------------------------------------------------   
-
-'ENTITY'({Prot,  _Peer, Pckt}, Pipe, #fsm{length=Len}=S)
- when S#fsm.prot =:= Prot, is_binary(Pckt) ->
-   handle_entity(Pipe, S#fsm{queue=deq:enq(Pckt, S#fsm.queue)});
-
-%%
-%% complete HTTP response
-'ENTITY'({Code, _Uri, Head, Payload}, Pipe, S)
- when is_binary(Payload) ->
-   % outgoing response with payload
-   Msg = knet_http:encode_response(Code, [{'Content-Length', erlang:size(Payload)} | Head]),
-   pipe:'>'(Pipe, {send, S#fsm.peer, Msg}),
-   pipe:'>'(Pipe, {send, S#fsm.peer, Payload}),
-   {next_state, 'LISTEN', S};
-
-'ENTITY'({Code, _Uri, Head, undefined}, Pipe, S) ->
-   Payload = knet_http:status(Code),
-   Msg     = knet_http:encode_response(Code, [
-      {'Content-Length', erlang:size(Payload)}, 
-      {'Content-Type', 'text/plain'}
-   ]),
-   pipe:'>'(Pipe, {send, S#fsm.peer, Msg}),
-   pipe:'>'(Pipe, {send, S#fsm.peer, Payload}),
-   {next_state, 'LISTEN', S};
-
-
-%%
-%% chunked HTTP response
-'ENTITY'({send, _Uri, eof}, Pipe, S) ->
-   pipe:'>'(Pipe, {send, S#fsm.peer, knet_http:encode_chunk(<<>>)}),
-   {next_state, 'LISTEN', S};
-
-'ENTITY'({send, _Uri, <<>>}, Pipe, S) ->
-   pipe:'>'(Pipe, {send, S#fsm.peer, knet_http:encode_chunk(<<>>)}),
-   {next_state, 'LISTEN', S};
-
-'ENTITY'({send, _Uri, Chunk}, Pipe, S)
- when is_binary(Chunk) ->
-   % outgoing data chunk
-   pipe:'>'(Pipe, {send, S#fsm.peer, knet_http:encode_chunk(Chunk)}),
-   {next_state, 'ENTITY', S};
-
-'ENTITY'({Code, _Uri, Head}, Pipe, S)
- when is_list(Head) ->
-   Msg = knet_http:encode_response(Code, [{'Transfer-Encoding', <<"chunked">>} | Head]),
-   pipe:'>'(Pipe, {send, S#fsm.peer, Msg}),
-   {next_state, 'ENTITY', S}.
-
-handle_entity(Pipe, #fsm{length=Len}=S) ->
-   case deq:deq(S#fsm.queue) of
-      {<<Chunk:Len/binary, Rest/binary>>, Queue} ->
-         pipe:'>'(Pipe, {http, S#fsm.url, Chunk}),
-         pipe:'>'(Pipe, {http, S#fsm.url,   eof}),
-         {next_state, 'RESPONSE', S#fsm{length=undefined, queue=deq:poke(Rest, Queue)}}; 
-      {Chunk, Queue} when size(Chunk) < Len ->
-         pipe:'>'(Pipe, {http, S#fsm.url, Chunk}),
-         {next_state, 'ENTITY', S#fsm{length = Len - size(Chunk)}}
-   end.
-
-%%%------------------------------------------------------------------
-%%%
-%%% CHUNK - receive HTTP chunk
-%%%
-%%%------------------------------------------------------------------   
-
-'CHUNK'({Prot,  _Peer, Pckt}, Pipe, #fsm{length=Len}=S)
- when S#fsm.prot =:= Prot, is_binary(Pckt) ->
-   handle_chunk(Pipe, S#fsm{queue=deq:enq(Pckt, S#fsm.queue)});
-
-%%
-%% complete HTTP response
-'CHUNK'({Code, _Uri, Head, Payload}, Pipe, S)
- when is_binary(Payload) ->
-   % outgoing response with payload
-   Msg = knet_http:encode_response(Code, [{'Content-Length', erlang:size(Payload)} | Head]),
-   pipe:'>'(Pipe, {send, S#fsm.peer, Msg}),
-   pipe:'>'(Pipe, {send, S#fsm.peer, Payload}),
-   {next_state, 'LISTEN', S};
-
-'CHUNK'({Code, _Uri, Head, undefined}, Pipe, S) ->
-   Payload = knet_http:status(Code),
-   Msg     = knet_http:encode_response(Code, [
-      {'Content-Length', erlang:size(Payload)}, 
-      {'Content-Type', 'text/plain'}
-   ]),
-   pipe:'>'(Pipe, {send, S#fsm.peer, Msg}),
-   pipe:'>'(Pipe, {send, S#fsm.peer, Payload}),
-   {next_state, 'LISTEN', S};
-
-%%
-%% chunked HTTP response
-'CHUNK'({send, _Uri, eof}, Pipe, S) ->
-   pipe:'>'(Pipe, {send, S#fsm.peer, knet_http:encode_chunk(<<>>)}),
-   {next_state, 'LISTEN', S};
-
-'CHUNK'({send, _Uri, <<>>}, Pipe, S) ->
-   pipe:'>'(Pipe, {send, S#fsm.peer, knet_http:encode_chunk(<<>>)}),
-   {next_state, 'LISTEN', S};
-
-'CHUNK'({send, _Uri, Chunk}, Pipe, S)
- when is_binary(Chunk) ->
-   % outgoing data chunk
-   pipe:'>'(Pipe, {send, S#fsm.peer, knet_http:encode_chunk(Chunk)}),
-   {next_state, 'CHUNK', S};
-
-'CHUNK'({Code, _Uri, Head}, Pipe, S)
- when is_list(Head) ->
-   Msg = knet_http:encode_response(Code, [{'Transfer-Encoding', <<"chunked">>} | Head]),
-   pipe:'>'(Pipe, {send, S#fsm.peer, Msg}),
-   {next_state, 'CHUNK', S}.
-
-handle_chunk(Pipe, #fsm{length=undefined}=S) ->
-   {Chunk, Queue} = deq:deq(S#fsm.queue),
-   case binary:split(Chunk, <<"\r\n">>) of  
-      % chunk header is not received
-      [_]          -> 
-         {next_state, 'CHUNK', S};
-      % chunk header  
-      [Head, Data] -> 
-         [L |_] = binary:split(Head, [<<" ">>, <<";">>]),
-         case list_to_integer(binary_to_list(L), 16) of
-            0   ->
-               <<_:2/binary, Rest/binary>> = Data,
-               pipe:'>'(Pipe, {http, S#fsm.url, eof}),
-               {next_state, 'RESPONSE', S#fsm{length=undefined, queue=deq:poke(Rest, Queue)}}; 
-            Len ->
-               handle_chunk(Pipe, S#fsm{length=Len, queue=deq:poke(Data, Queue)})
-         end
-   end;
-
-handle_chunk(Pipe, #fsm{length=Len}=S) ->
-   case deq:deq(S#fsm.queue) of
-      {<<Chunk:Len/binary, $\r, $\n, Rest/binary>>, Queue} ->
-         pipe:'>'(Pipe, {http, S#fsm.url, Chunk}),
-         handle_chunk(Pipe, S#fsm{length=undefined, queue=deq:poke(Rest, Queue)});
-      {Chunk, Queue} when size(Chunk) < Len ->
-         pipe:'>'(Pipe, {http, S#fsm.url, Chunk}),
-         {next_state, 'CHUNK', S#fsm{length = Len - size(Chunk), queue=Queue}}
-   end.
+'RESPONSE'(Msg, Pipe, S) ->
+   handle_response(Msg, Pipe, 'RESPONSE', S).
 
 %%%------------------------------------------------------------------
 %%%
@@ -413,6 +179,74 @@ handle_chunk(Pipe, #fsm{length=Len}=S) ->
 %%%
 %%%------------------------------------------------------------------
 
+%%
+%% make request url
+make_url(Url, Heads, Scheme) ->
+   {'Host', Authority} = lists:keyfind('Host', 1, Heads),
+   uri:set(path, Url, 
+      uri:set(authority, Authority,
+         uri:new(Scheme)
+      )
+   ).
+
+%%
+%% handle failure of http request
+handle_failure(Reason, Pipe, S) ->
+   Code    = knet_http:failure(Reason),
+   Payload = knet_http:status(Code),
+   Msg     = knet_http:encode_response(Code, [
+      {'Content-Length', erlang:size(Payload)}, 
+      {'Content-Type',   'text/plain'}
+   ]),
+   _ = pipe:a(Pipe, {send, S#fsm.peer, Msg}),
+   _ = pipe:a(Pipe, {send, S#fsm.peer, Payload}).
 
 
+%%
+%% handle http response
+handle_response({send, _Uri, eof}, Pipe, State, S) ->
+   {Pckt, _, Http} = htstream:encode(eof, S#fsm.enc),
+   _ = pipe:b(Pipe, {send, S#fsm.peer, Pckt}),
+   {next_state, 'LISTEN', 
+      S#fsm{
+         enc = htstream:new(),
+         dec = htstream:new() 
+      }
+   };
+
+handle_response({send, _Uri, Chunk}, Pipe, State, S)
+ when is_binary(Chunk) ->
+   {Pckt, _, Http} = htstream:encode(Chunk, S#fsm.enc),
+   _ = pipe:b(Pipe, {send, S#fsm.peer, Pckt}),
+   {next_state, State, S#fsm{enc = Http}};
+
+
+handle_response({Code, _Uri, Heads0, Payload}, Pipe, _State, S)
+ when is_binary(Payload) ->
+   Heads = [{'Content-Length', erlang:size(Payload)} | Heads0],
+   {Pckt, _, Http} = htstream:encode({Code, Heads, Payload}, S#fsm.enc),
+   _ = pipe:b(Pipe, {send, S#fsm.peer, Pckt}),
+   {next_state, 'LISTEN', 
+      S#fsm{
+         enc = htstream:new(),
+         dec = htstream:new() 
+      }
+   };
+
+handle_response({Code, _Uri, Heads0}, Pipe, State, S) ->
+   Heads = [{'Transfer-Encoding', chunked} | Heads0],
+   {Pckt, _, Http} = htstream:encode({Code, Heads}, S#fsm.enc),
+   _ = pipe:b(Pipe, {send, S#fsm.peer, Pckt}),
+   {next_state, State,  S#fsm{enc=Http}}.
+
+
+% handle_response({Code, _Uri, Head, undefined}, Pipe, Peer) ->
+%    Payload = knet_http:status(Code),
+%    Msg     = knet_http:encode_response(Code, [
+%       {'Content-Length', erlang:size(Payload)}, 
+%       {'Content-Type', 'text/plain'}
+%    ]),
+%    _ = pipe:b(Pipe, {send, Peer, Msg}),
+%    _ = pipe:b(Pipe, {send, Peer, Payload}),
+%    eof;
 

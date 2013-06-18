@@ -15,11 +15,10 @@
 %%   limitations under the License.
 %%
 %%  @description
-%%      knet http common functions
+%%      knet http
 -module(knet_http).
 -author('Dmitry Kolesnikov <dmkolesnikov@gmail.com>').
 -author('Mario Cardona <marioxcardona@gmail.com>').
-
 -include("knet.hrl").
 
 % assert interface
@@ -29,6 +28,21 @@
 % encode interface
 -export([encode_req/3, encode_chunk/1]).
 -export([status/1]).
+
+
+%%
+%% failure on HTTP request
+http_failure({badmatch, {error, Reason}}, Uri) ->
+   {Reason, Uri, [], undefined};
+http_failure({error, Reason}, Uri) -> 
+   {Reason, Uri, [], undefined};
+http_failure(badarg, Uri) ->
+   {badarg, Uri, [], undefined};
+http_failure({badarg, _}, Uri) ->
+   {badarg, Uri, [], undefined};
+http_failure(Reason, Uri) ->
+   lager:error("knet failed: ~p ~p", [Reason, erlang:get_stacktrace()]),
+   {500,    Uri, [], undefined}.
 
 
 %%
