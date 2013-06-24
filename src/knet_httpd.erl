@@ -20,6 +20,7 @@
 %%        - 414 if URI is too long
 %%        - 501 if Method is not supported 
 %%     
+%%     Host: is the only required header in an HTTP 1.1 request.
 -module(knet_httpd).
 -author('Dmitry Kolesnikov <dmkolesnikov@gmail.com>').
 -author('Mario Cardona <marioxcardona@gmail.com>').
@@ -91,7 +92,8 @@ free(_, _) ->
       {Input, Buffer, Http} = htstream:decode(iolist_to_binary([S#fsm.iobuffer, Pckt]), S#fsm.dec),
       handle_listen(htstream:state(Http), Input, Pipe, S#fsm{iobuffer=Buffer, dec=Http})
    catch _:Reason ->
-      handle_failure(Reason, Pipe, S),
+      {Err, _, _} = htstream:encode({Reason, [{'Server', ?HTTP_SERVER}]}),
+      _ = pipe:a(Pipe, {send, S#fsm.peer, Err}),
       {next_state, 'LISTEN', S}
    end;
 
@@ -111,7 +113,7 @@ handle_listen(payload, {Method, Uri, Heads}, Pipe, S) ->
    % http request with payload
    Url = make_url(Uri, Heads, S#fsm.scheme),
    _   = pipe:b(Pipe, {http, Url, {Method, Heads}}),
-   {Chunk, Buffer, Http} = htstream:parse(S#fsm.iobuffer, S#fsm.dec),
+   {Chunk, Buffer, Http} = htstream:decode(S#fsm.iobuffer, S#fsm.dec),
    handle_request(htstream:state(Http), Chunk, Pipe, S#fsm{url=Url, iobuffer=Buffer, dec=Http});
 
 handle_listen(_, Chunk, Pipe, S) ->
@@ -129,7 +131,8 @@ handle_listen(_, Chunk, Pipe, S) ->
       {Chunk, Buffer, Http} = htstream:decode(iolist_to_binary([S#fsm.iobuffer, Pckt]), S#fsm.dec),
       handle_request(htstream:state(Http), Chunk, Pipe, S#fsm{iobuffer=Buffer, dec=Http})
    catch _:Reason ->
-      handle_failure(Reason, Pipe, S),
+      {Err, _, _} = htstream:encode({Reason, [{'Server', ?HTTP_SERVER}]}),
+      _ = pipe:a(Pipe, {send, S#fsm.peer, Err}),
       {next_state, 'LISTEN', S}
    end;
 
@@ -223,7 +226,7 @@ handle_response({send, _Uri, Chunk}, Pipe, State, S)
 
 handle_response({Code, _Uri, Heads0, Payload}, Pipe, _State, S)
  when is_binary(Payload) ->
-   Heads = [{'Content-Length', erlang:size(Payload)} | Heads0],
+   Heads = [{'Server', ?HTTP_SERVER},{'Content-Length', erlang:size(Payload)} | Heads0],
    {Pckt, _, Http} = htstream:encode({Code, Heads, Payload}, S#fsm.enc),
    _ = pipe:b(Pipe, {send, S#fsm.peer, Pckt}),
    {next_state, 'LISTEN', 
@@ -234,19 +237,7 @@ handle_response({Code, _Uri, Heads0, Payload}, Pipe, _State, S)
    };
 
 handle_response({Code, _Uri, Heads0}, Pipe, State, S) ->
-   Heads = [{'Transfer-Encoding', chunked} | Heads0],
+   Heads = [{'Server', ?HTTP_SERVER},{'Transfer-Encoding', chunked} | Heads0],
    {Pckt, _, Http} = htstream:encode({Code, Heads}, S#fsm.enc),
    _ = pipe:b(Pipe, {send, S#fsm.peer, Pckt}),
    {next_state, State,  S#fsm{enc=Http}}.
-
-
-% handle_response({Code, _Uri, Head, undefined}, Pipe, Peer) ->
-%    Payload = knet_http:status(Code),
-%    Msg     = knet_http:encode_response(Code, [
-%       {'Content-Length', erlang:size(Payload)}, 
-%       {'Content-Type', 'text/plain'}
-%    ]),
-%    _ = pipe:b(Pipe, {send, Peer, Msg}),
-%    _ = pipe:b(Pipe, {send, Peer, Payload}),
-%    eof;
-
