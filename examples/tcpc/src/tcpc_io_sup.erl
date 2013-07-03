@@ -18,7 +18,7 @@ start_link(Opts) ->
    }),
    {ok,   B} = supervisor:start_child(Sup, {
       echo,
-      {tcpc_echo, start_link, []},
+      {tcpc_echo, start_link, [Opts]},
       permanent, 30000, worker, dynamic
    }),
    pipe:make([A, B]),

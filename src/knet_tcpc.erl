@@ -119,7 +119,7 @@ free(Reason, S) ->
 'ESTABLISHED'({send, _Peer, Pckt}, Pipe, S) ->
    case gen_tcp:send(S#fsm.sock, Pckt) of
       ok    ->
-         pipe:a(Pipe, {tcp, S#fsm.peer, ack}), 
+         % pipe:a(Pipe, {tcp, S#fsm.peer, ack}), 
          {next_state, 'ESTABLISHED', S};
       {error, Reason} ->
          ?DEBUG("knet tcp/d ~p: terminated ~p (reason ~p)", [self(), S#fsm.peer, Reason]),

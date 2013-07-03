@@ -15,9 +15,12 @@
       ]},
       {registered,  []},
       {applications,[
-         kernel, stdlib,
-         compiler, syntax_tools, lager,
-         pts, plib, kfsm
+         kernel, 
+         stdlib,
+         lager,
+         pns, 
+         plib, 
+         kfsm
       ]},
       {mod, {knet_app, []}},
       {env, []}

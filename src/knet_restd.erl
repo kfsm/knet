@@ -10,8 +10,9 @@
 ]).
 
 -record(fsm, {
-   resource,   % unique identity of resource dispatch table
+   service,    % unique identity of resource dispatch table
    queue,      % i/o queue accumulates HTTP entity
+
 
    handler,    % request handler
    method,     % request method
@@ -27,14 +28,14 @@
 %%%
 %%%------------------------------------------------------------------   
 
-start_link(Resource) ->
-   kfsm_pipe:start_link(?MODULE, Resource).
+start_link(Service) ->
+   kfsm_pipe:start_link(?MODULE, [Service]).
 
-init(Resource) ->
+init(Service) ->
    {ok,
       'LISTEN',
       #fsm{
-         resource = Resource,
+         service  = Service,
          queue    = deq:new()
       }
    }.
@@ -49,6 +50,8 @@ free(_, _) ->
 %%%------------------------------------------------------------------   
 'LISTEN'({http, Uri, {Mthd, _}}=Req, Pipe, S) -> 
    try
+      pns:lookup(S#fsm.service, '_'),
+
       %Mod 
       Mod = check_resource(Uri, S#fsm.resource),
       ok  = check_method(Mthd,  Mod:allowed_methods()),
