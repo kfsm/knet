@@ -14,18 +14,31 @@
 %%    limitations under the License
 %%
 %% @description
-%%     
-%%
--module(knet_app).
--behaviour(application).
+%%    socket instance supervisor
+-module(knet_sock_sup).
+-behaviour(supervisor).
 -author(dmkolesnikov@gmail.com).
 
 -export([
-   start/2, stop/1
+   start_link/0, init/1
 ]).
 
-start(_Type, _Args) -> 
-   knet_sup:start_link(). 
+%%
+%%
+start_link() ->
+   supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+   
+init([]) -> 
+   {ok,
+      {
+         {simple_one_for_one, 0, 3600},
+         [sock()]
+      }
+   }.
 
-stop(_State) ->
-   ok.
+sock() ->
+   {
+      undefined,
+      {knet_sock, start_link, []},
+      temporary, 5000, worker, dynamic
+   }.

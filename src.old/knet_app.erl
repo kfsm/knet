@@ -20,12 +20,10 @@
 -behaviour(application).
 -author(dmkolesnikov@gmail.com).
 
--export([
-   start/2, stop/1
-]).
+-export([start/2, stop/1]).
 
 start(_Type, _Args) -> 
    knet_sup:start_link(). 
 
 stop(_State) ->
-   ok.
+        ok.

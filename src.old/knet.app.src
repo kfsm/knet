@@ -1,9 +1,15 @@
 {application, knet,
    [
       {description, "konduit network library"},
-      {vsn,         "1.0.0"},
+      {vsn,         "0.4.1"},
       {modules,     [
          knet,
+         knet_udp,
+         knet_tcp,
+         knet_ssl,
+         knet_http,
+         knet_httpc,
+         knet_httpd,
          knet_sup,
          knet_app
       ]},
