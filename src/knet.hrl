@@ -8,8 +8,8 @@
 
 
 %% list of default default socket options
--define(SO_TCP, [binary, {active, true}, {nodelay, true}]). 
-
+-define(SO_TCP,  [binary, {active, true}, {nodelay, true}]). 
+-define(SO_HTTP, []).
 
 %% white list of socket options acceptable by konduit
 -define(SO_TCP_ALLOWED, [
@@ -17,6 +17,9 @@
    packet, packet_size, recbuf, send_timeout, 
    sndbuf, binary, active
 ]).
+
+%% default identity of HTTP server
+-define(HTTP_SERVER,        <<"knet">>).
 
 
 %%-----------------------------------------------------------------------------

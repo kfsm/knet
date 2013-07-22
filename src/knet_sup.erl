@@ -36,14 +36,14 @@ init([]) ->
    {ok,
       {
          {one_for_one, 4, 1800},
-         [sock()]
+         [socks()]
       }
    }.
 
 %% sockets 
-sock() ->
+socks() ->
    {
-      sock,
+      socks,
       {knet_sock_sup, start_link, []},
       permanent, 60000, supervisor, dynamic
    }.
