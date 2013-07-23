@@ -4,9 +4,13 @@
 -export([
    socket/2, 
    close/1,
-
-   listen/2, connect/1, connect/2, bind/1, bind/2,
-   ioctl/2, send/2
+   listen/2, 
+   connect/1, 
+   connect/2, 
+   bind/1, 
+   bind/2,
+   ioctl/2, 
+   send/2
 ]).
 
 -type(url() :: list() | binary()).
@@ -18,7 +22,6 @@ start() ->
 
 %%
 %% create socket 
-%% TODO: permanent socket (re-started by supervisor)
 -spec(socket/2 :: (atom(), list()) -> {ok, pid()} | {error, any()}).
 
 socket(Type, Opts) ->
@@ -33,7 +36,6 @@ socket(Type, Opts) ->
 
 close(Sock) ->
    erlang:exit(Sock, shutdown).
-
 
 %%
 %% listen socket

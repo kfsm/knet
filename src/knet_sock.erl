@@ -26,9 +26,17 @@ init([http, Pid, Opts]) ->
    {ok, B} = knet_http:start_link(Opts),
    _ = pipe:make([A, B]),
    _ = pipe:bind(B, b, Pid),
+   {ok, active, B};
+
+init([comet, Pid, Opts]) ->
+   {ok, A} = knet_tcp:start_link(Opts),
+   {ok, B} = knet_comet:start_link(Opts),
+   _ = pipe:make([A, B]),
+   _ = pipe:bind(B, b, Pid),
    {ok, active, B}.
 
-free(_, _) ->
+free(Reason, _) ->
+   io:format("--> :-( ~p~n", [Reason]),
    ok. 
 
 %%

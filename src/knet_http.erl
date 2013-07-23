@@ -12,9 +12,8 @@
 -record(fsm, {
    schema = undefined :: atom(),          % http transport schema (http, https)
    url    = undefined :: any(),           % active request url
-   ihttp  = undefined :: htstream:http(), % inbound  http state machine
-   ohttp  = undefined :: htstream:http(), % outbound http state machine
-   iobuf  = <<>>      :: binary()
+   recv   = undefined :: htstream:http(), % inbound  http state machine
+   send   = undefined :: htstream:http()  % outbound http state machine
 }).
 
 %%%------------------------------------------------------------------
@@ -29,8 +28,8 @@ start_link(Opts) ->
 init(Opts) ->
    {ok, 'IDLE', 
       #fsm{
-         ihttp = htstream:new(),
-         ohttp = htstream:new() 
+         recv = htstream:new(),
+         send = htstream:new() 
       }
    }.
 
@@ -83,32 +82,42 @@ free(_, _) ->
 
 'ACTIVE'({Prot, _, {terminated, _}}, Pipe, S)
  when Prot =:= tcp orelse Prot =:= ssl ->
-   case htstream:state(S#fsm.ihttp) of
-      eof  -> ok;
-      idle -> ok;
-      _    -> _ = pipe:b(Pipe, {http, S#fsm.url, eof})
-   end,
-   {stop, normal, S#fsm{ihttp=htstream:new()}};
+   indicate_http_eof(htstream:state(S#fsm.recv), Pipe, S),
+   {stop, normal, 
+      S#fsm{
+         recv = htstream:new(S#fsm.recv)
+      }
+   };
 
 'ACTIVE'({Prot, _, Pckt}, Pipe, S)
  when is_binary(Pckt), Prot =:= tcp orelse Prot =:= ssl ->
    try
       {next_state, 'ACTIVE', inbound_http(Pckt, Pipe, S)}
    catch _:Reason ->
+      io:format("--> ~p ~p~n", [Reason, erlang:get_stacktrace()]),
       %% TODO: Server header configurable via opts
-      {Err, _, _} = htstream:encode({Reason, [{'Server', ?HTTP_SERVER}]}),
+      {Err, _} = htstream:encode({Reason, [{'Server', ?HTTP_SERVER}]}),
       _ = pipe:a(Pipe, Err),
-      {next_state, 'ACTIVE', S#fsm{ihttp=htstream:new()}}
+      {next_state, 'ACTIVE', 
+         S#fsm{
+            recv = htstream:new()
+         }
+      }
    end;
 
 'ACTIVE'(Msg, Pipe, S) ->
    try
       {next_state, 'ACTIVE', outbound_http(Msg, Pipe, S)}
    catch _:Reason ->
+      io:format("--> ~p ~p~n", [Reason, erlang:get_stacktrace()]),      
       % TODO: Server header configurable via opts
-      {Err, _, _} = htstream:encode({Reason, [{'Server', ?HTTP_SERVER}]}),
+      {Err, _} = htstream:encode({Reason, [{'Server', ?HTTP_SERVER}]}),
       _ = pipe:b(Pipe, Err),
-      {next_state, 'ACTIVE', S#fsm{ohttp=htstream:new()}}
+      {next_state, 'ACTIVE', 
+         S#fsm{
+            send = htstream:new()
+         }
+      }
    end.
 
 %%%------------------------------------------------------------------
@@ -120,30 +129,30 @@ free(_, _) ->
 %%
 %% outbound HTTP message
 outbound_http(Msg, Pipe, S) ->
-   {Pckt, _, Http} = htstream:encode(Msg, S#fsm.ohttp),
+   {Pckt, Http} = htstream:encode(Msg, S#fsm.send),
    _ = pipe:b(Pipe, Pckt),
    case htstream:state(Http) of
       eof -> 
-         S#fsm{ohttp=htstream:new()};
+         S#fsm{send=htstream:new(S#fsm.send)};
       _   -> 
-         S#fsm{ohttp=Http}
+         S#fsm{send=Http}
    end.
 
 %%
 %% handle inbound stream
 inbound_http(Pckt, Pipe, S)
  when is_binary(Pckt) ->
-   {Msg, Buffer, Http} = htstream:decode(iolist_to_binary([S#fsm.iobuf, Pckt]), S#fsm.ihttp),
+   {Msg, Http} = htstream:decode(Pckt, S#fsm.recv),
    Url = request_url(Msg, S#fsm.schema, S#fsm.url),
    _   = pass_inbound_http(Msg, Url, Pipe),
    case htstream:state(Http) of
       eof -> 
          _ = pipe:b(Pipe, {http, Url, eof}),
-         S#fsm{url=Url, ihttp=htstream:new()};
+         S#fsm{url=Url, recv=htstream:new(S#fsm.recv)};
       eoh -> 
-         inbound_http(<<>>, Pipe, S#fsm{url=Url, iobuf=Buffer, ihttp=Http});
+         inbound_http(<<>>, Pipe, S#fsm{url=Url, recv=Http});
       _   -> 
-         S#fsm{url=Url, iobuf=Buffer, ihttp=Http}
+         S#fsm{url=Url, recv=Http}
    end.
 
 %%
@@ -170,3 +179,11 @@ pass_inbound_http(Chunk, Url, Pipe)
  when is_list(Chunk) ->
    _ = pipe:b(Pipe, {http, Url, iolist_to_binary(Chunk)}).
    
+%%
+%% indicate http request eof
+indicate_http_eof(idle, _Pipe, _S) ->
+   ok;
+indicate_http_eof(_, Pipe, S) ->
+   _ = pipe:b(Pipe, {http, S#fsm.url, eof}).
+
+

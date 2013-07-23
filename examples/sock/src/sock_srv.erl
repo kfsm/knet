@@ -46,7 +46,7 @@ handle_tcp(Msg, _Peer, Sock) ->
 handle_http({Method, Heads}, Url, Sock) ->
    %% echo HTTP request (aka TRACE)
    knet:send(Sock, {ok, [{'Server', knet},{'Transfer-Encoding', chunked}]}),
-   {Msg, _, _} = htstream:encode({Method, uri:get(path, Url), Heads}, htstream:new()),
+   {Msg, _} = htstream:encode({Method, uri:get(path, Url), Heads}, htstream:new()),
    knet:send(Sock, iolist_to_binary(Msg)),
    knet:send(Sock, eof),   
    loop(Sock);
