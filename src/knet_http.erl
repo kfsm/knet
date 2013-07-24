@@ -89,10 +89,10 @@ free(_, _) ->
       }
    };
 
-'ACTIVE'({Prot, _, Pckt}, Pipe, S)
+'ACTIVE'({Prot, Peer, Pckt}, Pipe, S)
  when is_binary(Pckt), Prot =:= tcp orelse Prot =:= ssl ->
    try
-      {next_state, 'ACTIVE', inbound_http(Pckt, Pipe, S)}
+      {next_state, 'ACTIVE', inbound_http(Pckt, Peer, Pipe, S)}
    catch _:Reason ->
       io:format("--> ~p ~p~n", [Reason, erlang:get_stacktrace()]),
       %% TODO: Server header configurable via opts
@@ -140,17 +140,17 @@ outbound_http(Msg, Pipe, S) ->
 
 %%
 %% handle inbound stream
-inbound_http(Pckt, Pipe, S)
+inbound_http(Pckt, Peer, Pipe, S)
  when is_binary(Pckt) ->
    {Msg, Http} = htstream:decode(Pckt, S#fsm.recv),
    Url = request_url(Msg, S#fsm.schema, S#fsm.url),
-   _   = pass_inbound_http(Msg, Url, Pipe),
+   _   = pass_inbound_http(Msg, Peer, Url, Pipe),
    case htstream:state(Http) of
       eof -> 
          _ = pipe:b(Pipe, {http, Url, eof}),
          S#fsm{url=Url, recv=htstream:new(S#fsm.recv)};
       eoh -> 
-         inbound_http(<<>>, Pipe, S#fsm{url=Url, recv=Http});
+         inbound_http(<<>>, Peer, Pipe, S#fsm{url=Url, recv=Http});
       _   -> 
          S#fsm{url=Url, recv=Http}
    end.
@@ -170,12 +170,14 @@ request_url(_, _, Default) ->
 
 %%
 %% pass inbound http traffic to chain
-pass_inbound_http({Method, Path, Heads}, Url, Pipe) ->
+pass_inbound_http({Method, Path, Heads}, {IP, _}, Url, Pipe) ->
    ?DEBUG("knet http ~p: request ~p ~p", [self(), Method, Url]),
-   _ = pipe:b(Pipe, {http, Url, {Method, Heads}});
-pass_inbound_http([], _Url, _Pipe) ->
+   %% build knet env
+   Env = [{peer, IP}],
+   _   = pipe:b(Pipe, {http, Url, {Method, [{env, Env} | Heads]}});
+pass_inbound_http([], _Peer, _Url, _Pipe) ->
    ok;
-pass_inbound_http(Chunk, Url, Pipe) 
+pass_inbound_http(Chunk, _Peer, Url, Pipe) 
  when is_list(Chunk) ->
    _ = pipe:b(Pipe, {http, Url, iolist_to_binary(Chunk)}).
    

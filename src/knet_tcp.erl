@@ -18,7 +18,7 @@
    sopt     = undefined :: list(),              %% list of socket opts    
    active   = true      :: once | true | false, %% socket activity (pipe internally uses active once)
    timeout  = 10000     :: integer(),           %% socket connect timeout
-   acceptor = undefined :: any(),               %% socket acceptor
+   acceptor = undefined :: any(),               %% socket acceptor factory
    pool     = 0         :: integer()            %% socket acceptor pool size
 }).
 
@@ -88,7 +88,7 @@ free(_, _) ->
       {ok, Sock} -> 
          ?DEBUG("knet tcp ~p: listen ~p", [self(), Port]),
          pipe:a(Pipe, {tcp, {any, Port}, listen}),
-         spawn_acceptor(S#fsm.pool, S#fsm.acceptor, Uri),
+         [init_acceptor(S#fsm.acceptor, Uri) || _ <- lists:seq(1, S#fsm.pool)],
          {next_state, 'LISTEN', 
             S#fsm{
                sock = Sock
@@ -111,8 +111,8 @@ free(_, _) ->
       {ok, Sock} ->
          {ok, Peer} = inet:peername(Sock),
          {ok, Addr} = inet:sockname(Sock),
-         so_ioctl(Sock, S),
-         spawn_acceptor(Factory, Uri), %% TODO: make better naming / re-usable 
+         _ = so_ioctl(Sock, S),
+         _ = init_acceptor(Factory, Uri),
          ?DEBUG("knet tcp/d ~p: accepted ~p (local ~p)", [self(), Peer, Addr]),
          pipe:a(Pipe, {tcp, Peer, established}),
          {next_state, 'ESTABLISHED', 
@@ -124,7 +124,7 @@ free(_, _) ->
          };
       {error, Reason} ->
          ?DEBUG("knet tcp ~p: terminated ~s (reason ~p)", [self(), uri:to_binary(Uri), Reason]),
-         spawn_acceptor(Factory, Uri),
+         _ = init_acceptor(Factory, Uri),
          pipe:a(Pipe, {tcp, {any, Port}, {terminated, Reason}}),      
          {stop, Reason, S}
    end.
@@ -200,29 +200,13 @@ so_ioctl(Sock, #fsm{active=true}) ->
 so_ioctl(_Sock, _) ->
    ok.
 
-%% re-spawn consumed acceptor
-%% TODO: handle error
-spawn_acceptor(0, _, _) ->
+%% create new acceptor
+init_acceptor(undefined, _) ->
    ok;
-spawn_acceptor(N, Fun, Uri) ->
-   spawn_acceptor(Fun, Uri),
-   spawn_acceptor(N - 1, Fun, Uri).
-
-spawn_acceptor(undefined, _Uri) ->
-   ok;
-spawn_acceptor({M,F,A}, Uri) ->
-   _ = erlang:apply(M, F, A ++ [Uri]);
-spawn_acceptor(Fun, Uri) 
+init_acceptor(Fun, Uri)
  when is_function(Fun) ->
    _ = Fun(Uri);
-spawn_acceptor(Sup, Uri)
- when is_pid(Sup) ->
-   {ok, _} = supervisor:start_child(Sup, [Uri]);
-spawn_acceptor(Sup, Uri)
- when is_atom(Sup) ->
-   {ok, _} = supervisor:start_child(Sup, [Uri]). 
-
-
-
-
+init_acceptor(Sup, Uri)
+ when is_pid(Sup) orelse is_atom(Sup) ->
+   {ok, _} = supervisor:start_child(Sup, [Uri]).
 

@@ -1,6 +1,6 @@
 %% @description
 %%    http comet stream konduit (client-side)
--module(knet_comet).
+-module(knet_http_stream).
 -behaviour(kfsm).
 -include("knet.hrl").
 
@@ -47,7 +47,7 @@ free(_, _) ->
 
 'IDLE'({connect, Url}, Pipe, S) ->
 	%% TODO: configurable method
-	{Req, _, _} = htstream:encode({'GET', uri:get(path, Url), [{'Connection', 'keep-alive'}, {'Host', uri:get(authority, Url)}]}),
+	{Req, _} = htstream:encode({'GET', uri:get(path, Url), [{'Connection', 'keep-alive'}, {'Host', uri:get(authority, Url)}]}),
 	pipe:b(Pipe, {connect, Url}),	
 	pipe:b(Pipe, Req),
 	{next_state, 'ACTIVE', S#fsm{url=Url}}.
@@ -88,31 +88,6 @@ free(_, _) ->
  			end,
  			{next_state, 'ACTIVE', S#fsm{http=Http, q=Q}}
  	end.
-
-% 	{Msg, Buf, Http} = htstream:decode(iolist_to_binary([S#fsm.iobuf, Pckt]), S#fsm.http),
-%    _   = pass_inbound_http(Msg, S#fsm.url, Pipe),
-%    case htstream:state(Http) of
-%       eof -> 
-%          _ = pipe:b(Pipe, {http, S#fsm.url, eof}),
-% 			{stop, normal, S#fsm{http=htstream:new()}};
-%       eoh -> 
-%       	'ACTIVE'({Prot, Peer, <<>>}, Pipe, S#fsm{iobuf=Buf, http=Http});
-%       _   -> 
-%       	{next_state, 'ACTIVE', S#fsm{iobuf=Buf, http=Http}}
-%    end.
-
-
-% %%
-% %% pass inbound http traffic to chain
-% pass_inbound_http({Method, Path, Heads}, Url, Pipe) ->
-%    ?DEBUG("knet stream ~p: request ~p ~p", [self(), Method, Url]),
-%    _ = pipe:b(Pipe, {http, Url, {Method, Heads}});
-% pass_inbound_http([], _Url, _Pipe) ->
-%    ok;
-% pass_inbound_http(Chunk, Url, Pipe) 
-%  when is_list(Chunk) ->
-%    _ = pipe:b(Pipe, {http, Url, iolist_to_binary(Chunk)}).
-   
 
 iosplit(List, Ch) ->
 	iosplit(List, Ch, []).
