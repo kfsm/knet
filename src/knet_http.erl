@@ -107,6 +107,7 @@ free(_, _) ->
 
 'ACTIVE'(Msg, Pipe, S) ->
    try
+      %% TODO: expand http headers (Date + Server + Connection)
       {next_state, 'ACTIVE', outbound_http(Msg, Pipe, S)}
    catch _:Reason ->
       io:format("--> ~p ~p~n", [Reason, erlang:get_stacktrace()]),      
@@ -157,12 +158,12 @@ inbound_http(Pckt, Peer, Pipe, S)
 
 %%
 %% decode resource Url
-request_url({Method, Path, Heads}, Scheme, _Default)
- when is_atom(Method), is_binary(Path) ->
+request_url({Method, Url, Heads}, Scheme, _Default)
+ when is_atom(Method), is_binary(Url) ->
    {'Host', Authority} = lists:keyfind('Host', 1, Heads),
-   uri:set(path, Path, 
-      uri:set(authority, Authority,
-         uri:new(Scheme)
+   uri:set(authority, Authority,
+      uri:set(scheme, Scheme,
+         uri:new(Url)
       )
    );
 request_url(_, _, Default) ->
