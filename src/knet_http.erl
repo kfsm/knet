@@ -158,11 +158,11 @@ inbound_http(Pckt, Peer, Pipe, S)
 
 %%
 %% decode resource Url
-request_url({Method, Url, Heads}, Scheme, _Default)
+request_url({Method, Url, Heads}, Schema, _Default)
  when is_atom(Method), is_binary(Url) ->
    {'Host', Authority} = lists:keyfind('Host', 1, Heads),
    uri:set(authority, Authority,
-      uri:set(scheme, Scheme,
+      uri:set(schema, Schema,
          uri:new(Url)
       )
    );
