@@ -1,12 +1,34 @@
+%%
+%%   Copyright (c) 2012 - 2013, Dmitry Kolesnikov
+%%   Copyright (c) 2012 - 2013, Mario Cardona
+%%   All Rights Reserved.
+%%
+%%   Licensed under the Apache License, Version 2.0 (the "License");
+%%   you may not use this file except in compliance with the License.
+%%   You may obtain a copy of the License at
+%%
+%%       http://www.apache.org/licenses/LICENSE-2.0
+%%
+%%   Unless required by applicable law or agreed to in writing, software
+%%   distributed under the License is distributed on an "AS IS" BASIS,
+%%   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%%   See the License for the specific language governing permissions and
+%%   limitations under the License.
+%%
 %% @description
-%%    http konduit (client / server)
+%%    client-server http konduit
 -module(knet_http).
--behaviour(kfsm).
+-behaviour(pipe).
+
 -include("knet.hrl").
 
 -export([
-   start_link/1, init/1, free/2, 
-   'IDLE'/3, 'LISTEN'/3, 'ACTIVE'/3
+   start_link/1, 
+   init/1, 
+   free/2, 
+   'IDLE'/3, 
+   'LISTEN'/3, 
+   'ACTIVE'/3
 ]).
 
 -record(fsm, {
@@ -23,7 +45,7 @@
 %%%------------------------------------------------------------------   
 
 start_link(Opts) ->
-   kfsm_pipe:start_link(?MODULE, Opts ++ ?SO_HTTP).
+   pipe:start_link(?MODULE, Opts ++ ?SO_HTTP, []).
 
 init(Opts) ->
    {ok, 'IDLE', 
@@ -173,9 +195,9 @@ request_url(_, _, Default) ->
 %% pass inbound http traffic to chain
 pass_inbound_http({Method, Path, Heads}, {IP, _}, Url, Pipe) ->
    ?DEBUG("knet http ~p: request ~p ~p", [self(), Method, Url]),
-   %% build knet env
+   %% TODO: Handle Cookie and Request (similar to PHP $_REQUEST)
    Env = [{peer, IP}],
-   _   = pipe:b(Pipe, {http, Url, {Method, [{env, Env} | Heads]}});
+   _   = pipe:b(Pipe, {http, Url, {Method, Heads, Env}}); 
 pass_inbound_http([], _Peer, _Url, _Pipe) ->
    ok;
 pass_inbound_http(Chunk, _Peer, Url, Pipe) 

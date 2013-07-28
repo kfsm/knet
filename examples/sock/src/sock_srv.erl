@@ -24,8 +24,12 @@ acceptor(Uri) ->
 %% server loop
 loop(Sock) ->
    case pipe:recv(infinity) of
-      {tcp,  Peer, Msg} -> handle_tcp(Msg, Peer, Sock);
-      {http, Url,  Msg} -> handle_http(Msg, Url, Sock)
+      {tcp,  Peer, Msg} -> 
+         handle_tcp(Msg, Peer, Sock);
+      {http, Url,  Msg} -> 
+         handle_http(Msg, Url, Sock);
+      _ -> 
+         loop(Sock)
    end.
 
 %%
@@ -35,7 +39,7 @@ handle_tcp(established, _Peer, Sock) ->
 handle_tcp({terminated, _}, _Peer, Sock) ->
    ok;
 handle_tcp(<<"exit\r\n">>, _Peer, Sock) ->
-   knet:send(Sock, <<"+++\r\n">>),
+   pipe:send(Sock, <<"+++\r\n">>),
    knet:close(Sock);   
 handle_tcp(Msg, _Peer, Sock) ->
    knet:send(Sock, Msg),
@@ -43,12 +47,12 @@ handle_tcp(Msg, _Peer, Sock) ->
    
 %%
 %% http socket
-handle_http({Method, Heads}, Url, Sock) ->
+handle_http({Method, Heads, _Env}, Url, Sock) ->
    %% echo HTTP request (aka TRACE)
-   knet:send(Sock, {ok, [{'Server', knet},{'Transfer-Encoding', chunked}]}),
+   pipe:send(Sock, {ok, [{'Server', knet},{'Transfer-Encoding', chunked}]}),
    {Msg, _} = htstream:encode({Method, uri:get(path, Url), Heads}, htstream:new()),
-   knet:send(Sock, iolist_to_binary(Msg)),
-   knet:send(Sock, eof),   
+   pipe:send(Sock, iolist_to_binary(Msg)),
+   pipe:send(Sock, eof),   
    loop(Sock);
 handle_http(_, _, Sock) ->
    loop(Sock).
