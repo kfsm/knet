@@ -26,6 +26,7 @@
    start_link/1, 
    init/1, 
    free/2, 
+   ioctl/2,
    'IDLE'/3, 
    'LISTEN'/3, 
    'ESTABLISHED'/3
@@ -53,7 +54,7 @@
 start_link(Opts) ->
    pipe:start_link(?MODULE, Opts ++ ?SO_TCP, []).
 
-
+%%
 init(Opts) ->
    {ok, 'IDLE', 
       #fsm{
@@ -66,8 +67,20 @@ init(Opts) ->
       }
    }.
 
-free(_, _) ->
-   ok.
+%%
+free(_, S) ->
+   case erlang:port_info(S#fsm.sock) of
+      undefined ->
+         ok;
+      _ ->
+         gen_tcp:close(S#fsm.sock)
+   end.
+
+%% 
+ioctl(socket,   S) -> 
+   S#fsm.sock;
+ioctl(acceptor, S) -> 
+   S#fsm.acceptor.
 
 %%%------------------------------------------------------------------
 %%%
@@ -109,7 +122,7 @@ free(_, _) ->
    case gen_tcp:listen(Port, Opts) of
       {ok, Sock} -> 
          ?DEBUG("knet tcp ~p: listen ~p", [self(), Port]),
-         pipe:a(Pipe, {tcp, {any, Port}, listen}),
+         _ = pipe:a(Pipe, {tcp, {any, Port}, listen}),
          [init_acceptor(S#fsm.acceptor, Uri) || _ <- lists:seq(1, S#fsm.pool)],
          {next_state, 'LISTEN', 
             S#fsm{
@@ -126,16 +139,17 @@ free(_, _) ->
 'IDLE'({accept, Uri}, Pipe, S) ->
    Port = uri:get(port, Uri),
    %% TODO: make ioctl iface to pipe / machine
-   {ok, LSock}   = plib:call(pns:whereis(knet, {tcp, any, Port}), {ioctl, socket}),
-   {ok, Factory} = plib:call(pns:whereis(knet, {tcp, any, Port}), {ioctl, acceptor}), 
-   ?DEBUG("knet tcp/d ~p: accept ~p", [self(), {any, Port}]),
+   LSock   = pipe:ioctl(pns:whereis(knet, {tcp, any, Port}), socket),
+   Factory = pipe:ioctl(pns:whereis(knet, {tcp, any, Port}), acceptor), 
+   ?DEBUG("knet tcp ~p: accept ~p", [self(), {any, Port}]),
+   try
    case gen_tcp:accept(LSock) of
       {ok, Sock} ->
+         _ = init_acceptor(Factory, Uri),
          {ok, Peer} = inet:peername(Sock),
          {ok, Addr} = inet:sockname(Sock),
          _ = so_ioctl(Sock, S),
-         _ = init_acceptor(Factory, Uri),
-         ?DEBUG("knet tcp/d ~p: accepted ~p (local ~p)", [self(), Peer, Addr]),
+         ?DEBUG("knet tcp ~p: accepted ~p (local ~p)", [self(), Peer, Addr]),
          pipe:a(Pipe, {tcp, Peer, established}),
          {next_state, 'ESTABLISHED', 
             S#fsm{
@@ -145,11 +159,21 @@ free(_, _) ->
             }
          };
       {error, Reason} ->
-         ?DEBUG("knet tcp ~p: terminated ~s (reason ~p)", [self(), uri:to_binary(Uri), Reason]),
          _ = init_acceptor(Factory, Uri),
+         ?DEBUG("knet tcp ~p: terminated ~s (reason ~p)", [self(), uri:to_binary(Uri), Reason]),
          pipe:a(Pipe, {tcp, {any, Port}, {terminated, Reason}}),      
          {stop, Reason, S}
-   end.
+   end
+   catch _:R ->
+      io:format("fucking fuck: ~p ~p~n", [R, erlang:get_stacktrace()]),
+      {stop, R, S}
+   end;
+
+%%
+'IDLE'(shutdown, _Pipe, S) ->
+   ?DEBUG("knet tcp ~p: terminated (reason normal)", [self()]),
+   {stop, normal, S}.
+
 
 %%%------------------------------------------------------------------
 %%%
@@ -157,16 +181,13 @@ free(_, _) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'LISTEN'({ioctl, socket}, Tx, S) ->
-   plib:ack(Tx, {ok, S#fsm.sock}),
-   {next_state, 'LISTEN', S};
+'LISTEN'(shutdown, _Pipe, S) ->
+   ?DEBUG("knet tcp ~p: terminated (reason normal)", [self()]),
+   {stop, normal, S};
 
-'LISTEN'({ioctl, acceptor}, Tx, S) ->
-   plib:ack(Tx, {ok, S#fsm.acceptor}),
-   {next_state, 'LISTEN', S};
-
-'LISTEN'(_, _, S) ->
+'LISTEN'(_Msg, _Pipe, S) ->
    {next_state, 'LISTEN', S}.
+
 
 %%%------------------------------------------------------------------
 %%%
@@ -176,24 +197,24 @@ free(_, _) ->
 
 'ESTABLISHED'({tcp_error, _, Reason}, Pipe, S) ->
    ?DEBUG("knet tcp ~p: terminated ~p (reason ~p)", [self(), S#fsm.peer, Reason]),
-   pipe:b(Pipe, {tcp, S#fsm.peer, {terminated, Reason}}),
+   _ = pipe:b(Pipe, {tcp, S#fsm.peer, {terminated, Reason}}),
    {stop, Reason, S};
    
-'ESTABLISHED'({tcp_closed, Reason}, Pipe, S) ->
-   ?DEBUG("knet tcp ~p: terminated ~p (reason ~p)", [self(), S#fsm.peer, Reason]),
-   pipe:b(Pipe, {tcp, S#fsm.peer, {terminated, normal}}),
+'ESTABLISHED'({tcp_closed, _}, Pipe, S) ->
+   ?DEBUG("knet tcp ~p: terminated ~p (reason ~p)", [self(), S#fsm.peer, normal]),
+   _ = pipe:b(Pipe, {tcp, S#fsm.peer, {terminated, normal}}),
    {stop, normal, S};
 
 'ESTABLISHED'({tcp, _, Pckt}, Pipe, S) ->
-   ?DEBUG("knet tcp/c ~p: recv ~p~n~p", [self(), S#fsm.peer, Pckt]),
+   ?DEBUG("knet tcp ~p: recv ~p~n~p", [self(), S#fsm.peer, Pckt]),
    so_ioctl(S#fsm.sock, S),
    %% TODO: flexible flow control + explicit read
-   pipe:b(Pipe, {tcp, S#fsm.peer, Pckt}),
+   _ = pipe:b(Pipe, {tcp, S#fsm.peer, Pckt}),
    {next_state, 'ESTABLISHED', S};
 
 'ESTABLISHED'(shutdown, Pipe, S) ->
-   ?DEBUG("knet tcp/c ~p: terminated ~p (reason normal)", [self(), S#fsm.peer]),
-   pipe:b(Pipe, {tcp, S#fsm.peer, {terminated, normal}}),
+   ?DEBUG("knet tcp ~p: terminated ~p (reason normal)", [self(), S#fsm.peer]),
+   _ = pipe:b(Pipe, {tcp, S#fsm.peer, {terminated, normal}}),
    {stop, normal, S};
 
 'ESTABLISHED'(Pckt, Pipe, S)
@@ -202,12 +223,10 @@ free(_, _) ->
       ok    ->
          {next_state, 'ESTABLISHED', S};
       {error, Reason} ->
-         ?DEBUG("knet tcp/d ~p: terminated ~p (reason ~p)", [self(), S#fsm.peer, Reason]),
-         pipe:a(Pipe, {tcp, S#fsm.peer, {terminated, Reason}}),
+         ?DEBUG("knet tcp ~p: terminated ~p (reason ~p)", [self(), S#fsm.peer, Reason]),
+         _ = pipe:a(Pipe, {tcp, S#fsm.peer, {terminated, Reason}}),
          {stop, Reason, S}
    end.
-
-
 
 
 %%%------------------------------------------------------------------

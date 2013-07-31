@@ -9,14 +9,14 @@
 %%
 run(Uri) ->
    %% listen on socket, use defined acceptor to handle incoming connections
-   knet:listen(Uri, [{acceptor, fun acceptor/1}, {pool, 5}]).
+   knet:listen(Uri, [{acceptor, fun acceptor/1}, {pool, 100}, {backlog, 10240}]).
 
 %%
 %% create new acceptor process
 acceptor(Uri) ->
    spawn(fun() -> 
       %% bind acceptor process to socket   
-      {ok, Sock} = knet:bind(Uri),
+      {ok, Sock} = knet:bind(Uri, [transient]),
       loop(Sock)
    end).
 
@@ -42,17 +42,20 @@ handle_tcp(<<"exit\r\n">>, _Peer, Sock) ->
    pipe:send(Sock, <<"+++\r\n">>),
    knet:close(Sock);   
 handle_tcp(Msg, _Peer, Sock) ->
-   knet:send(Sock, Msg),
+   pipe:send(Sock, Msg),
    loop(Sock).
    
 %%
 %% http socket
 handle_http({Method, Heads, _Env}, Url, Sock) ->
    %% echo HTTP request (aka TRACE)
-   pipe:send(Sock, {ok, [{'Server', knet},{'Transfer-Encoding', chunked}]}),
+   pipe:send(Sock, {ok, [{'Server', knet},{'Transfer-Encoding', chunked},{'Connection', 'keep-alive'}]}),
    {Msg, _} = htstream:encode({Method, uri:get(path, Url), Heads}, htstream:new()),
-   pipe:send(Sock, iolist_to_binary(Msg)),
-   pipe:send(Sock, eof),   
+   _ = pipe:send(Sock, iolist_to_binary(Msg)),
    loop(Sock);
-handle_http(_, _, Sock) ->
+handle_http(eof, _Url, Sock) ->
+   _ = pipe:send(Sock, eof),  
+   loop(Sock);
+handle_http(Msg, _Url, Sock) ->
+   _ = pipe:send(Sock, Msg),  
    loop(Sock).

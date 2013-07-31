@@ -16,7 +16,10 @@
 %%   limitations under the License.
 %%
 %% @description
-%%    knet socket pipeline factory
+%%   knet socket pipeline leader
+%%
+%% @todo
+%%   make leader / client protocol to handle crash, etc. 
 -module(knet_sock).
 -behaviour(kfsm).
 
@@ -25,13 +28,15 @@
    socket/1,
    init/1, 
    free/2,
+   ioctl/2,
    'ACTIVE'/3
 ]).
 
 %% internal state
 -record(fsm, {
-   sock,
-   owner
+   sock   = undefined :: [pid()],  %% socket stack
+   owner  = undefined :: pid(),    %% socket owner process
+   mode   = undefined :: undefined | transient %% socket owner process
 }).
 
 %%%------------------------------------------------------------------
@@ -51,12 +56,16 @@ init([Type, Owner, Opts]) ->
    {ok, 'ACTIVE', 
       #fsm{
          sock  = Sock,
-         owner = Owner
+         owner = Owner,
+         mode  = opts:val([transient], undefined, Opts)
       }
    }.
 
-free(Reason, _) ->
+free(_Reason, _) ->
    ok. 
+
+ioctl(_, _) ->
+   throw(not_implemented).
 
 %%%------------------------------------------------------------------
 %%%
@@ -80,19 +89,25 @@ socket(Pid) ->
    plib:ack(Tx, {ok, lists:last(S#fsm.sock)}),
    {next_state, 'ACTIVE', S};
 
-'ACTIVE'({'EXIT', Pid, normal}, _, S) ->
+'ACTIVE'({'EXIT', _Pid, normal}, _, #fsm{mode=transient}=S) ->
    % clean-up konduit stack
-   free_socket(S#fsm.sock,  shutdown),
+   free_socket(S#fsm.sock),
+   erlang:exit(S#fsm.owner, shutdown),
    {stop, normal, S};
 
-'ACTIVE'({'EXIT', Pid, Reason}, _, S) ->
+'ACTIVE'({'EXIT', _Pid, normal}, _, S) ->
    % clean-up konduit stack
-   free_socket(S#fsm.sock,  shutdown),
-   erlang:exit(S#fsm.owner, shutdown),
+   free_socket(S#fsm.sock),
+   {stop, normal, S};
+
+'ACTIVE'({'EXIT', _Pid, Reason}, _, S) ->
+   % clean-up konduit stack
+   free_socket(S#fsm.sock),
+   erlang:exit(S#fsm.owner, Reason),
    {stop, Reason, S};
 
 'ACTIVE'({'DOWN', _, _, _Owner, Reason}, _, S) ->
-   free_socket(S#fsm.sock,  shutdown),
+   free_socket(S#fsm.sock),
    {stop, Reason, S};
 
 'ACTIVE'(_, _, Sock) ->
@@ -115,14 +130,14 @@ init_socket(http, Opts) ->
    {ok, B} = knet_http:start_link(Opts),
    [A, B];
 
-init_socket(_, Opts) ->
+init_socket(_, _Opts) ->
    %% TODO: implement hook for new scheme
    exit(not_implemented).
 
 %% free socket pipeline
-free_socket(Sock, Reason) ->
+free_socket(Sock) ->
    lists:foreach(
-      fun(X) -> erlang:exit(X, Reason) end,
+      fun(X) -> knet:close(X) end,
       Sock
    ).
 

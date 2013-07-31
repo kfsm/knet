@@ -50,7 +50,8 @@ socket(Type, Opts) ->
 -spec(close/1 :: (pid()) -> ok).
 
 close(Sock) ->
-   erlang:exit(Sock, shutdown).
+   _ = pipe:send(Sock, shutdown),
+   ok.
 
 %%
 %% listen socket

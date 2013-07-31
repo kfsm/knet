@@ -15,7 +15,7 @@
 -define(SO_TCP_ALLOWED, [
    delay_send, nodelay, dontroute, keepalive, 
    packet, packet_size, recbuf, send_timeout, 
-   sndbuf, binary, active
+   sndbuf, binary, active, backlog
 ]).
 
 %% default identity of HTTP server

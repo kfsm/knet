@@ -26,6 +26,7 @@
    start_link/1, 
    init/1, 
    free/2, 
+   ioctl/2,
    'IDLE'/3, 
    'LISTEN'/3, 
    'ACTIVE'/3
@@ -47,6 +48,7 @@
 start_link(Opts) ->
    pipe:start_link(?MODULE, Opts ++ ?SO_HTTP, []).
 
+%%
 init(Opts) ->
    {ok, 'IDLE', 
       #fsm{
@@ -55,8 +57,13 @@ init(Opts) ->
       }
    }.
 
+%%
 free(_, _) ->
    ok.
+
+%%
+ioctl(_, _) ->
+   throw(not_implemented).
 
 %%%------------------------------------------------------------------
 %%%
@@ -78,8 +85,13 @@ free(_, _) ->
    'IDLE'({'GET', Uri, [{'Connection', close}, {'Host', uri:get(authority, Uri)}]}, Pipe, S);
 
 'IDLE'({Method, Uri, Head}, Pipe, S) ->
-   pipe:b(Pipe, {connect, Uri}),
-   'ACTIVE'({Method, uri:get(path, Uri), Head}, Pipe, S#fsm{url=Uri}).
+   %% TODO: fix Uri as Uri vs As binary for active
+   %pipe:b(Pipe, {connect, Uri}),
+   pipe:b(Pipe, {connect, uri:new("http://localhost:8080")}),
+   'ACTIVE'({Method, uri:get(path, Uri), Head}, Pipe, S#fsm{url=Uri});
+
+'IDLE'(shutdown, Pipe, S) ->
+   {stop, normal, S}.
 
 %%%------------------------------------------------------------------
 %%%
@@ -87,7 +99,10 @@ free(_, _) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'LISTEN'(_, _, S) ->
+'LISTEN'(shutdown, _Pipe, S) ->
+   {stop, normal, S};
+
+'LISTEN'(_Msg, _Pipe, S) ->
    {next_state, 'LISTEN', S}.
 
 %%%------------------------------------------------------------------
@@ -116,7 +131,7 @@ free(_, _) ->
    try
       {next_state, 'ACTIVE', inbound_http(Pckt, Peer, Pipe, S)}
    catch _:Reason ->
-      io:format("--> ~p ~p~n", [Reason, erlang:get_stacktrace()]),
+      io:format("----> ~p ~p~n", [Reason, erlang:get_stacktrace()]),
       %% TODO: Server header configurable via opts
       {Err, _} = htstream:encode({Reason, [{'Server', ?HTTP_SERVER}]}),
       _ = pipe:a(Pipe, Err),
@@ -127,12 +142,15 @@ free(_, _) ->
       }
    end;
 
+'ACTIVE'(shutdown, _Pipe, S) ->
+   {stop, normal, S};
+
 'ACTIVE'(Msg, Pipe, S) ->
    try
       %% TODO: expand http headers (Date + Server + Connection)
       {next_state, 'ACTIVE', outbound_http(Msg, Pipe, S)}
    catch _:Reason ->
-      io:format("--> ~p ~p~n", [Reason, erlang:get_stacktrace()]),      
+      io:format("--> ~p ~p~n", [Reason, erlang:get_stacktrace()]),  
       % TODO: Server header configurable via opts
       {Err, _} = htstream:encode({Reason, [{'Server', ?HTTP_SERVER}]}),
       _ = pipe:b(Pipe, Err),
@@ -156,7 +174,7 @@ outbound_http(Msg, Pipe, S) ->
    _ = pipe:b(Pipe, Pckt),
    case htstream:state(Http) of
       eof -> 
-         S#fsm{send=htstream:new(S#fsm.send)};
+         S#fsm{send=htstream:new(Http)};
       _   -> 
          S#fsm{send=Http}
    end.
@@ -171,7 +189,7 @@ inbound_http(Pckt, Peer, Pipe, S)
    case htstream:state(Http) of
       eof -> 
          _ = pipe:b(Pipe, {http, Url, eof}),
-         S#fsm{url=Url, recv=htstream:new(S#fsm.recv)};
+         S#fsm{url=Url, recv=htstream:new(Http)};
       eoh -> 
          inbound_http(<<>>, Peer, Pipe, S#fsm{url=Url, recv=Http});
       _   -> 
@@ -203,7 +221,7 @@ pass_inbound_http([], _Peer, _Url, _Pipe) ->
 pass_inbound_http(Chunk, _Peer, Url, Pipe) 
  when is_list(Chunk) ->
    _ = pipe:b(Pipe, {http, Url, iolist_to_binary(Chunk)}).
-   
+
 %%
 %% indicate http request eof
 indicate_http_eof(idle, _Pipe, _S) ->
