@@ -270,7 +270,8 @@ request_url({Method, HttpUrl, Heads}, Schema, _Default)
  when is_atom(Method), is_binary(HttpUrl) ->
    Url = uri:new(HttpUrl),
    case uri:get(authority, Url) of
-      undefined ->
+      % TODO: uri make undefined authority
+      {<<>>, undefined} ->
          {'Host', Authority} = lists:keyfind('Host', 1, Heads),
          uri:set(authority, Authority,
             uri:set(schema, Schema, Url)
