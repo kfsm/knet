@@ -16,7 +16,7 @@ run(Uri) ->
 acceptor(Uri) ->
    spawn(fun() -> 
       %% bind acceptor process to socket   
-      {ok, Sock} = knet:bind(Uri, [transient]),
+      {ok, Sock} = knet:bind(Uri),
       loop(Sock)
    end).
 
@@ -42,6 +42,7 @@ handle_tcp(<<"exit\r\n">>, _Peer, Sock) ->
    pipe:send(Sock, <<"+++\r\n">>),
    knet:close(Sock);   
 handle_tcp(Msg, _Peer, Sock) ->
+   pipe:send(Sock, iolist_to_binary([integer_to_list(size(Msg), 16), $\r, $\n])),
    pipe:send(Sock, Msg),
    loop(Sock).
    
@@ -49,7 +50,15 @@ handle_tcp(Msg, _Peer, Sock) ->
 %% http socket
 handle_http({Method, Heads, _Env}, Url, Sock) ->
    %% echo HTTP request (aka TRACE)
-   pipe:send(Sock, {ok, [{'Server', knet},{'Transfer-Encoding', chunked},{'Connection', 'keep-alive'}]}),
+   Connection = case lists:keyfind('Connection', 1, Heads) of
+      false    -> <<"keep-alive">>;
+      {_, Val} -> Val
+   end,
+   pipe:send(Sock, {ok, [
+      {'Server', <<"knet">>},
+      {'Transfer-Encoding', <<"chunked">>},
+      {'Connection', Connection}
+   ]}),
    {Msg, _} = htstream:encode({Method, uri:get(path, Url), Heads}, htstream:new()),
    _ = pipe:send(Sock, iolist_to_binary(Msg)),
    loop(Sock);

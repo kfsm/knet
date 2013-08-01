@@ -106,11 +106,11 @@ do_http(ValGen, #fsm{sock=undefined}=S)	->
    );
 
 do_http(ValGen, S) ->
-	pipe:send(S#fsm.sock, {'POST', <<"/">>, [
-		{'Connection',   'keep-alive'}, 
+	pipe:send(S#fsm.sock, {'POST', S#fsm.url, [
+		{'Connection',   <<"keep-alive">>}, 
 		{'Accept',       [{'*', '*'}]}, 
 		{'Content-Type', {text, plain}}, 
-		{'Transfer-Encoding',  chunked},
+		{'Transfer-Encoding', <<"chunked">>},
 		{'Host',   {"localhost", 8080}}
 	]}),
 	_ = pipe:send(S#fsm.sock, ValGen()),

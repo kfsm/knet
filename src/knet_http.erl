@@ -16,7 +16,13 @@
 %%   limitations under the License.
 %%
 %% @description
-%%    client-server http konduit
+%%   client-server http konduit
+%%
+%% @todo
+%%   * clients and servers SHOULD NOT assume that a persistent connection is maintained for HTTP versions less than 1.1 unless it is explicitly signaled 
+%%   * http access and error logs
+%%   * Server header configurable via konduit opts
+%%   * configurable error policy (close http on error)
 -module(knet_http).
 -behaviour(pipe).
 
@@ -29,14 +35,17 @@
    ioctl/2,
    'IDLE'/3, 
    'LISTEN'/3, 
-   'ACTIVE'/3
+   'CLIENT'/3,
+   'SERVER'/3
 ]).
 
 -record(fsm, {
-   schema = undefined :: atom(),          % http transport schema (http, https)
-   url    = undefined :: any(),           % active request url
-   recv   = undefined :: htstream:http(), % inbound  http state machine
-   send   = undefined :: htstream:http()  % outbound http state machine
+   schema    = undefined :: atom(),          % http transport schema (http, https)
+   url       = undefined :: any(),           % active request url
+   keepalive = 'keep-alive' :: close | 'keep-alive', % 
+   timeout   = undefined :: integer(),       % http keep alive timeout
+   recv      = undefined :: htstream:http(), % inbound  http state machine
+   send      = undefined :: htstream:http()  % outbound http state machine
 }).
 
 %%%------------------------------------------------------------------
@@ -52,8 +61,9 @@ start_link(Opts) ->
 init(Opts) ->
    {ok, 'IDLE', 
       #fsm{
-         recv = htstream:new(),
-         send = htstream:new() 
+         timeout = opts:val('keep-alive', Opts),
+         recv    = htstream:new(),
+         send    = htstream:new() 
       }
    }.
 
@@ -71,27 +81,29 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------   
 
+'IDLE'(shutdown, _Pipe, S) ->
+   {stop, normal, S};
+
 'IDLE'({listen,  Uri}, Pipe, S) ->
    pipe:b(Pipe, {listen, Uri}),
    {next_state, 'LISTEN', S};
 
 'IDLE'({accept,  Uri}, Pipe, S) ->
    pipe:b(Pipe, {accept, Uri}),
-   {next_state, 'ACTIVE', S#fsm{schema=uri:get(schema, Uri)}};
+   {next_state, 'SERVER', S#fsm{schema=uri:get(schema, Uri)}};
 
 'IDLE'({connect, Uri}, Pipe, S) ->
    % connect is compatibility wrapper for knet socket interface (translated to http GET request)
    % TODO: htstream support HTTP/1.2 (see http://www.jmarshall.com/easy/http/)
-   'IDLE'({'GET', Uri, [{'Connection', close}, {'Host', uri:get(authority, Uri)}]}, Pipe, S);
+   'IDLE'({'GET', Uri, [{'Connection', <<"close">>}, {'Host', uri:get(authority, Uri)}]}, Pipe, S);
 
-'IDLE'({Method, Uri, Head}, Pipe, S) ->
-   %% TODO: fix Uri as Uri vs As binary for active
-   %pipe:b(Pipe, {connect, Uri}),
-   pipe:b(Pipe, {connect, uri:new("http://localhost:8080")}),
-   'ACTIVE'({Method, uri:get(path, Uri), Head}, Pipe, S#fsm{url=Uri});
+'IDLE'({_, {uri, _, _}=Uri, _}=Req, Pipe, S) ->
+   pipe:b(Pipe, {connect, Uri}),
+   'CLIENT'(Req, Pipe, S#fsm{url=Uri});
 
-'IDLE'(shutdown, Pipe, S) ->
-   {stop, normal, S}.
+'IDLE'({_, {uri, _, _}=Uri, _, _}=Req, Pipe, S) ->
+   pipe:b(Pipe, {connect, Uri}),
+   'CLIENT'(Req, Pipe, S#fsm{url=Uri}).
 
 %%%------------------------------------------------------------------
 %%%
@@ -107,59 +119,107 @@ ioctl(_, _) ->
 
 %%%------------------------------------------------------------------
 %%%
+%%% SERVER
+%%%
+%%%------------------------------------------------------------------   
+
+'SERVER'(timeout, _Pipe, S) ->
+   {stop, normal, S};
+
+'SERVER'(shutdown, _Pipe, S) ->
+   {stop, normal, S};
+
+'SERVER'({tcp, _, established}, _, S) ->
+   {next_state, 'SERVER', S#fsm{schema=http},  S#fsm.timeout};
+
+'SERVER'({ssl, _, established}, _, S) ->
+   {next_state, 'SERVER', S#fsm{schema=https}, S#fsm.timeout};
+
+'SERVER'({Prot, _, {terminated, _}}, _Pipe, S)
+ when Prot =:= tcp orelse Prot =:= ssl ->
+   {stop, normal, S};
+
+%%
+%% remote client request
+'SERVER'({Prot, Peer, Pckt}, Pipe, S)
+ when is_binary(Pckt), Prot =:= tcp orelse Prot =:= ssl ->
+   try
+      {next_state, 'SERVER', http_inbound(Pckt, Peer, Pipe, S), S#fsm.timeout}
+   catch _:Reason ->
+      {next_state, 'SERVER', http_failure(Reason, Pipe, a, S), S#fsm.timeout}
+   end;
+
+%%
+%% local acceptor response
+'SERVER'(eof, Pipe, #fsm{keepalive = <<"close">>}=S) ->
+   try
+      %% TODO: expand http headers (Date + Server + Connection)
+      {stop, normal, http_outbound(eof, Pipe, S)}
+   catch _:Reason ->
+      {stop, normal, http_failure(Reason, Pipe, b, S)}
+   end;
+
+'SERVER'(Msg, Pipe, S) ->
+   try
+      %% TODO: expand http headers (Date + Server + Connection)
+      {next_state, 'SERVER', http_outbound(Msg, Pipe, S), S#fsm.timeout}
+   catch _:Reason ->
+      {next_state, 'SERVER', http_failure(Reason, Pipe, b, S), S#fsm.timeout}
+   end.
+
+
+%%%------------------------------------------------------------------
+%%%
 %%% ACTIVE
 %%%
 %%%------------------------------------------------------------------   
 
-'ACTIVE'({tcp, _, established}, _, S) ->
-   {next_state, 'ACTIVE', S#fsm{schema=http}};
-
-'ACTIVE'({ssl, _, established}, _, S) ->
-   {next_state, 'ACTIVE', S#fsm{schema=https}};
-
-'ACTIVE'({Prot, _, {terminated, _}}, Pipe, S)
- when Prot =:= tcp orelse Prot =:= ssl ->
-   indicate_http_eof(htstream:state(S#fsm.recv), Pipe, S),
-   {stop, normal, 
-      S#fsm{
-         recv = htstream:new(S#fsm.recv)
-      }
-   };
-
-'ACTIVE'({Prot, Peer, Pckt}, Pipe, S)
- when is_binary(Pckt), Prot =:= tcp orelse Prot =:= ssl ->
-   try
-      {next_state, 'ACTIVE', inbound_http(Pckt, Peer, Pipe, S)}
-   catch _:Reason ->
-      io:format("----> ~p ~p~n", [Reason, erlang:get_stacktrace()]),
-      %% TODO: Server header configurable via opts
-      {Err, _} = htstream:encode({Reason, [{'Server', ?HTTP_SERVER}]}),
-      _ = pipe:a(Pipe, Err),
-      {next_state, 'ACTIVE', 
-         S#fsm{
-            recv = htstream:new()
-         }
-      }
-   end;
-
-'ACTIVE'(shutdown, _Pipe, S) ->
+%%
+%% protocol signaling
+'CLIENT'(shutdown, _Pipe, S) ->
    {stop, normal, S};
 
-'ACTIVE'(Msg, Pipe, S) ->
+'CLIENT'({tcp, _, established}, _, S) ->
+   {next_state, 'CLIENT', S#fsm{schema=http}};
+
+'CLIENT'({ssl, _, established}, _, S) ->
+   {next_state, 'CLIENT', S#fsm{schema=https}};
+
+'CLIENT'({Prot, _, {terminated, _}}, Pipe, S)
+ when Prot =:= tcp orelse Prot =:= ssl ->
+   case htstream:state(S#fsm.recv) of
+      payload -> _ = pipe:b(Pipe, {http, S#fsm.url, eof});
+      _       -> ok
+   end,
+   {stop, normal, S};
+
+%%
+%% remote acceptor response
+'CLIENT'({Prot, Peer, Pckt}, Pipe, S)
+ when is_binary(Pckt), Prot =:= tcp orelse Prot =:= ssl ->
    try
-      %% TODO: expand http headers (Date + Server + Connection)
-      {next_state, 'ACTIVE', outbound_http(Msg, Pipe, S)}
+      {next_state, 'CLIENT', http_inbound(Pckt, Peer, Pipe, S)}
    catch _:Reason ->
-      io:format("--> ~p ~p~n", [Reason, erlang:get_stacktrace()]),  
-      % TODO: Server header configurable via opts
-      {Err, _} = htstream:encode({Reason, [{'Server', ?HTTP_SERVER}]}),
-      _ = pipe:b(Pipe, Err),
-      {next_state, 'ACTIVE', 
-         S#fsm{
-            send = htstream:new()
-         }
-      }
+      %io:format("----> ~p ~p~n", [Reason, erlang:get_stacktrace()]),
+      {stop, Reason, S}
+   end;
+
+%%
+%% local client request
+'CLIENT'({Mthd, {uri, _, _}=Uri, Heads}, Pipe, S) ->
+   'CLIENT'({Mthd, uri:get(path, Uri), Heads}, Pipe, S#fsm{url=Uri});
+
+'CLIENT'({Mthd, {uri, _, _}=Uri, Heads, Msg}, Pipe, S) ->
+   'CLIENT'({Mthd, uri:get(path, Uri), Heads, Msg}, Pipe, S#fsm{url=Uri});
+
+'CLIENT'(Msg, Pipe, S) ->
+   try
+      {next_state, 'CLIENT', http_outbound(Msg, Pipe, S)}
+   catch _:Reason ->
+      %io:format("----> ~p ~p~n", [Reason, erlang:get_stacktrace()]),
+      {stop, Reason, S}
    end.
+
 
 %%%------------------------------------------------------------------
 %%%
@@ -168,50 +228,74 @@ ioctl(_, _) ->
 %%%------------------------------------------------------------------
 
 %%
-%% outbound HTTP message
-outbound_http(Msg, Pipe, S) ->
+%% handle outbound HTTP message
+http_outbound(Msg, Pipe, S) ->
    {Pckt, Http} = htstream:encode(Msg, S#fsm.send),
    _ = pipe:b(Pipe, Pckt),
    case htstream:state(Http) of
-      eof -> 
-         S#fsm{send=htstream:new(Http)};
-      _   -> 
-         S#fsm{send=Http}
+      eof -> S#fsm{send=htstream:new(Http)};
+      _   -> S#fsm{send=Http}
    end.
 
 %%
 %% handle inbound stream
-inbound_http(Pckt, Peer, Pipe, S)
+http_inbound(Pckt, Peer, Pipe, S)
  when is_binary(Pckt) ->
    {Msg, Http} = htstream:decode(Pckt, S#fsm.recv),
-   Url = request_url(Msg, S#fsm.schema, S#fsm.url),
-   _   = pass_inbound_http(Msg, Peer, Url, Pipe),
+   Url   = request_url(Msg, S#fsm.schema, S#fsm.url),
+   Alive = request_header(Msg, 'Connection', S#fsm.keepalive),
+   _ = pass_inbound_http(Msg, Peer, Url, Pipe),
    case htstream:state(Http) of
       eof -> 
          _ = pipe:b(Pipe, {http, Url, eof}),
-         S#fsm{url=Url, recv=htstream:new(Http)};
+         S#fsm{url=Url, keepalive=Alive, recv=htstream:new(Http)};
       eoh -> 
-         inbound_http(<<>>, Peer, Pipe, S#fsm{url=Url, recv=Http});
+         http_inbound(<<>>, Peer, Pipe, S#fsm{url=Url, keepalive=Alive, recv=Http});
       _   -> 
-         S#fsm{url=Url, recv=Http}
+         S#fsm{url=Url, keepalive=Alive, recv=Http}
    end.
 
 %%
-%% decode resource Url
-request_url({Method, Url, Heads}, Schema, _Default)
- when is_atom(Method), is_binary(Url) ->
-   {'Host', Authority} = lists:keyfind('Host', 1, Heads),
-   uri:set(authority, Authority,
-      uri:set(schema, Schema,
-         uri:new(Url)
-      )
-   );
+%% handle http failure
+http_failure(Reason, Pipe, Side, S) ->
+   %%io:format("----> ~p ~p~n", [Reason, erlang:get_stacktrace()]),
+   {Msg, _} = htstream:encode({Reason, [{'Server', ?HTTP_SERVER}]}),
+   _ = pipe:Side(Pipe, Msg),
+   S#fsm{recv = htstream:new()}.
+
+
+%%
+%% decode resource url
+request_url({Method, HttpUrl, Heads}, Schema, _Default)
+ when is_atom(Method), is_binary(HttpUrl) ->
+   Url = uri:new(HttpUrl),
+   case uri:get(authority, Url) of
+      undefined ->
+         {'Host', Authority} = lists:keyfind('Host', 1, Heads),
+         uri:set(authority, Authority,
+            uri:set(schema, Schema, Url)
+         );
+      _ ->
+         uri:set(schema, Schema, Url)
+   end;
 request_url(_, _, Default) ->
    Default.
 
 %%
+%% decode request header
+request_header({Mthd, Url, Heads}, Header, Default)
+ when is_atom(Mthd), is_binary(Url) ->
+   case lists:keyfind(Header, 1, Heads) of
+      false    -> Default;
+      {_, Val} -> Val
+   end;
+request_header(_, _, Default) ->
+   Default.
+
+
+%%
 %% pass inbound http traffic to chain
-pass_inbound_http({Method, Path, Heads}, {IP, _}, Url, Pipe) ->
+pass_inbound_http({Method, _Path, Heads}, {IP, _}, Url, Pipe) ->
    ?DEBUG("knet http ~p: request ~p ~p", [self(), Method, Url]),
    %% TODO: Handle Cookie and Request (similar to PHP $_REQUEST)
    Env = [{peer, IP}],
@@ -221,12 +305,5 @@ pass_inbound_http([], _Peer, _Url, _Pipe) ->
 pass_inbound_http(Chunk, _Peer, Url, Pipe) 
  when is_list(Chunk) ->
    _ = pipe:b(Pipe, {http, Url, iolist_to_binary(Chunk)}).
-
-%%
-%% indicate http request eof
-indicate_http_eof(idle, _Pipe, _S) ->
-   ok;
-indicate_http_eof(_, Pipe, S) ->
-   _ = pipe:b(Pipe, {http, S#fsm.url, eof}).
 
 

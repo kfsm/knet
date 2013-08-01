@@ -82,7 +82,7 @@ connect(Sock, Url)
    {ok, Sock};
 
 connect({uri, Type, _}=Url, Opts) ->
-   case socket(Type, Opts) of
+   case socket(Type, Opts ++ [noexit]) of
       {ok, Sock} -> connect(Sock, Url);
       Error      -> Error
    end;

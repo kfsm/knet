@@ -34,9 +34,9 @@
 
 %% internal state
 -record(fsm, {
-   sock   = undefined :: [pid()],  %% socket stack
-   owner  = undefined :: pid(),    %% socket owner process
-   mode   = undefined :: undefined | transient %% socket owner process
+   sock  = undefined :: [pid()],  %% socket stack
+   owner = undefined :: pid(),    %% socket owner process
+   mode  = undefined :: undefined | noexit | transient %% socket owner process
 }).
 
 %%%------------------------------------------------------------------
@@ -57,7 +57,7 @@ init([Type, Owner, Opts]) ->
       #fsm{
          sock  = Sock,
          owner = Owner,
-         mode  = opts:val([transient], undefined, Opts)
+         mode  = opts:val([transient, noexit], undefined, Opts)
       }
    }.
 
@@ -89,15 +89,13 @@ socket(Pid) ->
    plib:ack(Tx, {ok, lists:last(S#fsm.sock)}),
    {next_state, 'ACTIVE', S};
 
-'ACTIVE'({'EXIT', _Pid, normal}, _, #fsm{mode=transient}=S) ->
-   % clean-up konduit stack
+'ACTIVE'({'EXIT', _Pid, _Reason}, _, #fsm{mode=noexit}=S) ->
    free_socket(S#fsm.sock),
-   erlang:exit(S#fsm.owner, shutdown),
    {stop, normal, S};
 
 'ACTIVE'({'EXIT', _Pid, normal}, _, S) ->
-   % clean-up konduit stack
    free_socket(S#fsm.sock),
+   erlang:exit(S#fsm.owner, shutdown),
    {stop, normal, S};
 
 'ACTIVE'({'EXIT', _Pid, Reason}, _, S) ->
