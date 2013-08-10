@@ -16,34 +16,42 @@
 %%   limitations under the License.
 %%
 %% @description
-%%   root supervisor
--module(knet_sup).
--behaviour(supervisor).
+%%   example tcp/ip application
+-module(tcp_protocol).
+-behaviour(pipe).
 
 -export([
-   start_link/0, 
-   init/1
+	start_link/1,
+	init/1,
+	free/2,
+	ioctl/2,
+	handle/3
 ]).
 
 %%
--define(CHILD(Type, I),            {I,  {I, start_link,   []}, permanent, 5000, Type, dynamic}).
--define(CHILD(Type, I, Args),      {I,  {I, start_link, Args}, permanent, 5000, Type, dynamic}).
--define(CHILD(Type, ID, I, Args),  {ID, {I, start_link, Args}, permanent, 5000, Type, dynamic}).
+%%
+start_link(Uri) ->
+	pipe:start_link(?MODULE, [Uri], []).
+
+init([Uri]) ->
+	{ok, Sock} = knet:bind(Uri),
+	{ok, handle, Sock}.
+
+free(_, Sock) ->
+	knet:close(Sock).
+
+%%
+ioctl(_, _) ->
+	throw(not_implemented).
 
 %%
 %%
-start_link() ->
-   supervisor:start_link({local, ?MODULE}, ?MODULE, []).
-   
-init([]) -> 
-   {ok,
-      {
-         {one_for_one, 4, 1800},
-         [
-            ?CHILD(supervisor, knet_sock_sup),
-            ?CHILD(supervisor, knet_service_sup)
-         ]
-      }
-   }.
+handle({tcp, _Peer, established}, _Pipe, Sock) ->
+	{next_state, handle, Sock};
+
+handle({tcp, _Peer, Msg}, Pipe, Sock) ->
+	pipe:a(Pipe, Msg),
+	{next_state, handle, Sock}.
+
 
 

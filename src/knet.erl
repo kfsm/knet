@@ -63,7 +63,17 @@ listen(Sock, Url)
    {ok, Sock};
 
 listen({uri, Type, _}=Url, Opts) ->
-   case socket(Type, Opts) of
+   %% check acceptor pool management option
+   NOpts = case opts:get([acceptor, supervisor], Opts) of
+      {acceptor,   X} when is_function(X) ->
+         Opts;
+      {acceptor,   X} ->
+         {ok, Pid} = supervisor:start_child(knet_service_sup, [X]),
+         [{acceptor, Pid} | lists:keydelete(acceptor, 1, Opts)];
+      {supervisor, X} ->
+         Opts
+   end,
+   case socket(Type, NOpts) of
       {ok, Sock} -> listen(Sock, Url);
       Error      -> Error
    end;
@@ -113,4 +123,13 @@ bind(Url, Opts) ->
 
 bind(Url) ->
    bind(uri:new(Url), []).
+
+
+%%%------------------------------------------------------------------
+%%%
+%%% private
+%%%
+%%%------------------------------------------------------------------   
+
+
 

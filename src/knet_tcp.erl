@@ -142,7 +142,6 @@ ioctl(acceptor, S) ->
    LSock   = pipe:ioctl(pns:whereis(knet, {tcp, any, Port}), socket),
    Factory = pipe:ioctl(pns:whereis(knet, {tcp, any, Port}), acceptor), 
    ?DEBUG("knet tcp ~p: accept ~p", [self(), {any, Port}]),
-   try
    case gen_tcp:accept(LSock) of
       {ok, Sock} ->
          _ = init_acceptor(Factory, Uri),
@@ -163,10 +162,6 @@ ioctl(acceptor, S) ->
          ?DEBUG("knet tcp ~p: terminated ~s (reason ~p)", [self(), uri:to_binary(Uri), Reason]),
          pipe:a(Pipe, {tcp, {any, Port}, {terminated, Reason}}),      
          {stop, Reason, S}
-   end
-   catch _:R ->
-      io:format("fucking fuck: ~p ~p~n", [R, erlang:get_stacktrace()]),
-      {stop, R, S}
    end;
 
 %%

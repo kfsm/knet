@@ -16,34 +16,18 @@
 %%   limitations under the License.
 %%
 %% @description
-%%   root supervisor
--module(knet_sup).
--behaviour(supervisor).
+%%   example tcp/ip application
+-module(tcp_app).
+-behaviour(application).
 
 -export([
-   start_link/0, 
-   init/1
+   start/2,
+   stop/1
 ]).
 
-%%
--define(CHILD(Type, I),            {I,  {I, start_link,   []}, permanent, 5000, Type, dynamic}).
--define(CHILD(Type, I, Args),      {I,  {I, start_link, Args}, permanent, 5000, Type, dynamic}).
--define(CHILD(Type, ID, I, Args),  {ID, {I, start_link, Args}, permanent, 5000, Type, dynamic}).
+start(_Type, _Args) -> 
+   {ok,   _} = knet:listen("tcp://*:8888", [{acceptor, tcp_protocol}, {pool, 256}, {backlog, 256}]),
+   tcp_sup:start_link(). 
 
-%%
-%%
-start_link() ->
-   supervisor:start_link({local, ?MODULE}, ?MODULE, []).
-   
-init([]) -> 
-   {ok,
-      {
-         {one_for_one, 4, 1800},
-         [
-            ?CHILD(supervisor, knet_sock_sup),
-            ?CHILD(supervisor, knet_service_sup)
-         ]
-      }
-   }.
-
-
+stop(_State) ->
+   ok.

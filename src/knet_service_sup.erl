@@ -16,8 +16,8 @@
 %%   limitations under the License.
 %%
 %% @description
-%%   root supervisor
--module(knet_sup).
+%%      
+-module(knet_service_sup).
 -behaviour(supervisor).
 
 -export([
@@ -34,14 +34,13 @@
 %%
 start_link() ->
    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
-   
-init([]) -> 
+
+init(_) -> 
    {ok,
       {
-         {one_for_one, 4, 1800},
+         {simple_one_for_one, 4, 1800},
          [
-            ?CHILD(supervisor, knet_sock_sup),
-            ?CHILD(supervisor, knet_service_sup)
+         	?CHILD(supervisor, knet_acceptor_sup)
          ]
       }
    }.

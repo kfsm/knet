@@ -1,0 +1,19 @@
+{application, tcp,
+   [
+      {description, "konduit network library - tcp example"},
+      {vsn,         "1.1.0"},
+      {modules,     [
+         tcp_sup,
+         tcp_app
+      ]},
+      {registered,  []},
+      {applications,[
+         kernel, 
+         stdlib,
+         knet
+      ]},
+      {mod, {tcp_app, []}},
+      {env, []}
+   ]
+}.  
+
