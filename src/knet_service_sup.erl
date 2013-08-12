@@ -16,13 +16,19 @@
 %%   limitations under the License.
 %%
 %% @description
-%%      
+%%   service supervisor
 -module(knet_service_sup).
 -behaviour(supervisor).
 
 -export([
-   start_link/0, 
-   init/1
+   start_link/3, 
+   init/1,
+   %% api
+   init_socket/4,
+   init_acceptor/2,
+
+   leader/1,
+   acceptor/1
 ]).
 
 %%
@@ -32,17 +38,53 @@
 
 %%
 %%
-start_link() ->
-   supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+start_link(Uri, Owner, Opts) ->
+   supervisor:start_link(?MODULE, [Uri, Owner, Opts]).
 
-init(_) -> 
+init([Uri, Owner, Opts]) -> 
+   ok = pns:register(knet, {service, uri:s(Uri)}, self()),
    {ok,
       {
-         {simple_one_for_one, 4, 1800},
+         {one_for_all, 4, 1800},
          [
-         	?CHILD(supervisor, knet_acceptor_sup)
+            %% socket factory
+            ?CHILD(supervisor, knet_sock_sup),
+            %% acceptor factory
+            ?CHILD(supervisor, knet_acceptor_sup, [opts:val(acceptor, Opts)]),
+            %% leader socket
+            ?CHILD(worker,     knet_sock, [Uri, Owner, [listen | Opts]])
          ]
       }
    }.
 
+%%
+%% create new socket using socket factory 
+init_socket(Sup, Uri, Owner, Opts) ->
+   {knet_sock_sup, Factory, _Type, _Mods} = lists:keyfind(knet_sock_sup, 1, supervisor:which_children(Sup)),
+   case supervisor:start_child(Factory, [Uri, Owner, Opts]) of
+      {ok, Pid} -> 
+         knet_sock:socket(Pid);
+      Error     -> 
+         Error
+   end.
 
+%%
+%% create new acceptor using acceptor factory
+init_acceptor(Sup, Uri) ->
+   {knet_acceptor_sup, Factory, _Type, _Mods} = lists:keyfind(knet_acceptor_sup, 1, supervisor:which_children(Sup)),
+   supervisor:start_child(Factory, [Uri]).
+
+
+%%
+%%
+leader(Sup)
+ when is_pid(Sup) ->
+   {knet_sock, Pid, _Type, _Mods} = lists:keyfind(knet_sock, 1, supervisor:which_children(Sup)),
+   Pid.
+
+%%
+%%
+acceptor(Sup)
+ when is_pid(Sup) ->
+   {knet_acceptor_sup, Pid, _Type, _Mods} = lists:keyfind(knet_acceptor_sup, 1, supervisor:which_children(Sup)),
+   Pid.

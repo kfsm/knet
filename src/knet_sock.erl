@@ -45,14 +45,35 @@
 %%%
 %%%------------------------------------------------------------------   
 
-start_link(Type, Owner, Opts) ->
-   kfsm:start_link(?MODULE, [Type, Owner, Opts], []).
+% start_link(Type, Owner, Opts) ->
+%    kfsm:start_link(?MODULE, [Type, Owner, Opts], []).
 
-init([Type, Owner, Opts]) ->
+start_link(Uri, Owner, Opts) ->
+   kfsm:start_link(?MODULE, [Uri, Owner, Opts], []).
+
+
+init([Uri, Owner, Opts]) ->
+   %% create socket pipeline
    _ = erlang:process_flag(trap_exit, true),
    _ = erlang:monitor(process, Owner),
-   Sock = init_socket(Type, Opts),
-   _ = pipe:make(Sock ++ [Owner]),
+   Sock = init_socket(uri:schema(Uri), Opts),
+
+   %% bind socket pipeline with owner
+   case opts:val(nobind, undefined, Opts) of
+      undefined ->
+         _ = pipe:make(Sock ++ [Owner]);
+      nobind    ->
+         ok
+   end,
+
+   %% configure socket
+   case opts:val([listen, accept, connect], undefined, Opts) of
+      listen ->
+         _  = pipe:send(lists:last(Sock), {listen, Uri});
+      _      ->
+         ok
+   end,
+
    {ok, 'ACTIVE', 
       #fsm{
          sock  = Sock,

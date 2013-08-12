@@ -31,7 +31,6 @@
 -define(CHILD(Type, ID, I, Args),  {ID, {I, start_link, Args}, permanent, 5000, Type, dynamic}).
 
 %%
-%%
 start_link() ->
    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
    
@@ -40,8 +39,8 @@ init([]) ->
       {
          {one_for_one, 4, 1800},
          [
-            ?CHILD(supervisor, knet_sock_sup),
-            ?CHILD(supervisor, knet_service_sup)
+            ?CHILD(supervisor, knet_sock_sup,  [knet_sock_sup]),
+            ?CHILD(supervisor, knet_service_root_sup)
          ]
       }
    }.

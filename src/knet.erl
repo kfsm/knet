@@ -19,16 +19,13 @@
 
 -export([start/0]).
 -export([
-   socket/2, 
-   close/1,
    listen/2, 
+   bind/1, 
+   bind/2,
    connect/1, 
    connect/2, 
-   bind/1, 
-   bind/2
+   close/1
 ]).
-
--type(url() :: list() | binary()).
 
 %%
 %% start application
@@ -36,66 +33,61 @@ start() ->
    applib:boot(?MODULE, []).
 
 %%
-%% create socket 
--spec(socket/2 :: (atom(), list()) -> {ok, pid()} | {error, any()}).
-
-socket(Type, Opts) ->
-   case supervisor:start_child(knet_sock_sup, [Type, self(), Opts]) of
-      {ok, Pid} -> knet_sock:socket(Pid);
-      Error     -> Error
-   end. 
-
-%%
-%% close socket
--spec(close/1 :: (pid()) -> ok).
-
-close(Sock) ->
-   _ = pipe:send(Sock, shutdown),
-   ok.
-
-%%
-%% listen socket
+%% listen incoming connection
+%% Options:
+%%   {acceptor,      atom()} - acceptor implementation
+%%   {pool,       integer()} - acceptor pool size
+%%   {timeout_io, integer()} - socket i/o timeout
 -spec(listen/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
 
-listen(Sock, Url)
- when is_pid(Sock) ->
-   _ = pipe:send(Sock, {listen, Url}),
-   {ok, Sock};
-
-listen({uri, Type, _}=Url, Opts) ->
-   %% check acceptor pool management option
-   NOpts = case opts:get([acceptor, supervisor], Opts) of
-      {acceptor,   X} when is_function(X) ->
-         Opts;
-      {acceptor,   X} ->
-         {ok, Pid} = supervisor:start_child(knet_service_sup, [X]),
-         [{acceptor, Pid} | lists:keydelete(acceptor, 1, Opts)];
-      {supervisor, X} ->
-         Opts
-   end,
-   case socket(Type, NOpts) of
-      {ok, Sock} -> listen(Sock, Url);
-      Error      -> Error
-   end;
+listen({uri, _, _}=Uri, Opts) ->
+   knet_service_root_sup:init_service(Uri, self(), Opts);
 
 listen(Url, Opts) ->
    listen(uri:new(Url), Opts).
 
 %%
+%% bind process to listening socket
+-spec(bind/1 :: (any()) -> {ok, pid()} | {error, any()}).
+-spec(bind/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
+
+bind({uri, _, _}=Uri, Opts) ->
+   case pns:whereis(knet, {service, uri:s(Uri)}) of
+      undefined ->
+         {error, badarg};
+      Sup       ->
+         case knet_service_sup:init_socket(Sup, Uri, self(), Opts) of
+            {ok, Sock} ->
+               _ = pipe:send(Sock, {accept, Uri}),
+               {ok, Sock};
+            Error      ->
+               Error
+         end
+   end;
+
+bind(Url, Opts) ->
+   bind(uri:new(Url), Opts).
+
+bind(Url) ->
+   bind(uri:new(Url), []).
+
+
+%%
 %% connect socket to remote peer
+%% Options
+%%   @todo
 -spec(connect/1 :: (any()) -> {ok, pid()} | {error, any()}).
 -spec(connect/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
 
-connect(Sock, Url)
- when is_pid(Sock) ->
-   _ = pipe:send(Sock, {connect, Url}),
-   {ok, Sock};
-
-connect({uri, Type, _}=Url, Opts) ->
-   case socket(Type, Opts ++ [noexit]) of
-      {ok, Sock} -> connect(Sock, Url);
-      Error      -> Error
-   end;
+connect({uri, _, _}=Uri, Opts) ->
+   case supervisor:start_child(knet_sock_sup, [Uri, self(), Opts ++ [noexit]]) of
+      {ok, Pid} -> 
+         {ok, Sock} = knet_sock:socket(Pid),
+         _ = pipe:send(Sock, {connect, Uri}),
+         {ok, Sock};
+      Error     -> 
+         Error
+   end; 
 
 connect(Url, Opts) ->
    connect(uri:new(Url), Opts).
@@ -104,25 +96,20 @@ connect(Url) ->
    connect(uri:new(Url), []).
 
 %%
-%% bind process to listening socket (creates acceptor socket)
--spec(bind/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
+%% close socket
+-spec(close/1 :: (pid()) -> ok).
 
-bind(Sock, Url)
+close(Sock)
  when is_pid(Sock) ->
-   _ = pipe:send(Sock, {accept, Url}),
-   {ok, Sock};
+   _ = pipe:send(Sock, shutdown),
+   ok;
 
-bind({uri, Type, _}=Url, Opts) ->
-   case socket(Type, Opts) of
-      {ok, Sock} -> bind(Sock, Url);
-      Error      -> Error
-   end;
+close({uri, _, _}=Uri) ->
+   knet_service_root_sup:free_service(Uri);
 
-bind(Url, Opts) ->
-   bind(uri:new(Url), Opts).
+close(Uri) ->
+   close(uri:new(Uri)).
 
-bind(Url) ->
-   bind(uri:new(Url), []).
 
 
 %%%------------------------------------------------------------------

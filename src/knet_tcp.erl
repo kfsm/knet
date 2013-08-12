@@ -38,11 +38,15 @@
    peer :: any(),   % peer address  
    addr :: any(),   % local address
 
-   sopt     = undefined :: list(),              %% list of socket opts    
-   active   = true      :: once | true | false, %% socket activity (pipe internally uses active once)
-   timeout  = 10000     :: integer(),           %% socket connect timeout
-   acceptor = undefined :: any(),               %% socket acceptor factory
-   pool     = 0         :: integer()            %% socket acceptor pool size
+   % socket options
+   sopt        = undefined   :: list(),              %% list of socket opts    
+   active      = true        :: once | true | false, %% socket activity (pipe internally uses active once)
+   tout_peer   = ?SO_TIMEOUT :: integer(),           %% timeout to connect peer
+   tout_io     = ?SO_TIMEOUT :: integer(),           %% timeout to handle io
+   packet      = 0           :: integer(),           %% number of packets handled by socket in between of io timeouts
+
+   service     = undefined :: pid(),                 %% service supervisor
+   pool        = 0         :: integer()              %% socket acceptor pool size
 }).
 
 %%%------------------------------------------------------------------
@@ -58,12 +62,11 @@ start_link(Opts) ->
 init(Opts) ->
    {ok, 'IDLE', 
       #fsm{
-         sopt    = opts:filter(?SO_TCP_ALLOWED, Opts),
-         active  = opts:val(active, Opts),
-         timeout = opts:val(timeout, 10000, Opts),
-
-         acceptor= opts:val(acceptor, undefined, Opts),
-         pool    = opts:val(pool, 0, Opts)
+         sopt      = opts:filter(?SO_TCP_ALLOWED, Opts),
+         active    = opts:val(active, Opts),
+         tout_peer = opts:val(timeout_peer, ?SO_TIMEOUT, Opts),
+         tout_io   = opts:val(timeout_io,   ?SO_TIMEOUT, Opts),
+         pool      = opts:val(pool, 0, Opts)
       }
    }.
 
@@ -78,9 +81,7 @@ free(_, S) ->
 
 %% 
 ioctl(socket,   S) -> 
-   S#fsm.sock;
-ioctl(acceptor, S) -> 
-   S#fsm.acceptor.
+   S#fsm.sock.
 
 %%%------------------------------------------------------------------
 %%%
@@ -92,7 +93,7 @@ ioctl(acceptor, S) ->
 'IDLE'({connect, Uri}, Pipe, S) ->
    Host = scalar:c(uri:get(host, Uri)),
    Port = uri:get(port, Uri),
-   case gen_tcp:connect(Host, Port, S#fsm.sopt, S#fsm.timeout) of
+   case gen_tcp:connect(Host, Port, S#fsm.sopt, S#fsm.tout_peer) of
       {ok, Sock} ->
          {ok, Peer} = inet:peername(Sock),
          {ok, Addr} = inet:sockname(Sock),
@@ -101,9 +102,10 @@ ioctl(acceptor, S) ->
          so_ioctl(Sock, S),
          {next_state, 'ESTABLISHED', 
             S#fsm{
-               sock = Sock,
-               addr = Addr,
-               peer = Peer
+               sock    = Sock,
+               addr    = Addr,
+               peer    = Peer,
+               tout_io = tempus:event(S#fsm.tout_io, timeout_io) 
             }
          };
       {error, Reason} ->
@@ -114,19 +116,21 @@ ioctl(acceptor, S) ->
 
 %%
 'IDLE'({listen, Uri}, Pipe, S) ->
+   Service = pns:whereis(knet, {service, uri:s(Uri)}),
+   Port    = uri:get(port, Uri),
+   ok      = pns:register(knet, {tcp, any, Port}),
    % socket opts for listener socket requires {active, false}
    Opts = [{active, false}, {reuseaddr, true} | lists:keydelete(active, 1, S#fsm.sopt)],
-   % TODO: bind to address
-   Port = uri:get(port, Uri),
-   ok   = pns:register(knet, {tcp, any, Port}),
+   % @todo bind to address
    case gen_tcp:listen(Port, Opts) of
       {ok, Sock} -> 
          ?DEBUG("knet tcp ~p: listen ~p", [self(), Port]),
          _ = pipe:a(Pipe, {tcp, {any, Port}, listen}),
-         [init_acceptor(S#fsm.acceptor, Uri) || _ <- lists:seq(1, S#fsm.pool)],
+         [knet_service_sup:init_acceptor(Service, Uri) || _ <- lists:seq(1, S#fsm.pool)],
          {next_state, 'LISTEN', 
             S#fsm{
-               sock = Sock
+               sock     = Sock,
+               service  = Service
             }
          };
       {error, Reason} ->
@@ -137,14 +141,13 @@ ioctl(acceptor, S) ->
 
 %%
 'IDLE'({accept, Uri}, Pipe, S) ->
-   Port = uri:get(port, Uri),
-   %% TODO: make ioctl iface to pipe / machine
+   Service = pns:whereis(knet, {service, uri:s(Uri)}),
+   Port    = uri:get(port, Uri),
    LSock   = pipe:ioctl(pns:whereis(knet, {tcp, any, Port}), socket),
-   Factory = pipe:ioctl(pns:whereis(knet, {tcp, any, Port}), acceptor), 
    ?DEBUG("knet tcp ~p: accept ~p", [self(), {any, Port}]),
    case gen_tcp:accept(LSock) of
       {ok, Sock} ->
-         _ = init_acceptor(Factory, Uri),
+         _ = knet_service_sup:init_acceptor(Service, Uri),
          {ok, Peer} = inet:peername(Sock),
          {ok, Addr} = inet:sockname(Sock),
          _ = so_ioctl(Sock, S),
@@ -152,13 +155,14 @@ ioctl(acceptor, S) ->
          pipe:a(Pipe, {tcp, Peer, established}),
          {next_state, 'ESTABLISHED', 
             S#fsm{
-               sock = Sock, 
-               addr = Addr, 
-               peer = Peer
+               sock    = Sock, 
+               addr    = Addr, 
+               peer    = Peer,
+               tout_io = tempus:event(S#fsm.tout_io, timeout_io) 
             }
          };
       {error, Reason} ->
-         _ = init_acceptor(Factory, Uri),
+         _ = knet_service_sup:init_acceptor(Service, Uri),
          ?DEBUG("knet tcp ~p: terminated ~s (reason ~p)", [self(), uri:to_binary(Uri), Reason]),
          pipe:a(Pipe, {tcp, {any, Port}, {terminated, Reason}}),      
          {stop, Reason, S}
@@ -205,18 +209,39 @@ ioctl(acceptor, S) ->
    so_ioctl(S#fsm.sock, S),
    %% TODO: flexible flow control + explicit read
    _ = pipe:b(Pipe, {tcp, S#fsm.peer, Pckt}),
-   {next_state, 'ESTABLISHED', S};
+   {next_state, 'ESTABLISHED', 
+      S#fsm{
+         packet = S#fsm.packet + 1
+      }
+   };
 
 'ESTABLISHED'(shutdown, Pipe, S) ->
    ?DEBUG("knet tcp ~p: terminated ~p (reason normal)", [self(), S#fsm.peer]),
    _ = pipe:b(Pipe, {tcp, S#fsm.peer, {terminated, normal}}),
    {stop, normal, S};
 
+'ESTABLISHED'(timeout_io,  Pipe, #fsm{packet = 0}=S) ->
+   ?DEBUG("knet tcp ~p: terminated ~p (reason timeout)", [self(), S#fsm.peer]),
+   _ = pipe:b(Pipe, {tcp, S#fsm.peer, {terminated, timeout}}),
+   {stop, normal, S};
+
+'ESTABLISHED'(timeout_io,  Pipe, S) ->
+   {next_state, 'ESTABLISHED',
+      S#fsm{
+         packet  = 0,
+         tout_io = tempus:reset(S#fsm.tout_io, timeout_io)
+      }
+   };
+
 'ESTABLISHED'(Pckt, Pipe, S)
  when is_binary(Pckt) orelse is_list(Pckt) ->
    case gen_tcp:send(S#fsm.sock, Pckt) of
       ok    ->
-         {next_state, 'ESTABLISHED', S};
+         {next_state, 'ESTABLISHED', 
+            S#fsm{
+               packet = S#fsm.packet + 1
+            }
+         };
       {error, Reason} ->
          ?DEBUG("knet tcp ~p: terminated ~p (reason ~p)", [self(), S#fsm.peer, Reason]),
          _ = pipe:a(Pipe, {tcp, S#fsm.peer, {terminated, Reason}}),
@@ -236,13 +261,4 @@ so_ioctl(Sock, #fsm{active=true}) ->
 so_ioctl(_Sock, _) ->
    ok.
 
-%% create new acceptor
-init_acceptor(undefined, _) ->
-   ok;
-init_acceptor(Fun, Uri)
- when is_function(Fun) ->
-   _ = Fun(Uri);
-init_acceptor(Sup, Uri)
- when is_pid(Sup) orelse is_atom(Sup) ->
-   {ok, _} = supervisor:start_child(Sup, [Uri]).
 

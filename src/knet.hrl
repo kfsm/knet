@@ -47,6 +47,9 @@
 	]
 ).
 
+%% default library-wide timeout
+-define(SO_TIMEOUT,   10000).
+
 %% default identity of HTTP server
 -define(HTTP_SERVER,        <<"knet">>).
 

@@ -26,7 +26,11 @@
 ]).
 
 start(_Type, _Args) -> 
-   {ok,   _} = knet:listen("tcp://*:8888", [{acceptor, tcp_protocol}, {pool, 256}, {backlog, 256}]),
+   {ok,   _} = knet:listen("tcp://*:8888", [
+   	{acceptor, tcp_protocol}, 
+   	{pool,     256}, 
+   	{backlog,  256}
+   ]),
    tcp_sup:start_link(). 
 
 stop(_State) ->
