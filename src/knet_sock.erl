@@ -63,7 +63,7 @@ init([Uri, Owner, Opts]) ->
       undefined ->
          _ = pipe:make(Sock ++ [Owner]);
       nobind    ->
-         ok
+         _ = pipe:make(Sock)
    end,
 
    %% configure socket
