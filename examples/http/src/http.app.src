@@ -1,0 +1,19 @@
+{application, http,
+   [
+      {description, "konduit network library - http example"},
+      {vsn,         "0.0.0"},
+      {modules,     [
+         http_sup,
+         http_app
+      ]},
+      {registered,  []},
+      {applications,[
+         kernel, 
+         stdlib,
+         knet
+      ]},
+      {mod, {http_app, []}},
+      {env, []}
+   ]
+}.  
+

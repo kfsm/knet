@@ -1,0 +1,55 @@
+
+## Supervisor tree
+
+```
+ + knet_sup : root supervisor
+   |
+   +-- knet_sock_sup : supervises client sockets, all connection originated from this host 
+   |   |
+   |  ...
+   |
+   +-- knet_service_root_sup : supervises network daemon / services
+       |
+       +-- knet_service_sup  : supervises daemon / service instance, launched by knet:listen(...)
+       |   |
+      ...  +-- knet_sock_sup : all socket instances, launched by knet:bind(...)
+           |   |
+           |  ...
+           |
+           +-- knet_acceptor_sup : all accepted connection by daemon / service
+           |   |
+           |  ...
+           |
+           +-- knet_sock : service leader, owner of listener socket  
+
+```
+
+
+tuple  | atom - signaling plane
+binary | list - data plane
+
+
+Signaling interface
+-------------------
+
+{listen,  Uri} -
+{accept,  Uri} -
+{connect, Uri} -
+
+{Prot, _, established} - 
+{Prot, _, {terminated, Reason}} -
+
+
+Data interface
+--------------
+
+-type(frame() :: binary() | iolist()).
+-type(tag()   :: atom())
+
+
+frame()  - binary frame (outgound data packet)
+{tag(), any(), frame()} - incoming data packet 
+
+
+%% {send,       <<...>>} - outgoing data packet
+%% {recv,           ...} - receive N-bytes
