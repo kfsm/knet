@@ -90,12 +90,12 @@ ioctl(_, _) ->
 
 'IDLE'({accept,  Uri}, Pipe, S) ->
    pipe:b(Pipe, {accept, Uri}),
-   {next_state, 'SERVER', S#fsm{schema=uri:get(schema, Uri)}};
+   {next_state, 'SERVER', S#fsm{schema=uri:schema(Uri)}};
 
 'IDLE'({connect, Uri}, Pipe, S) ->
    % connect is compatibility wrapper for knet socket interface (translated to http GET request)
    % TODO: htstream support HTTP/1.2 (see http://www.jmarshall.com/easy/http/)
-   'IDLE'({'GET', Uri, [{'Connection', <<"close">>}, {'Host', uri:get(authority, Uri)}]}, Pipe, S);
+   'IDLE'({'GET', Uri, [{'Connection', <<"close">>}, {'Host', uri:authority(Uri)}]}, Pipe, S);
 
 'IDLE'({_, {uri, _, _}=Uri, _}=Req, Pipe, S) ->
    pipe:b(Pipe, {connect, Uri}),
@@ -207,10 +207,10 @@ ioctl(_, _) ->
 %%
 %% local client request
 'CLIENT'({Mthd, {uri, _, _}=Uri, Heads}, Pipe, S) ->
-   'CLIENT'({Mthd, uri:get(path, Uri), Heads}, Pipe, S#fsm{url=Uri});
+   'CLIENT'({Mthd, uri:path(Uri), Heads}, Pipe, S#fsm{url=Uri});
 
 'CLIENT'({Mthd, {uri, _, _}=Uri, Heads, Msg}, Pipe, S) ->
-   'CLIENT'({Mthd, uri:get(path, Uri), Heads, Msg}, Pipe, S#fsm{url=Uri});
+   'CLIENT'({Mthd, uri:path(Uri), Heads, Msg}, Pipe, S#fsm{url=Uri});
 
 'CLIENT'(Msg, Pipe, S) ->
    try
@@ -269,15 +269,15 @@ http_failure(Reason, Pipe, Side, S) ->
 request_url({Method, HttpUrl, Heads}, Schema, _Default)
  when is_atom(Method), is_binary(HttpUrl) ->
    Url = uri:new(HttpUrl),
-   case uri:get(authority, Url) of
+   case uri:authority(Url) of
       % TODO: uri make undefined authority
-      {<<>>, undefined} ->
+      {undefined, undefined} ->
          {'Host', Authority} = lists:keyfind('Host', 1, Heads),
-         uri:set(authority, Authority,
-            uri:set(schema, Schema, Url)
+         uri:authority(Authority,
+            uri:schema(Schema, Url)
          );
       _ ->
-         uri:set(schema, Schema, Url)
+         uri:schema(Schema, Url)
    end;
 request_url(_, _, Default) ->
    Default.
