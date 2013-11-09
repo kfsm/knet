@@ -29,6 +29,7 @@ APP ?= $(notdir $(CURDIR))
 ARCH = $(shell uname -m)
 PLAT = $(shell uname -s)
 TAG  = ${ARCH}.${PLAT}
+BB   = ../basho_bench
 
 ## application release
 ifeq ($(wildcard rel/reltool.config),) 
@@ -105,10 +106,10 @@ run:
 	@erl ${EFLAGS}
 
 # TODO:
-# benchmark:
-#         $(BB)/basho_bench -N bb@127.0.0.1 -C nocookie priv/${id}.benchmark
-#         $(BB)/priv/summary.r -i tests/current
-#         open tests/current/summary.png
+benchmark:
+	$(BB)/basho_bench -N bb@127.0.0.1 -C nocookie examples/${id}/priv/${id}.benchmark
+	$(BB)/priv/summary.r -i tests/current
+	open tests/current/summary.png
 
 ifneq (${REL},)
 start: 

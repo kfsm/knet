@@ -12,12 +12,20 @@
 %%
 %%-----------------------------------------------------------------------------
 -define(SO_TCP,  
-	[
-		binary
-	  ,{active, true}
-	  ,{nodelay, true}
-	]
+   [
+      binary
+     ,{active, true}
+     ,{nodelay, true}
+   ]
 ). 
+
+-define(SO_UDP, 
+   [
+      binary
+     ,{active, once}
+     ,{nodelay, true}
+   ]
+).
 
 -define(SO_HTTP, 
 	[
@@ -31,8 +39,8 @@
 %%
 %%-----------------------------------------------------------------------------
 -define(SO_TCP_ALLOWED, 
-	[
-   	delay_send
+   [
+      delay_send
      ,nodelay 
      ,dontroute 
      ,keepalive 
@@ -44,8 +52,27 @@
      ,binary 
      ,active 
      ,backlog
-	]
+     ,priority
+     ,tos
+   ]
 ).
+
+-define(SO_UDP_ALLOWED, 
+   [
+      broadcast
+     ,delay_send
+     ,dontroute
+     ,read_packets 
+     ,recbuf 
+     ,send_timeout 
+     ,sndbuf 
+     ,binary 
+     ,active 
+     ,priority
+     ,tos
+   ]
+).
+
 
 %% default library-wide timeout
 -define(SO_TIMEOUT,   10000).

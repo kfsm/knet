@@ -95,6 +95,12 @@ ioctl(_, _) ->
 %%%------------------------------------------------------------------   
 
 %%
+%% check if socket singleton (listen pipeline is used for i/o)
+
+
+
+
+%%
 %% 
 socket(Pid) ->
    plib:call(Pid, socket). 
@@ -142,6 +148,10 @@ socket(Pid) ->
 %% init socket pipeline
 init_socket(tcp, Opts) ->
    {ok, A} = knet_tcp:start_link(Opts),
+   [A];
+
+init_socket(udp, Opts) ->
+   {ok, A} = knet_udp:start_link(Opts),
    [A];
 
 init_socket(http, Opts) ->

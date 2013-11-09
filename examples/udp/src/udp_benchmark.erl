@@ -17,7 +17,7 @@
 %%
 %% @description
 %%   basho bench driver
--module(tcp_benchmark).
+-module(udp_benchmark).
 
 -export([
    new/1, 
@@ -26,9 +26,8 @@
 
 %%
 -record(fsm, {
-	url,
-	sock,
-	expire
+	peer,
+	sock
 }).
 
 %%
@@ -37,38 +36,31 @@ new(_Id) ->
 	_ = knet:start(),
 
  	lager:set_loglevel(lager_console_backend, basho_bench_config:get(log_level, info)),
+ 	Uri = uri:new(basho_bench_config:get(url, "udp://localhost:6001")),
  	{ok,
  		#fsm{
- 			url = uri:new(basho_bench_config:get(url, "tcp://localhost:8888"))
+ 			peer = {scalar:c(uri:host(Uri)), uri:port(Uri)} 
  		}
  	}.
 
 %%
 %%
 run(io, KeyGen, ValGen, #fsm{sock=undefined}=S) ->
-   {ok, Sock} = knet:connect(S#fsm.url, []),
+   {ok, Sock} = knet:connect("udp://*:0", [{sndbuf, 256 * 1024}]),
    _ = pipe:recv(),  %% pipe bind message
-   _ = pipe:recv(),  %% tcp established message
    run(io, KeyGen, ValGen, S#fsm{sock=Sock});
 
 run(io, _KeyGen, ValGen, S) ->
-	_ = pipe:send(S#fsm.sock, ValGen()),
-	_ = do_tcp_recv(),
-	Sock = case tempus:sec() of
-		X when X > S#fsm.expire ->
-			knet:close(S#fsm.sock),
-			undefined;
-		_ ->
-			S#fsm.sock
-	end,
-	{ok, S#fsm{sock=Sock}}.
+	_ = pipe:send(S#fsm.sock, {S#fsm.peer, ValGen()}),
+	_ = do_net_recv(),
+	{ok, S}.
 
-do_tcp_recv() ->
+do_net_recv() ->
 	case pipe:recv(1000, [noexit]) of
-		{tcp, _, Msg} when is_binary(Msg) ->
+		{udp, _, Msg} when is_binary(Msg) ->
 			ok;
 		{error, timeout} ->
 			timeout;
 		_ ->
-			do_tcp_recv()
+			do_net_recv()
 	end.

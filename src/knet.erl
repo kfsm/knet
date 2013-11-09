@@ -42,6 +42,12 @@ start() ->
 
 listen({uri, _, _}=Uri, Opts) ->
    knet_service_root_sup:init_service(Uri, self(), Opts);
+   % case knet_service_root_sup:init_service(Uri, self(), Opts) of
+   %    {ok, Sup} ->
+   %       knet_sock:socket(knet_service_sup:leader(Sup));
+   %    Error     ->
+   %       Error
+   % end;
 
 listen(Url, Opts) ->
    listen(uri:new(Url), Opts).
@@ -51,7 +57,7 @@ listen(Url, Opts) ->
 -spec(bind/1 :: (any()) -> {ok, pid()} | {error, any()}).
 -spec(bind/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
 
-bind({uri, _, _}=Uri, Opts) ->
+bind({uri, Type, _}=Uri, Opts) ->
    case pns:whereis(knet, {service, uri:s(Uri)}) of
       undefined ->
          {error, badarg};
@@ -110,13 +116,13 @@ close({uri, _, _}=Uri) ->
 close(Uri) ->
    close(uri:new(Uri)).
 
-
-
 %%%------------------------------------------------------------------
 %%%
 %%% private
 %%%
 %%%------------------------------------------------------------------   
+
+
 
 
 

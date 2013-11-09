@@ -16,7 +16,7 @@
 %%   limitations under the License.
 %%
 %% @description
-%%   service supervisor
+%%   knet service supervisor
 -module(knet_service_sup).
 -behaviour(supervisor).
 
@@ -45,7 +45,7 @@ init([Uri, Owner, Opts]) ->
    ok = pns:register(knet, {service, uri:s(Uri)}, self()),
    {ok,
       {
-         {one_for_all, 4, 1800},
+         {one_for_all, 0, 1},
          [
             %% socket factory
             ?CHILD(supervisor, knet_sock_sup),
@@ -56,6 +56,17 @@ init([Uri, Owner, Opts]) ->
          ]
       }
    }.
+
+%%
+%% return child process
+child(Sup, Id) ->
+   case lists:keyfind(Id, 1, supervisor:which_children(Sup)) of
+      {Id, Pid, _Type, _Mods} -> 
+         {ok, Pid};
+      _ ->
+         {error, bagarg}
+   end.
+
 
 %%
 %% create new socket using socket factory 

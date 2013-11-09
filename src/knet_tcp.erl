@@ -97,6 +97,7 @@ ioctl(socket,   S) ->
       {ok, Sock} ->
          {ok, Peer} = inet:peername(Sock),
          {ok, Addr} = inet:sockname(Sock),
+         ok         = pns:register(knet, {tcp, Peer}),
          ?DEBUG("knet tcp ~p: established ~p (local ~p)", [self(), Peer, Addr]),
          pipe:a(Pipe, {tcp, Peer, established}),
          so_ioctl(Sock, S),
@@ -116,9 +117,9 @@ ioctl(socket,   S) ->
 
 %%
 'IDLE'({listen, Uri}, Pipe, S) ->
-   Service = pns:whereis(knet, {service, uri:s(Uri)}),
+   Service = pns:whereis(knet,  {service, uri:s(Uri)}),
    Port    = uri:get(port, Uri),
-   ok      = pns:register(knet, {tcp, any, Port}),
+   ok      = pns:register(knet, {tcp, {any, Port}}),
    % socket opts for listener socket requires {active, false}
    Opts = [{active, false}, {reuseaddr, true} | lists:keydelete(active, 1, S#fsm.sopt)],
    % @todo bind to address
@@ -143,7 +144,7 @@ ioctl(socket,   S) ->
 'IDLE'({accept, Uri}, Pipe, S) ->
    Service = pns:whereis(knet, {service, uri:s(Uri)}),
    Port    = uri:get(port, Uri),
-   LSock   = pipe:ioctl(pns:whereis(knet, {tcp, any, Port}), socket),
+   LSock   = pipe:ioctl(pns:whereis(knet, {tcp, {any, Port}}), socket),
    ?DEBUG("knet tcp ~p: accept ~p", [self(), {any, Port}]),
    case gen_tcp:accept(LSock) of
       {ok, Sock} ->
@@ -206,6 +207,10 @@ ioctl(socket,   S) ->
 
 'ESTABLISHED'({tcp, _, Pckt}, Pipe, S) ->
    ?DEBUG("knet tcp ~p: recv ~p~n~p", [self(), S#fsm.peer, Pckt]),
+   %% What one can do is to combine {active, once} with gen_tcp:recv().
+   %% Essentially, you will be served the first message, then read as many as you 
+   %% wish from the socket. When the socket is empty, you can again enable 
+   %% {active, once}.
    so_ioctl(S#fsm.sock, S),
    %% TODO: flexible flow control + explicit read
    _ = pipe:b(Pipe, {tcp, S#fsm.peer, Pckt}),
