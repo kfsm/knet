@@ -45,7 +45,10 @@
    keepalive = 'keep-alive' :: close | 'keep-alive', % 
    timeout   = undefined :: integer(),       % http keep alive timeout
    recv      = undefined :: htstream:http(), % inbound  http state machine
-   send      = undefined :: htstream:http()  % outbound http state machine
+   send      = undefined :: htstream:http(), % outbound http state machine
+
+   stats       = undefined :: pid(),         % knet stats function
+   ts          = undefined :: integer()      % stats timestamp
 }).
 
 %%%------------------------------------------------------------------
@@ -63,7 +66,8 @@ init(Opts) ->
       #fsm{
          timeout = opts:val('keep-alive', Opts),
          recv    = htstream:new(),
-         send    = htstream:new() 
+         send    = htstream:new(),
+         stats   = opts:val(stats, undefined, Opts) 
       }
    }.
 
@@ -188,8 +192,12 @@ ioctl(_, _) ->
 'CLIENT'({Prot, _, {terminated, _}}, Pipe, S)
  when Prot =:= tcp orelse Prot =:= ssl ->
    case htstream:state(S#fsm.recv) of
-      payload -> _ = pipe:b(Pipe, {http, S#fsm.url, eof});
-      _       -> ok
+      payload -> 
+         _ = pipe:b(Pipe, {http, S#fsm.url, eof}),
+         % time to meaningful response
+         _ = so_stats([{ttmr, tempus:diff(S#fsm.ts)}], S);         
+      _       -> 
+         ok
    end,
    {stop, normal, S};
 
@@ -207,10 +215,10 @@ ioctl(_, _) ->
 %%
 %% local client request
 'CLIENT'({Mthd, {uri, _, _}=Uri, Heads}, Pipe, S) ->
-   'CLIENT'({Mthd, uri:path(Uri), Heads}, Pipe, S#fsm{url=Uri});
+   'CLIENT'({Mthd, uri:path(Uri), Heads}, Pipe, S#fsm{url=Uri, ts=os:timestamp()});
 
 'CLIENT'({Mthd, {uri, _, _}=Uri, Heads, Msg}, Pipe, S) ->
-   'CLIENT'({Mthd, uri:path(Uri), Heads, Msg}, Pipe, S#fsm{url=Uri});
+   'CLIENT'({Mthd, uri:path(Uri), Heads, Msg}, Pipe, S#fsm{url=Uri, ts=os:timestamp()});
 
 'CLIENT'(Msg, Pipe, S) ->
    try
@@ -248,9 +256,13 @@ http_inbound(Pckt, Peer, Pipe, S)
    case htstream:state(Http) of
       eof -> 
          _ = pipe:b(Pipe, {http, Url, eof}),
+         % time to meaningful response
+         _ = so_stats([{ttmr, tempus:diff(S#fsm.ts)}], S),
          S#fsm{url=Url, keepalive=Alive, recv=htstream:new(Http)};
       eoh -> 
-         http_inbound(<<>>, Peer, Pipe, S#fsm{url=Url, keepalive=Alive, recv=Http});
+         % time to first byte
+         _ = so_stats([{ttfb, tempus:diff(S#fsm.ts)}], S),
+         http_inbound(<<>>, Peer, Pipe, S#fsm{url=Url, keepalive=Alive, recv=Http, ts=os:timestamp()});
       _   -> 
          S#fsm{url=Url, keepalive=Alive, recv=Http}
    end.
@@ -307,4 +319,11 @@ pass_inbound_http(Chunk, _Peer, Url, Pipe)
  when is_list(Chunk) ->
    _ = pipe:b(Pipe, {http, Url, iolist_to_binary(Chunk)}).
 
+
+%% handle socket statistic
+so_stats(_List, #fsm{stats=undefined}) ->
+   ok;
+so_stats(List,  #fsm{stats=Pid, url=Url})
+ when is_pid(Pid) ->
+   pipe:send(Pid, {stats, {http, Url}, List}).
 

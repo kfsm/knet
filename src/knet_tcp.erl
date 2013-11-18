@@ -105,7 +105,7 @@ ioctl(socket,   S) ->
          ok         = pns:register(knet, {tcp, Peer}),
          ?DEBUG("knet tcp ~p: established ~p (local ~p)", [self(), Peer, Addr]),
          pipe:a(Pipe, {tcp, Peer, established}),
-         so_stats(connect, tempus:diff(T), S#fsm{peer=Peer}),
+         so_stats([{connect, tempus:diff(T)}], S#fsm{peer=Peer}),
          so_ioctl(Sock, S),
          {next_state, 'ESTABLISHED', 
             S#fsm{
@@ -221,7 +221,7 @@ ioctl(socket,   S) ->
    so_ioctl(S#fsm.sock, S),
    %% TODO: flexible flow control + explicit read
    _ = pipe:b(Pipe, {tcp, S#fsm.peer, Pckt}),
-   so_stats(recv, {tempus:diff(S#fsm.ts), size(Pckt)}, S),
+   so_stats([{recv, tempus:diff(S#fsm.ts)}, {recv, size(Pckt)}], S),
    {next_state, 'ESTABLISHED', 
       S#fsm{
          packet = S#fsm.packet + 1,
@@ -276,9 +276,9 @@ so_ioctl(_Sock, _) ->
    ok.
 
 %% handle socket statistic
-so_stats(_Key, _Val, #fsm{stats=undefined}) ->
+so_stats(_List, #fsm{stats=undefined}) ->
    ok;
-so_stats(Key,  Val,  #fsm{stats=Pid, peer=Peer})
+so_stats(List,  #fsm{stats=Pid, peer=Peer})
  when is_pid(Pid) ->
-   pipe:send(Pid, {stats, {tcp, Peer, Key}, Val}).
+   pipe:send(Pid, {stats, {tcp, Peer}, List}).
 
