@@ -46,7 +46,10 @@
    packet      = 0           :: integer(),           %% number of packets handled by socket in between of io timeouts
 
    service     = undefined :: pid(),                 %% service supervisor
-   pool        = 0         :: integer()              %% socket acceptor pool size
+   pool        = 0         :: integer(),             %% socket acceptor pool size
+
+   stats       = undefined :: pid(),                 %% knet stats function
+   ts          = undefined :: integer()              %% stats timestamp
 }).
 
 %%%------------------------------------------------------------------
@@ -66,7 +69,8 @@ init(Opts) ->
          active    = opts:val(active, Opts),
          tout_peer = opts:val(timeout_peer, ?SO_TIMEOUT, Opts),
          tout_io   = opts:val(timeout_io,   ?SO_TIMEOUT, Opts),
-         pool      = opts:val(pool, 0, Opts)
+         pool      = opts:val(pool, 0, Opts),
+         stats     = opts:val(stats, undefined, Opts)
       }
    }.
 
@@ -93,6 +97,7 @@ ioctl(socket,   S) ->
 'IDLE'({connect, Uri}, Pipe, S) ->
    Host = scalar:c(uri:get(host, Uri)),
    Port = uri:get(port, Uri),
+   T    = os:timestamp(),
    case gen_tcp:connect(Host, Port, S#fsm.sopt, S#fsm.tout_peer) of
       {ok, Sock} ->
          {ok, Peer} = inet:peername(Sock),
@@ -100,13 +105,15 @@ ioctl(socket,   S) ->
          ok         = pns:register(knet, {tcp, Peer}),
          ?DEBUG("knet tcp ~p: established ~p (local ~p)", [self(), Peer, Addr]),
          pipe:a(Pipe, {tcp, Peer, established}),
+         so_stats(connect, tempus:diff(T), S#fsm{peer=Peer}),
          so_ioctl(Sock, S),
          {next_state, 'ESTABLISHED', 
             S#fsm{
                sock    = Sock,
                addr    = Addr,
                peer    = Peer,
-               tout_io = tempus:event(S#fsm.tout_io, timeout_io) 
+               tout_io = tempus:event(S#fsm.tout_io, timeout_io),
+               ts      = os:timestamp() 
             }
          };
       {error, Reason} ->
@@ -214,9 +221,11 @@ ioctl(socket,   S) ->
    so_ioctl(S#fsm.sock, S),
    %% TODO: flexible flow control + explicit read
    _ = pipe:b(Pipe, {tcp, S#fsm.peer, Pckt}),
+   so_stats(recv, {tempus:diff(S#fsm.ts), size(Pckt)}, S),
    {next_state, 'ESTABLISHED', 
       S#fsm{
-         packet = S#fsm.packet + 1
+         packet = S#fsm.packet + 1,
+         ts     = os:timestamp()
       }
    };
 
@@ -266,4 +275,10 @@ so_ioctl(Sock, #fsm{active=true}) ->
 so_ioctl(_Sock, _) ->
    ok.
 
+%% handle socket statistic
+so_stats(_Key, _Val, #fsm{stats=undefined}) ->
+   ok;
+so_stats(Key,  Val,  #fsm{stats=Pid, peer=Peer})
+ when is_pid(Pid) ->
+   pipe:send(Pid, {stats, {tcp, Peer, Key}, Val}).
 

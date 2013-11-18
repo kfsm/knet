@@ -38,6 +38,7 @@ start() ->
 %%   {acceptor,      atom()} - acceptor implementation
 %%   {pool,       integer()} - acceptor pool size
 %%   {timeout_io, integer()} - socket i/o timeout
+%%   {stats,          pid()} - statistic functor (destination pipe to handle knet i/o statistic)
 -spec(listen/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
 
 listen({uri, _, _}=Uri, Opts) ->
@@ -81,6 +82,7 @@ bind(Url) ->
 %%
 %% connect socket to remote peer
 %% Options
+%%   {stats, pid()} - statistic functor (destination pipe to handle knet i/o statistic)
 %%   @todo
 -spec(connect/1 :: (any()) -> {ok, pid()} | {error, any()}).
 -spec(connect/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
