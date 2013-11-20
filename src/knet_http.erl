@@ -257,11 +257,11 @@ http_inbound(Pckt, Peer, Pipe, S)
       eof -> 
          _ = pipe:b(Pipe, {http, Url, eof}),
          % time to meaningful response
-         _ = so_stats([{ttmr, tempus:diff(S#fsm.ts)}], S),
+         _ = so_stats({ttmr, tempus:diff(S#fsm.ts)}, S),
          S#fsm{url=Url, keepalive=Alive, recv=htstream:new(Http)};
       eoh -> 
          % time to first byte
-         _ = so_stats([{ttfb, tempus:diff(S#fsm.ts)}], S),
+         _ = so_stats({ttfb, tempus:diff(S#fsm.ts)}, S),
          http_inbound(<<>>, Peer, Pipe, S#fsm{url=Url, keepalive=Alive, recv=Http, ts=os:timestamp()});
       _   -> 
          S#fsm{url=Url, keepalive=Alive, recv=Http}
