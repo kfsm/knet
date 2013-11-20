@@ -195,7 +195,7 @@ ioctl(_, _) ->
       payload -> 
          _ = pipe:b(Pipe, {http, S#fsm.url, eof}),
          % time to meaningful response
-         _ = so_stats([{ttmr, tempus:diff(S#fsm.ts)}], S);         
+         _ = so_stats({ttmr, tempus:diff(S#fsm.ts)}, S);         
       _       -> 
          ok
    end,
