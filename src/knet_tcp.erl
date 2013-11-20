@@ -104,8 +104,8 @@ ioctl(socket,   S) ->
          {ok, Addr} = inet:sockname(Sock),
          ok         = pns:register(knet, {tcp, Peer}),
          ?DEBUG("knet tcp ~p: established ~p (local ~p)", [self(), Peer, Addr]),
-         pipe:a(Pipe, {tcp, Peer, established}),
          so_stats({connect, tempus:diff(T)}, S#fsm{peer=Peer}),
+         pipe:a(Pipe, {tcp, Peer, established}),
          so_ioctl(Sock, S),
          {next_state, 'ESTABLISHED', 
             S#fsm{
@@ -220,8 +220,8 @@ ioctl(socket,   S) ->
    %% {active, once}.
    so_ioctl(S#fsm.sock, S),
    %% TODO: flexible flow control + explicit read
-   _ = pipe:b(Pipe, {tcp, S#fsm.peer, Pckt}),
    so_stats({packet, tempus:diff(S#fsm.ts), size(Pckt)}, S),
+   _ = pipe:b(Pipe, {tcp, S#fsm.peer, Pckt}),
    {next_state, 'ESTABLISHED', 
       S#fsm{
          packet = S#fsm.packet + 1,

@@ -193,9 +193,9 @@ ioctl(_, _) ->
  when Prot =:= tcp orelse Prot =:= ssl ->
    case htstream:state(S#fsm.recv) of
       payload -> 
-         _ = pipe:b(Pipe, {http, S#fsm.url, eof}),
          % time to meaningful response
-         _ = so_stats({ttmr, tempus:diff(S#fsm.ts)}, S);         
+         _ = so_stats({ttmr, tempus:diff(S#fsm.ts)}, S),         
+         _ = pipe:b(Pipe, {http, S#fsm.url, eof});
       _       -> 
          ok
    end,
@@ -255,9 +255,9 @@ http_inbound(Pckt, Peer, Pipe, S)
    _ = pass_inbound_http(Msg, Peer, Url, Pipe),
    case htstream:state(Http) of
       eof -> 
-         _ = pipe:b(Pipe, {http, Url, eof}),
          % time to meaningful response
          _ = so_stats({ttmr, tempus:diff(S#fsm.ts)}, S),
+         _ = pipe:b(Pipe, {http, Url, eof}),
          S#fsm{url=Url, keepalive=Alive, recv=htstream:new(Http)};
       eoh -> 
          % time to first byte
