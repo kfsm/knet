@@ -166,7 +166,8 @@ ioctl(socket,   S) ->
                sock    = Sock, 
                addr    = Addr, 
                peer    = Peer,
-               tout_io = tempus:event(S#fsm.tout_io, timeout_io) 
+               tout_io = tempus:event(S#fsm.tout_io, timeout_io),
+               ts      = os:timestamp()  
             }
          };
       {error, Reason} ->
