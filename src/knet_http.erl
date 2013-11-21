@@ -134,10 +134,10 @@ ioctl(_, _) ->
    {stop, normal, S};
 
 'SERVER'({tcp, _, established}, _, S) ->
-   {next_state, 'SERVER', S#fsm{schema=http},  S#fsm.timeout};
+   {next_state, 'SERVER', S#fsm{schema=http,  ts=os:timestamp()},  S#fsm.timeout};
 
 'SERVER'({ssl, _, established}, _, S) ->
-   {next_state, 'SERVER', S#fsm{schema=https}, S#fsm.timeout};
+   {next_state, 'SERVER', S#fsm{schema=https, ts=os:timestamp()}, S#fsm.timeout};
 
 'SERVER'({Prot, _, {terminated, _}}, _Pipe, S)
  when Prot =:= tcp orelse Prot =:= ssl ->
