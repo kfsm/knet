@@ -184,10 +184,10 @@ ioctl(_, _) ->
    {stop, normal, S};
 
 'CLIENT'({tcp, _, established}, _, S) ->
-   {next_state, 'CLIENT', S#fsm{schema=http}};
+   {next_state, 'CLIENT', S#fsm{schema=http,  ts=os:timestamp()}};
 
 'CLIENT'({ssl, _, established}, _, S) ->
-   {next_state, 'CLIENT', S#fsm{schema=https}};
+   {next_state, 'CLIENT', S#fsm{schema=https, ts=os:timestamp()}};
 
 'CLIENT'({Prot, _, {terminated, _}}, Pipe, S)
  when Prot =:= tcp orelse Prot =:= ssl ->
