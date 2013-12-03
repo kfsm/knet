@@ -109,7 +109,7 @@ ioctl(socket,   S) ->
       		   {ok, Cert} = ssl:peercert(Sock),
 		         ok         = pns:register(knet, {ssl, Peer}),
          		?DEBUG("knet ssl ~p: established ~p (local ~p)", [self(), Peer, Addr]),
-         		so_stats({certificate,    size(Cert)}, S#fsm{peer=Peer}),
+         		so_stats({packet, size(Cert)}, S#fsm{peer=Peer}),
          		so_stats({handshake, tempus:diff(T2)}, S#fsm{peer=Peer}),
          		pipe:a(Pipe, {ssl, Peer, established}),
          		so_ioctl(Sock, S),
