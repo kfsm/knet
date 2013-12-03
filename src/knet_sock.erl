@@ -150,12 +150,21 @@ init_socket(tcp, Opts) ->
    {ok, A} = knet_tcp:start_link(Opts),
    [A];
 
+init_socket(ssl, Opts) ->
+   {ok, A} = knet_ssl:start_link(Opts),
+   [A];
+
 init_socket(udp, Opts) ->
    {ok, A} = knet_udp:start_link(Opts),
    [A];
 
 init_socket(http, Opts) ->
    {ok, A} = knet_tcp:start_link(Opts),
+   {ok, B} = knet_http:start_link(Opts),
+   [A, B];
+
+init_socket(https, Opts) ->
+   {ok, A} = knet_ssl:start_link(Opts),
    {ok, B} = knet_http:start_link(Opts),
    [A, B];
 

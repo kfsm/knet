@@ -3,7 +3,7 @@
 %% build config
 %%
 %%-----------------------------------------------------------------------------
-%-define(CONFIG_DEBUG,    true).
+-define(CONFIG_DEBUG,    true).
 
 
 %%-----------------------------------------------------------------------------
@@ -56,6 +56,24 @@
      ,tos
    ]
 ).
+
+-define(SO_SSL_ALLOWED, 
+    [
+      verify
+     ,verify_fun
+     ,fail_if_no_peer_cert
+     ,depth
+     ,cert
+     ,certfile
+     ,key
+     ,keyfile
+     ,password
+     ,cacert
+     ,cacertfile
+     ,ciphers
+   ]
+).
+
 
 -define(SO_UDP_ALLOWED, 
    [
