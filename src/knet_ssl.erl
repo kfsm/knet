@@ -194,7 +194,7 @@ ioctl(socket,   S) ->
 
 'ESTABLISHED'(shutdown, Pipe, S) ->
    ?DEBUG("knet ssl ~p: terminated ~p (reason normal)", [self(), S#fsm.peer]),
-   _ = pipe:b(Pipe, {tcp, S#fsm.peer, {terminated, normal}}),
+   _ = pipe:b(Pipe, {ssl, S#fsm.peer, {terminated, normal}}),
    {stop, normal, S};
 
 'ESTABLISHED'(timeout_io,  Pipe, #fsm{packet = 0}=S) ->
@@ -221,7 +221,7 @@ ioctl(socket,   S) ->
          };
       {error, Reason} ->
          ?DEBUG("knet tcp ~p: terminated ~p (reason ~p)", [self(), S#fsm.peer, Reason]),
-         _ = pipe:a(Pipe, {tcp, S#fsm.peer, {terminated, Reason}}),
+         _ = pipe:a(Pipe, {ssl, S#fsm.peer, {terminated, Reason}}),
          {stop, Reason, S}
    end.
 
@@ -233,7 +233,8 @@ ioctl(socket,   S) ->
 
 %% set socket i/o opts
 so_ioctl(Sock, #fsm{active=true}) ->
-   ok = ssl:setopts(Sock, [{active, once}]);
+	%% remote peer might close socket
+   _ = ssl:setopts(Sock, [{active, once}]);
 so_ioctl(_Sock, _) ->
    ok.
 
