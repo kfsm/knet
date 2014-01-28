@@ -220,7 +220,7 @@ ioctl(socket,   S) ->
 
 'ESTABLISHED'({ssl_cert, peer, Cert}, _Pipe, S) ->
    Pckt = [public_key:pkix_encode('OTPCertificate', X, otp) || X <- [Cert | S#fsm.cert]],
-   so_stats({packet, 0, erlang:iolist_size(Pckt)}, S),
+   so_stats({packet, {0,0,0}, erlang:iolist_size(Pckt)}, S),
    {next_state, 'ESTABLISHED', 
       S#fsm{
          cert = [Cert | S#fsm.cert]
