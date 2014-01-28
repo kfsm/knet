@@ -38,6 +38,7 @@
    sock :: port(),  % ssl socket
    peer :: any(),   % peer address  
    addr :: any(),   % local address
+   cert :: [any()], % list of certificates
 
    % socket options
    topt        = undefined   :: list(),              %% list of tcp socket opts
@@ -102,15 +103,13 @@ ioctl(socket,   S) ->
       	{ok, Peer} = inet:peername(Tcp),
       	so_stats({connect, tempus:diff(T1)}, S#fsm{peer=Peer}),
       	T2 = os:timestamp(),
-         case ssl:connect(Tcp, S#fsm.sopt, S#fsm.tout_peer) of
+         case ssl:connect(Tcp, [{verify_fun, {fun ssl_ca_hook/3, self()}} | S#fsm.sopt], S#fsm.tout_peer) of
             {ok, Sock} ->
       		   {ok, Addr} = ssl:sockname(Sock),
       		   %{ok, {Tls, Cipher}} = ssl:connection_info(Sock),
-      		   {ok, Cert} = ssl:peercert(Sock),
 		         ok         = pns:register(knet, {ssl, Peer}),
          		?DEBUG("knet ssl ~p: established ~p (local ~p)", [self(), Peer, Addr]),
-         		%so_stats({packet, tempus:diff(T2), size(Cert)}, S#fsm{peer=Peer}),
-         		so_stats({handshake, tempus:diff(T2), size(Cert)}, S#fsm{peer=Peer}),
+         		so_stats({handshake, tempus:diff(T2)}, S#fsm{peer=Peer}),
          		pipe:a(Pipe, {ssl, Peer, established}),
          		so_ioctl(Sock, S),
 		         {next_state, 'ESTABLISHED', 
@@ -118,6 +117,7 @@ ioctl(socket,   S) ->
 		               sock    = Sock,
 		               addr    = Addr,
 		               peer    = Peer,
+                     cert    = [],
 		               tout_io = tempus:event(S#fsm.tout_io, timeout_io),
 		               ts      = os:timestamp() 
 		            }
@@ -134,11 +134,11 @@ ioctl(socket,   S) ->
    end;
 
 %%
-'IDLE'({listen, Uri}, Pipe, S) ->
+'IDLE'({listen, _Uri}, _Pipe, S) ->
 	{stop, not_implemented, S};
 
 %%
-'IDLE'({accept, Uri}, Pipe, S) ->
+'IDLE'({accept, _Uri}, _Pipe, S) ->
 	{stop, not_implemented, S};
 
 %%
@@ -203,11 +203,27 @@ ioctl(socket,   S) ->
    _ = pipe:b(Pipe, {ssl, S#fsm.peer, {terminated, timeout}}),
    {stop, normal, S};
 
-'ESTABLISHED'(timeout_io,  Pipe, S) ->
+'ESTABLISHED'(timeout_io,  _Pipe, S) ->
    {next_state, 'ESTABLISHED',
       S#fsm{
          packet  = 0,
          tout_io = tempus:reset(S#fsm.tout_io, timeout_io)
+      }
+   };
+
+'ESTABLISHED'({ssl_cert, ca, Cert}, _Pipe, S) ->
+   {next_state, 'ESTABLISHED', 
+      S#fsm{
+         cert = [Cert | S#fsm.cert]
+      }
+   };
+
+'ESTABLISHED'({ssl_cert, peer, Cert}, _Pipe, S) ->
+   Pckt = [public_key:pkix_encode('OTPCertificate', X, otp) || X <- [Cert | S#fsm.cert]],
+   so_stats({packet, 0, erlang:iolist_size(Pckt)}, S),
+   {next_state, 'ESTABLISHED', 
+      S#fsm{
+         cert = [Cert | S#fsm.cert]
       }
    };
 
@@ -225,6 +241,7 @@ ioctl(socket,   S) ->
          _ = pipe:a(Pipe, {ssl, S#fsm.peer, {terminated, Reason}}),
          {stop, Reason, S}
    end.
+
 
 %%%------------------------------------------------------------------
 %%%
@@ -246,7 +263,19 @@ so_stats(Msg,  #fsm{stats=Pid, peer=Peer})
  when is_pid(Pid) ->
    pipe:send(Pid, {stats, {ssl, Peer}, Msg}).
 
-
+%%
+%%
+ssl_ca_hook(Cert, valid, Pid) ->
+   erlang:send(Pid, {ssl_cert, ca, Cert}),
+   {valid, Pid};
+ssl_ca_hook(Cert, valid_peer, Pid) ->
+   erlang:send(Pid, {ssl_cert, peer, Cert}),
+   {valid, Pid};
+ssl_ca_hook(Cert, {bad_cert, unknown_ca}, Pid) ->
+   erlang:send(Pid, {ssl_cert, ca, Cert}),
+   {valid, Pid};
+ssl_ca_hook(_, _, Pid) ->
+   {valid, Pid}.
 
 
 
