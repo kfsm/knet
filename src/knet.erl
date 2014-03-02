@@ -24,7 +24,9 @@
    bind/2,
    connect/1, 
    connect/2, 
-   close/1
+   close/1,
+   
+   which/1
 ]).
 
 %%
@@ -43,12 +45,6 @@ start() ->
 
 listen({uri, _, _}=Uri, Opts) ->
    knet_service_root_sup:init_service(Uri, self(), Opts);
-   % case knet_service_root_sup:init_service(Uri, self(), Opts) of
-   %    {ok, Sup} ->
-   %       knet_sock:socket(knet_service_sup:leader(Sup));
-   %    Error     ->
-   %       Error
-   % end;
 
 listen(Url, Opts) ->
    listen(uri:new(Url), Opts).
@@ -58,7 +54,7 @@ listen(Url, Opts) ->
 -spec(bind/1 :: (any()) -> {ok, pid()} | {error, any()}).
 -spec(bind/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
 
-bind({uri, Type, _}=Uri, Opts) ->
+bind({uri, _, _}=Uri, Opts) ->
    case pns:whereis(knet, {service, uri:s(Uri)}) of
       undefined ->
          {error, badarg};
@@ -88,7 +84,7 @@ bind(Url) ->
 -spec(connect/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
 
 connect({uri, _, _}=Uri, Opts) ->
-   case supervisor:start_child(knet_sock_sup, [Uri, self(), Opts ++ [noexit]]) of
+   case supervisor:start_child(knet_sock_sup, [Uri, self(), Opts]) of
       {ok, Pid} -> 
          {ok, Sock} = knet_sock:socket(Pid),
          _ = pipe:send(Sock, {connect, Uri}),
@@ -117,6 +113,17 @@ close({uri, _, _}=Uri) ->
 
 close(Uri) ->
    close(uri:new(Uri)).
+
+%%
+%% list active sockets
+-spec(which/1 :: (atom()) -> [{binary(), pid()}]).
+
+which(tcp) ->
+   [{uri:authority(X, uri:new(tcp)), Y} || {{tcp, X}, Y} <- pns:lookup(knet, {tcp, '_'})];
+
+which(_) ->
+   [].
+
 
 %%%------------------------------------------------------------------
 %%%

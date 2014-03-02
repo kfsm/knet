@@ -16,12 +16,12 @@
 %%   limitations under the License.
 %%
 %% @description
-%%   knet socket pipeline leader
+%%   knet socket leader
 %%
 %% @todo
-%%   make leader / client protocol to handle crash, etc. 
+%%  * make leader / client protocol to handle crash, etc. 
 -module(knet_sock).
--behaviour(kfsm).
+-behaviour(pipe).
 
 -export([
    start_link/3, 
@@ -45,17 +45,20 @@
 %%%
 %%%------------------------------------------------------------------   
 
-% start_link(Type, Owner, Opts) ->
-%    kfsm:start_link(?MODULE, [Type, Owner, Opts], []).
-
 start_link(Uri, Owner, Opts) ->
-   kfsm:start_link(?MODULE, [Uri, Owner, Opts], []).
+   pipe:start_link(?MODULE, [Uri, Owner, Opts], []).
 
 
 init([Uri, Owner, Opts]) ->
-   %% create socket pipeline
-   _ = erlang:process_flag(trap_exit, true),
-   _ = erlang:monitor(process, Owner),
+   %% link to owner
+   case opts:val(link, undefined, Opts) of
+      link -> 
+         _ = erlang:link(Owner);
+      _    -> 
+         _ = erlang:monitor(process, Owner),
+         _ = erlang:process_flag(trap_exit, true)
+   end,
+   
    Sock = init_socket(uri:schema(Uri), Opts),
 
    %% bind socket pipeline with owner
@@ -68,8 +71,12 @@ init([Uri, Owner, Opts]) ->
 
    %% configure socket
    case opts:val([listen, accept, connect], undefined, Opts) of
-      listen ->
-         _  = pipe:send(lists:last(Sock), {listen, Uri});
+      listen  ->  
+         _ = pipe:send(lists:last(Sock), {listen, Uri});
+      accept  ->  
+         _ = pipe:send(lists:last(Sock), {accept, Uri});
+      connect ->
+         _ = pipe:send(lists:last(Sock), {connect, Uri});
       _      ->
          ok
    end,
@@ -95,16 +102,9 @@ ioctl(_, _) ->
 %%%------------------------------------------------------------------   
 
 %%
-%% check if socket singleton (listen pipeline is used for i/o)
-
-
-
-
-%%
 %% 
 socket(Pid) ->
-   plib:call(Pid, socket). 
-
+   pipe:call(Pid, socket). 
 
 %%%------------------------------------------------------------------
 %%%
@@ -113,25 +113,25 @@ socket(Pid) ->
 %%%------------------------------------------------------------------   
 
 'ACTIVE'(socket, Tx, S) ->
-   plib:ack(Tx, {ok, lists:last(S#fsm.sock)}),
+   pipe:ack(Tx, {ok, lists:last(S#fsm.sock)}),
    {next_state, 'ACTIVE', S};
 
-'ACTIVE'({'EXIT', _Pid, _Reason}, _, #fsm{mode=noexit}=S) ->
-   free_socket(S#fsm.sock),
-   {stop, normal, S};
+% 'ACTIVE'({'EXIT', _Pid, _Reason}, _, #fsm{mode=noexit}=S) ->
+%    free_socket(S#fsm.sock),
+%    {stop, normal, S};
 
 'ACTIVE'({'EXIT', _Pid, normal}, _, S) ->
    free_socket(S#fsm.sock),
-   erlang:exit(S#fsm.owner, shutdown),
+   % erlang:exit(S#fsm.owner, shutdown),
    {stop, normal, S};
 
 'ACTIVE'({'EXIT', _Pid, Reason}, _, S) ->
    % clean-up konduit stack
    free_socket(S#fsm.sock),
-   erlang:exit(S#fsm.owner, Reason),
+   % erlang:exit(S#fsm.owner, Reason),
    {stop, Reason, S};
 
-'ACTIVE'({'DOWN', _, _, _Owner, Reason}, _, S) ->
+'ACTIVE'({'DOWN', _, _, Owner, Reason}, _, #fsm{owner=Owner}=S) ->
    free_socket(S#fsm.sock),
    {stop, Reason, S};
 

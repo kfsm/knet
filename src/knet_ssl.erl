@@ -103,6 +103,7 @@ ioctl(socket,   S) ->
       	{ok, Peer} = inet:peername(Tcp),
       	so_stats({connect, tempus:diff(T1)}, S#fsm{peer=Peer}),
       	T2 = os:timestamp(),
+         % @todo: make async connectors (ssl + tcp)
          case ssl:connect(Tcp, [{verify_fun, {fun ssl_ca_hook/3, self()}} | S#fsm.sopt], S#fsm.tout_peer) of
             {ok, Sock} ->
       		   {ok, Addr} = ssl:sockname(Sock),

@@ -35,10 +35,20 @@
 start_link(Acceptor) ->
    supervisor:start_link(?MODULE, [Acceptor]).
 
+
+init([{Acceptor, Method, Args}]) ->
+   {ok,
+      {
+         {simple_one_for_one, 1000000, 1},
+         [
+            {Acceptor, {Acceptor, Method, Args}, temporary, 5000, worker, dynamic}
+         ]
+      }
+   };
 init([{Acceptor, Args}]) -> 
    {ok,
       {
-         {simple_one_for_one, 4, 1800}, %% @todo: allow high-fequency failure
+         {simple_one_for_one, 1000000, 1}, %% @todo: allow high-fequency failure
          [
          	?CHILD(worker, Acceptor, Args)
          ]
@@ -47,7 +57,7 @@ init([{Acceptor, Args}]) ->
 init([Acceptor]) -> 
    {ok,
       {
-         {simple_one_for_one, 4, 1800},
+         {simple_one_for_one, 1000000, 1},
          [
          	?CHILD(worker, Acceptor)
          ]
