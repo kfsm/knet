@@ -133,8 +133,8 @@ ioctl(socket,   S) ->
    case gen_tcp:listen(Port, Opts) of
       {ok, Sock} -> 
          ?DEBUG("knet tcp ~p: listen ~p", [self(), Port]),
-         _ = pipe:a(Pipe, {tcp, {'*', Port}, listen}),
-         [knet_service_sup:init_acceptor(Service, Uri) || _ <- lists:seq(1, S#fsm.pool)],
+         _ = pipe:a(Pipe, {tcp, {any, Port}, listen}),
+         [{ok, _} = knet_service_sup:init_acceptor(Service, Uri) || _ <- lists:seq(1, S#fsm.pool)],
          {next_state, 'LISTEN', 
             S#fsm{
                sock     = Sock,
@@ -151,11 +151,11 @@ ioctl(socket,   S) ->
 'IDLE'({accept, Uri}, Pipe, S) ->
    Service = pns:whereis(knet, {service, uri:s(Uri)}),
    Port    = uri:get(port, Uri),
-   LSock   = pipe:ioctl(pns:whereis(knet, {tcp, {'*', Port}}), socket),
+   LSock   = pipe:ioctl(pns:whereis(knet, {tcp, {any, Port}}), socket),
    ?DEBUG("knet tcp ~p: accept ~p", [self(), {any, Port}]),
    case gen_tcp:accept(LSock) of
       {ok, Sock} ->
-         _ = knet_service_sup:init_acceptor(Service, Uri),
+         {ok,    _} = knet_service_sup:init_acceptor(Service, Uri),
          {ok, Peer} = inet:peername(Sock),
          {ok, Addr} = inet:sockname(Sock),
          ok         = pns:register(knet, {tcp, Peer}, self()),
@@ -173,7 +173,7 @@ ioctl(socket,   S) ->
          };
       %% @todo {error, closed}
       {error, Reason} ->
-         _ = knet_service_sup:init_acceptor(Service, Uri),
+         {ok, _} = knet_service_sup:init_acceptor(Service, Uri),
          ?DEBUG("knet tcp ~p: terminated ~s (reason ~p)", [self(), uri:to_binary(Uri), Reason]),
          pipe:a(Pipe, {tcp, {any, Port}, {terminated, Reason}}),      
          {stop, Reason, S}

@@ -48,7 +48,7 @@ init([{Acceptor, Method, Args}]) ->
 init([{Acceptor, Args}]) -> 
    {ok,
       {
-         {simple_one_for_one, 1000000, 1}, %% @todo: allow high-fequency failure
+         {simple_one_for_one, 1000000, 1}, 
          [
          	?CHILD(worker, Acceptor, Args)
          ]

@@ -91,9 +91,11 @@
    ]
 ).
 
-
 %% default library-wide timeout
 -define(SO_TIMEOUT,   10000).
+
+%% default library-wide pool size
+-define(SO_POOL,         10).
 
 %% default identity of HTTP server
 -define(HTTP_SERVER,        <<"knet">>).

@@ -16,17 +16,18 @@
 %%   limitations under the License.
 %%
 -module(knet).
+-include("knet.hrl").
 
 -export([start/0]).
 -export([
-   listen/2, 
-   bind/1, 
-   bind/2,
-   connect/1, 
-   connect/2, 
-   close/1,
-   
-   which/1
+   listen/2
+  ,bind/1
+  ,bind/2
+  ,connect/1 
+  ,connect/2 
+  ,close/1
+  ,which/1
+  ,acceptor/2
 ]).
 
 %%
@@ -43,11 +44,17 @@ start() ->
 %%   {stats,          pid()} - statistic functor (destination pipe to handle knet i/o statistic)
 -spec(listen/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
 
-listen({uri, _, _}=Uri, Opts) ->
+listen({uri, _, _}=Uri, Opts)
+ when is_list(Opts) ->
    knet_service_root_sup:init_service(Uri, self(), Opts);
 
-listen(Url, Opts) ->
-   listen(uri:new(Url), Opts).
+listen({uri, _, _}=Uri, Fun)
+ when is_function(Fun, 1) ->
+   listen(Uri, [{pool, ?SO_POOL}, {acceptor, {knet, acceptor, [Fun]}}]);
+
+listen(Uri, Opts)
+ when is_binary(Uri) orelse is_list(Uri) ->
+   listen(uri:new(Uri), Opts).
 
 %%
 %% bind process to listening socket
@@ -124,12 +131,19 @@ which(tcp) ->
 which(_) ->
    [].
 
+%%
+%% spawn acceptor process (used as supervisor bridge)
+-spec(acceptor/2 :: (function(), uri:uri()) -> {ok, pid()} | {error, any()}).
+
+acceptor(Fun, Uri) ->
+   {ok, erlang:spawn_link(fun() -> bind(Uri), pipe:loop(Fun) end)}.
 
 %%%------------------------------------------------------------------
 %%%
 %%% private
 %%%
 %%%------------------------------------------------------------------   
+
 
 
 
