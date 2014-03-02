@@ -18,17 +18,12 @@
 -module(knet_tests).
 -include_lib("eunit/include/eunit.hrl").
 
-% -export([
-%    tcp_acceptor/1
-% ]).
-
 %%%----------------------------------------------------------------------------   
 %%%
 %%% tcp
 %%%
 %%%----------------------------------------------------------------------------   
--define(HOST, "tcp://www.google.com").
--define(PORT, "tcp://*:8080").
+-define(TCP_HOST, "tcp://www.google.com").
 
 knet_tcp_test_() ->
    {
@@ -39,7 +34,7 @@ knet_tcp_test_() ->
          {"tcp connect [nobind]",  fun tcp_connect_nobind/0}
         ,{"tcp connect [bind]",    fun tcp_connect_bind/0}
         ,{"tcp connect [link]",    fun tcp_connect_link/0}
-        % ,{"tcp listen",            fun tcp_listen/0}
+        ,{"tcp listen",            fun tcp_listen/0}
       ]
    }.
 
@@ -52,14 +47,14 @@ tcp_free(_) ->
 %%
 %%
 tcp_connect_nobind() ->
-   {ok, Sock} = knet:connect(?HOST, [nobind]),
+   {ok, Sock} = knet:connect(?TCP_HOST, [nobind]),
    {tcp, _, established} = pipe:recv(Sock, infinity, []),
    ok = knet:close(Sock).
 
 %%
 %%
 tcp_connect_bind() ->
-   {ok, Sock} = knet:connect(?HOST),
+   {ok, Sock} = knet:connect(?TCP_HOST),
    {ioctl, a, Sock} = pipe:recv(infinity),
    {tcp,   _, established} = pipe:recv(Sock, infinity, []),
    ok = knet:close(Sock).
@@ -67,28 +62,22 @@ tcp_connect_bind() ->
 %%
 %%
 tcp_connect_link() ->
-   {ok, Sock} = knet:connect(?HOST, [link]),
+   {ok, Sock} = knet:connect(?TCP_HOST, [link]),
    {ioctl, a, Sock} = pipe:recv(infinity),
    {tcp,   _, established} = pipe:recv(Sock, infinity, []),
    ok = knet:close(Sock).
 
-% %%
-% %%
-% tcp_listen() ->
-%    {ok, Sock} = knet:listen(?PORT, [
-%       {acceptor, {?MODULE, tcp_acceptor, [?PORT]}}
-%    ]),
-%    ok = knet:close(Sock).
+%%
+%%
+tcp_listen() ->
+   {ok, Sock}  = knet:listen("tcp://*:8080", fun(_) -> ok end),
 
-% tcp_acceptor(Uri) ->
-%    {ok, 
-%       pipe:spawn_link(
-%          fun(X) ->
-%             knet:bind(Uri),
-%             error_logger:error_report([{a, X}]),
-%             X
-%          end
-%       )
-%    }.
+   {ok, A} = gen_tcp:connect("localhost", 8080, []),
+   ok      = gen_tcp:close(A),
 
-   
+   {ok, B} = knet:connect("tcp://localhost:8080", [nobind]),
+   {tcp, _, established} = pipe:recv(B, infinity, []),
+   ok = knet:close(B),
+
+   ok         = knet:close(Sock).
+

@@ -108,6 +108,7 @@ connect(Url) ->
 
 %%
 %% close socket
+%% @todo: close listen socket
 -spec(close/1 :: (pid()) -> ok).
 
 close(Sock)
