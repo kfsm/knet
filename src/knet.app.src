@@ -11,8 +11,6 @@
       {applications,[
          kernel, 
          stdlib,
-         lager,
-         ssl,
          pns 
       ]},
       {mod, {knet_app, []}},
