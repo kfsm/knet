@@ -17,7 +17,7 @@
   ,channel = undefined :: pid()        %% ssh channel
   ,peer    = undefined :: any()        %% ssh peer
   ,user    = undefined :: any()        %% ssh user
-  ,exec    = undefined :: datum:q()    %% exec queue
+  ,reply   = undefined :: any()        %% reply flag
   ,error   = undefined :: any()        %% last error
 }).
 
@@ -36,7 +36,6 @@ init(Uri) ->
    {ok, 
       #fsm{
          side = Side
-        ,exec = q:new()
       }
    }.
 
@@ -53,17 +52,14 @@ terminate(_Reason, S) ->
 %%%
 %%%------------------------------------------------------------------   
 
-%% @todo: fix exec into state (exec implies session termination)
-
-handle_msg({'$pipe', _Side, {eof, _Status}}, #fsm{exec={}}=S) ->
+handle_msg({'$pipe', _Side, {eof, _Status}}, #fsm{reply=undefined}=S) ->
    {stop, S#fsm.channel, S#fsm{error=normal}};
 
 handle_msg({'$pipe', _Side, {eof, Status}}, S) ->
-   {Reply, Q} = q:deq(S#fsm.exec),
-   ssh_connection:reply_request(S#fsm.ssh, Reply, success, S#fsm.channel),
+   ssh_connection:reply_request(S#fsm.ssh, S#fsm.reply, success, S#fsm.channel),
    ssh_connection:exit_status(S#fsm.ssh, S#fsm.channel, Status),
    ssh_connection:send_eof(S#fsm.ssh, S#fsm.channel),
-   {stop, S#fsm.channel, S#fsm{exec=Q}};
+   {stop, S#fsm.channel, S};
 
 handle_msg({'$pipe',_, Msg}, S) ->
    ssh_connection:send(S#fsm.ssh, S#fsm.channel, 0, Msg),
@@ -110,7 +106,7 @@ handle_ssh_msg({ssh_cm, _Ssh, {exec, _Channel, Reply, Cmd}}, S) ->
    pipe:send(S#fsm.side, {ssh, S#fsm.peer, {exec, Cmd}}),
    {ok, 
       S#fsm{
-         exec = q:enq(Reply, S#fsm.exec)
+         reply = Reply
       }
    };
 

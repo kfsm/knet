@@ -123,10 +123,27 @@ ioctl(_,  _) ->
 %% make options fo listen socket
 so_listen(Uri, Opts) ->
    Root = opts:val(system_dir, Opts), 
-   [
-      {user_dir_fun, fun(X) -> filename:join([Root, "users", X]) end}
-     ,{ssh_cli, {knet_ssh_io, Uri}} 
-     |opts:filter(?SO_SSH_ALLOWED, Opts)
-   ].
+   case opts:val(user_dir, undefined, Opts) of
+      %% user dir is not defined, make default function
+      undefined ->
+         [
+            {user_dir_fun, fun(X) -> filename:join([Root, X]) end}
+           ,{ssh_cli, {knet_ssh_io, Uri}} 
+           |opts:filter(?SO_SSH_ALLOWED, Opts)
+         ];
+      Fun when is_function(Fun, 1) ->
+         [
+            {user_dir_fun, Fun}
+           ,{ssh_cli, {knet_ssh_io, Uri}} 
+           |opts:filter(?SO_SSH_ALLOWED, Opts)
+         ];
+      Path when is_list(Path) ->
+         [
+            {user_dir, Path}
+           ,{ssh_cli, {knet_ssh_io, Uri}} 
+           |opts:filter(?SO_SSH_ALLOWED, Opts)
+         ]
+   end.
+
 
 
