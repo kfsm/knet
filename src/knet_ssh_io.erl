@@ -53,6 +53,8 @@ terminate(_Reason, S) ->
 %%%
 %%%------------------------------------------------------------------   
 
+%% @todo: fix exec into state (exec implies session termination)
+
 handle_msg({'$pipe', _Side, {eof, _Status}}, #fsm{exec={}}=S) ->
    {stop, S#fsm.channel, S#fsm{error=normal}};
 
@@ -61,7 +63,7 @@ handle_msg({'$pipe', _Side, {eof, Status}}, S) ->
    ssh_connection:reply_request(S#fsm.ssh, Reply, success, S#fsm.channel),
    ssh_connection:exit_status(S#fsm.ssh, S#fsm.channel, Status),
    ssh_connection:send_eof(S#fsm.ssh, S#fsm.channel),
-   {ok, S#fsm{exec=Q}};
+   {stop, S#fsm.channel, S#fsm{exec=Q}};
 
 handle_msg({'$pipe',_, Msg}, S) ->
    ssh_connection:send(S#fsm.ssh, S#fsm.channel, 0, Msg),

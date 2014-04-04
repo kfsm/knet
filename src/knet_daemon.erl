@@ -129,7 +129,7 @@ socket(Pid) ->
 'ACTIVE'(deq, Tx, S) ->
    {Pid, Q} = q:deq(S#fsm.q),
    pipe:ack(Tx, {ok, Pid}),
-   {next_state, 'ACTIVE', S};
+   {next_state, 'ACTIVE', S#fsm{q=Q}};
 
 'ACTIVE'({'EXIT', _Pid, _Reason}, _, S) ->
    knet_protocol:free(S#fsm.sock),
