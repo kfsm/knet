@@ -32,6 +32,7 @@ init(Uri) ->
    {ok, Side} = pipe:call(knet:whereis(service, Uri), deq),
    {ok, _}    = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri]),
    pipe:bind(a, Side, self()),
+   erlang:monitor(process, Side),
    {ok, 
       #fsm{
          side = Side
@@ -83,6 +84,9 @@ handle_msg({ssh_channel_up, Channel, Ssh}, S) ->
       }
    };
 
+handle_msg({'DOWN', _, _, Side, _Reason}, #fsm{side=Side}=S) ->
+   {stop, S#fsm.channel, S#fsm{error=normal}};
+
 handle_msg(Msg, S) ->
    ?WARNING("knet [ssh i/o]: unexpected message", [Msg]),
    {ok, S}.
@@ -126,12 +130,12 @@ handle_ssh_msg({ssh_cm, Ssh, {env, Channel, Reply, _Var, _Value}}, S) ->
 handle_ssh_msg({ssh_cm, _Ssh, {window_change, _Channel, _Width, _Height, _PixWidth, _PixHeight}}, S) ->
    {ok, S};
 
-% handle_ssh_msg({ssh_cm, _Ssh, {eof, _Channel}}, S) ->
-%    {ok, S};
+handle_ssh_msg({ssh_cm, _Ssh, {eof, _Channel}}, S) ->
+   {ok, S};
 
-% handle_ssh_msg({ssh_cm, _Ssh, {signal, _Channel, _}}, S) ->
-%    %% Ignore signals according to RFC 4254 section 6.9.
-%    {ok, S};
+handle_ssh_msg({ssh_cm, _Ssh, {signal, _Channel, _}}, S) ->
+   %% Ignore signals according to RFC 4254 section 6.9.
+   {ok, S};
 
 handle_ssh_msg({ssh_cm, _Ssh, {exit_signal, Channel, _, Error, _}}, S) ->
    ?DEBUG("knet [ssh i/o]: connection close by peer: ~p", [Error]),
@@ -145,7 +149,7 @@ handle_ssh_msg({ssh_cm, _Ssh, {exit_status, Channel, Status}}, S) ->
    {stop, Channel, S#fsm{error=Status}};
 
 handle_ssh_msg(Msg, S) ->
-   ?WARNING("knet [ssh i/o] ~p: unexpected message", [self(), Msg]),
+   ?WARNING("knet [ssh i/o]: unexpected message ~p", [Msg]),
    {ok, S}.
 
 
