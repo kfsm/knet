@@ -21,7 +21,6 @@
 -behaviour(supervisor).
 
 -export([
-   start_link/0, 
    start_link/1,
    init/1
 ]).
@@ -33,11 +32,11 @@
 
 %%
 %%
-start_link() ->
-   supervisor:start_link(?MODULE, []).
-
-start_link(Name) ->
-   supervisor:start_link({local, Name}, ?MODULE, []).
+start_link(Name)
+ when is_atom(Name) ->
+   supervisor:start_link({local, Name}, ?MODULE, []);
+start_link(Uri) ->
+   supervisor:start_link(?MODULE, [Uri]).
 
    
 init([]) -> 
@@ -45,8 +44,13 @@ init([]) ->
       {
          {simple_one_for_one, 0, 3600},
          [
-            ?CHILD(worker, knet_sock)
+            ?CHILD(worker, knet_sock, [])
          ]
       }
-   }.
+   };
+
+init([Uri]) -> 
+   ok = knet:register(socket, Uri),
+   init([]).
+
 

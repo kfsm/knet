@@ -3,7 +3,7 @@
 %% build config
 %%
 %%-----------------------------------------------------------------------------
-%-define(CONFIG_DEBUG,    true).
+%%-define(CONFIG_DEBUG,    true).
 
 
 %%-----------------------------------------------------------------------------
@@ -31,6 +31,13 @@
 	[
 		{'keep-alive', 60000}
 	]
+).
+
+-define(SO_SSH,
+   [
+      {nodelay,      true}
+     ,{user_passwords, []}
+   ]
 ).
 
 %%-----------------------------------------------------------------------------
@@ -91,6 +98,13 @@
    ]
 ).
 
+-define(SO_SSH_ALLOWED,
+   [
+      nodelay
+     ,system_dir
+   ]
+).
+
 %% default library-wide timeout
 -define(SO_TIMEOUT,   10000).
 
@@ -107,10 +121,40 @@
 %%
 %%-----------------------------------------------------------------------------
 
-%%
-%% debug verbosity
+%% 
+%% logger macros
+%%   debug, info, notice, warning, error, critical, alert, emergency
+-ifndef(EMERGENCY).
+-define(EMERGENCY(Fmt, Args), lager:emergency(Fmt, Args)).
+-endif.
+
+-ifndef(ALERT).
+-define(ALERT(Fmt, Args), lager:alert(Fmt, Args)).
+-endif.
+
+-ifndef(CRITICAL).
+-define(CRITICAL(Fmt, Args), lager:critical(Fmt, Args)).
+-endif.
+
+-ifndef(ERROR).
+-define(ERROR(Fmt, Args), lager:error(Fmt, Args)).
+-endif.
+
+-ifndef(WARNING).
+-define(WARNING(Fmt, Args), lager:warning(Fmt, Args)).
+-endif.
+
+-ifndef(NOTICE).
+-define(NOTICE(Fmt, Args), lager:notice(Fmt, Args)).
+-endif.
+
+-ifndef(INFO).
+-define(INFO(Fmt, Args), lager:info(Fmt, Args)).
+-endif.
+
 -ifdef(CONFIG_DEBUG).
    -define(DEBUG(Str, Args), lager:info(Str, Args)).
 -else.
    -define(DEBUG(Str, Args), ok).
 -endif.
+

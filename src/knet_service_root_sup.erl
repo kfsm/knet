@@ -24,7 +24,7 @@
    start_link/0, 
    init/1,
    %% api
-   init_service/3,
+   init_service/2,
    free_service/1
 ]).
 
@@ -47,9 +47,9 @@ init([]) ->
 
 %%
 %% create new socket service
-init_service(Uri, Owner, Opts) ->
+init_service(Uri, Opts) ->
    supervisor:start_child(?MODULE, 
-      ?CHILD(supervisor, uri:s(Uri), knet_service_sup, [Uri, Owner, Opts])
+      ?CHILD(supervisor, uri:s(Uri), knet_service_sup, [Uri, Opts])
    ).
 
 %%

@@ -16,12 +16,12 @@
 %%   limitations under the License.
 %%
 %% @description
-%%   knet service supervisor
+%%   knet service supervisor - manages daemon processes
 -module(knet_service_sup).
 -behaviour(supervisor).
 
 -export([
-   start_link/3, 
+   start_link/2, 
    init/1,
    %% api
    init_socket/4,
@@ -32,40 +32,39 @@
 ]).
 
 %%
+%%
 -define(CHILD(Type, I),            {I,  {I, start_link,   []}, permanent, 5000, Type, dynamic}).
 -define(CHILD(Type, I, Args),      {I,  {I, start_link, Args}, permanent, 5000, Type, dynamic}).
 -define(CHILD(Type, ID, I, Args),  {ID, {I, start_link, Args}, permanent, 5000, Type, dynamic}).
 
 %%
 %%
-start_link(Uri, Owner, Opts) ->
-   supervisor:start_link(?MODULE, [Uri, Owner, Opts]).
+start_link(Uri, Opts) ->
+   supervisor:start_link(?MODULE, [Uri, Opts]).
 
-init([Uri, Owner, Opts]) -> 
-   ok = pns:register(knet, {service, uri:s(Uri)}, self()),
+init([Uri, Opts]) -> 
    {ok,
       {
          {one_for_all, 0, 1},
-         [
-            %% socket factory
-            ?CHILD(supervisor, knet_sock_sup),
+         lists:flatten([
+            %% accept socket factory
+            accept_socket_factory(Uri)
             %% acceptor factory
-            ?CHILD(supervisor, knet_acceptor_sup, [opts:val(acceptor, Opts)]),
-            %% leader socket
-            ?CHILD(worker,     knet_sock, [Uri, Owner, [listen | Opts]])
-         ]
+           ,?CHILD(supervisor, knet_acceptor_sup, [Uri, opts:val(acceptor, Opts)])
+            %% listener socket (automatically listen incoming connection)
+           ,?CHILD(worker,     knet_daemon, [self(), Uri, Opts])
+         ])
       }
    }.
 
-%%
-%% return child process
-child(Sup, Id) ->
-   case lists:keyfind(Id, 1, supervisor:which_children(Sup)) of
-      {Id, Pid, _Type, _Mods} -> 
-         {ok, Pid};
-      _ ->
-         {error, bagarg}
+accept_socket_factory(Uri) ->
+   case knet_protocol:is_accept_socket(uri:schema(Uri)) of
+      false -> 
+         [];
+      true  -> 
+         ?CHILD(supervisor, knet_sock_sup, [Uri])
    end.
+
 
 
 %%

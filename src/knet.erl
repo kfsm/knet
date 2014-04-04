@@ -26,6 +26,10 @@
   ,connect/1 
   ,connect/2 
   ,close/1
+
+  ,register/2
+  ,whereis/2
+
   ,which/1
   ,acceptor/2
 ]).
@@ -33,6 +37,8 @@
 %%
 %% start application
 start() -> 
+   lager:start(),
+   lager:set_loglevel(lager_console_backend, notice),   
    applib:boot(?MODULE, []).
 
 %%
@@ -41,38 +47,65 @@ start() ->
 %%   {acceptor,      atom()} - acceptor implementation
 %%   {pool,       integer()} - acceptor pool size
 %%   {timeout_io, integer()} - socket i/o timeout
+%%   nopipe
 %%   {stats,          pid()} - statistic functor (destination pipe to handle knet i/o statistic)
 -spec(listen/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
 
 listen({uri, _, _}=Uri, Opts)
  when is_list(Opts) ->
-   knet_service_root_sup:init_service(Uri, self(), Opts);
+   SOpt = case lists:keytake(acceptor, 1, Opts) of
+      {value, {_, X}, Tail} when is_function(X, 1) ->
+         [{acceptor, {knet, acceptor, [X]}} | Tail];
+      _ ->
+         Opts
+   end,
+   knet_service_root_sup:init_service(Uri, [{owner, self()} | SOpt]);
 
 listen({uri, _, _}=Uri, Fun)
  when is_function(Fun, 1) ->
-   listen(Uri, [{pool, ?SO_POOL}, {acceptor, {knet, acceptor, [Fun]}}]);
+   listen(Uri, [{acceptor, Fun}]);
 
 listen(Uri, Opts)
  when is_binary(Uri) orelse is_list(Uri) ->
    listen(uri:new(Uri), Opts).
 
 %%
-%% bind process to listening socket
+%% bind process to listening socket. 
+%% 
+%% Options:
+%%    nopipe 
 -spec(bind/1 :: (any()) -> {ok, pid()} | {error, any()}).
 -spec(bind/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
 
 bind({uri, _, _}=Uri, Opts) ->
-   case pns:whereis(knet, {service, uri:s(Uri)}) of
+   case knet:whereis(socket, Uri) of
+      %%
+      %% protocol do not have "socket factory" for accepted connections.
+      %% it is based on callback model, underlying subsystem instantiates
+      %% acceptor process, which needs to be bound with application stack.
       undefined ->
-         {error, badarg};
+         case knet:whereis(service, Uri) of
+            undefined ->
+               {error, badarg};
+            Pid       ->
+               pipe:call(Pid, {enq, self()})
+         end;
       Sup       ->
-         case knet_service_sup:init_socket(Sup, Uri, self(), Opts) of
-            {ok, Sock} ->
+         case supervisor:start_child(Sup, [Uri, [{owner, self()} | Opts] ]) of
+            {ok, Pid} -> 
+               {ok, Sock} = knet_sock:socket(Pid),
                _ = pipe:send(Sock, {accept, Uri}),
                {ok, Sock};
-            Error      ->
+            Error     -> 
                Error
          end
+         % case knet_service_sup:init_socket(Sup, Uri, self(), Opts) of
+         %    {ok, Sock} ->
+         %       _ = pipe:send(Sock, {accept, Uri}),
+         %       {ok, Sock};
+         %    Error      ->
+         %       Error
+         % end
    end;
 
 bind(Url, Opts) ->
@@ -84,14 +117,15 @@ bind(Url) ->
 
 %%
 %% connect socket to remote peer
-%% Options
+%% Options:
+%%   nopipe
 %%   {stats, pid()} - statistic functor (destination pipe to handle knet i/o statistic)
 %%   @todo
 -spec(connect/1 :: (any()) -> {ok, pid()} | {error, any()}).
 -spec(connect/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
 
 connect({uri, _, _}=Uri, Opts) ->
-   case supervisor:start_child(knet_sock_sup, [Uri, self(), Opts]) of
+   case supervisor:start_child(knet_sock_sup, [Uri, [{owner, self()}|Opts]]) of
       {ok, Pid} -> 
          {ok, Sock} = knet_sock:socket(Pid),
          _ = pipe:send(Sock, {connect, Uri}),
@@ -121,6 +155,20 @@ close({uri, _, _}=Uri) ->
 
 close(Uri) ->
    close(uri:new(Uri)).
+
+%%
+%% register knet component
+-spec(register/2 :: (atom(), {uri, _, _}) -> ok).
+
+register(Name, Uri) ->
+   pns:register(knet, {Name, uri:s(Uri)}, self()).
+
+%%
+%% lookup knet component
+-spec(whereis/2 :: (atom(), {uri, _, _}) -> pid() | undefined).
+
+whereis(Name, Uri) ->
+   pns:whereis(knet, {Name, uri:s(Uri)}).
 
 %%
 %% list active sockets

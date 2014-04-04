@@ -16,12 +16,12 @@
 %%   limitations under the License.
 %%
 %% @description
-%%   acceptor factory   
+%%   acceptor factory - creates "application" protocol stack   
 -module(knet_acceptor_sup).
 -behaviour(supervisor).
 
 -export([
-   start_link/1, 
+   start_link/2, 
    init/1
 ]).
 
@@ -32,11 +32,12 @@
 
 %%
 %%
-start_link(Acceptor) ->
-   supervisor:start_link(?MODULE, [Acceptor]).
+start_link(Uri, Acceptor) ->
+   supervisor:start_link(?MODULE, [Uri, Acceptor]).
 
 
-init([{Acceptor, Method, Args}]) ->
+init([Uri, {Acceptor, Method, Args}]) ->
+   ok = knet:register(acceptor, Uri),
    {ok,
       {
          {simple_one_for_one, 1000000, 1},
@@ -45,7 +46,8 @@ init([{Acceptor, Method, Args}]) ->
          ]
       }
    };
-init([{Acceptor, Args}]) -> 
+init([Uri, {Acceptor, Args}]) -> 
+   ok = knet:register(acceptor, Uri),
    {ok,
       {
          {simple_one_for_one, 1000000, 1}, 
@@ -54,7 +56,8 @@ init([{Acceptor, Args}]) ->
          ]
       }
    }; 
-init([Acceptor]) -> 
+init([Uri, Acceptor]) -> 
+   ok = knet:register(acceptor, Uri),
    {ok,
       {
          {simple_one_for_one, 1000000, 1},

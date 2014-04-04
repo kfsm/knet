@@ -16,27 +16,26 @@
 %%   limitations under the License.
 %%
 %% @description
-%%   knet socket leader
-%%
-%% @todo
-%%  * make leader / client protocol to handle crash, etc. 
+%%   knet socket leader process, responsible for management operation of
+%%   communication pipelines.
 -module(knet_sock).
 -behaviour(pipe).
 
+-include("knet.hrl").
+
 -export([
-   start_link/3, 
-   socket/1,
-   init/1, 
-   free/2,
-   ioctl/2,
-   'ACTIVE'/3
+   start_link/2 
+  ,socket/1
+  ,init/1 
+  ,free/2
+  ,ioctl/2
+  ,'ACTIVE'/3
 ]).
 
 %% internal state
 -record(fsm, {
-   sock  = undefined :: [pid()],  %% socket stack
-   owner = undefined :: pid(),    %% socket owner process
-   mode  = undefined :: undefined | noexit | transient %% socket owner process
+   sock  = undefined :: [pid()]   %% socket pipeline
+  ,owner = undefined :: pid()     %% socket owner process
 }).
 
 %%%------------------------------------------------------------------
@@ -45,31 +44,25 @@
 %%%
 %%%------------------------------------------------------------------   
 
-start_link(Uri, Owner, Opts) ->
-   pipe:start_link(?MODULE, [Uri, Owner, Opts], []).
+start_link(Uri, Opts) ->
+   pipe:start_link(?MODULE, [Uri, Opts], []).
 
 
-init([Uri, Owner, Opts]) ->
-   %% link to owner
-   case opts:val(link, undefined, Opts) of
-      link -> 
-         _ = erlang:link(Owner);
-      _    -> 
-         _ = erlang:monitor(process, Owner),
-         _ = erlang:process_flag(trap_exit, true)
-   end,
-   
+init([Uri, Opts]) ->
+   Owner= opts:val(owner, Opts),
+   _    = erlang:monitor(process, Owner),
+   _    = erlang:process_flag(trap_exit, true),   
    Sock = init_socket(uri:schema(Uri), Opts),
 
-   %% bind socket pipeline with owner
-   case opts:val(nobind, undefined, Opts) of
+   %% bind socket pipeline with owner process
+   case opts:val(nopipe, undefined, Opts) of
       undefined ->
          _ = pipe:make(Sock ++ [Owner]);
-      nobind    ->
+      nopipe    ->
          _ = pipe:make(Sock)
    end,
 
-   %% configure socket
+   %% configure socket to automatically listen / accept / connect
    case opts:val([listen, accept, connect], undefined, Opts) of
       listen  ->  
          _ = pipe:send(lists:last(Sock), {listen, Uri});
@@ -83,9 +76,8 @@ init([Uri, Owner, Opts]) ->
 
    {ok, 'ACTIVE', 
       #fsm{
-         sock  = Sock,
-         owner = Owner,
-         mode  = opts:val([transient, noexit], undefined, Opts)
+         sock  = Sock
+        ,owner = Owner
       }
    }.
 
@@ -116,28 +108,23 @@ socket(Pid) ->
    pipe:ack(Tx, {ok, lists:last(S#fsm.sock)}),
    {next_state, 'ACTIVE', S};
 
-% 'ACTIVE'({'EXIT', _Pid, _Reason}, _, #fsm{mode=noexit}=S) ->
-%    free_socket(S#fsm.sock),
-%    {stop, normal, S};
-
 'ACTIVE'({'EXIT', _Pid, normal}, _, S) ->
    free_socket(S#fsm.sock),
-   % erlang:exit(S#fsm.owner, shutdown),
    {stop, normal, S};
 
 'ACTIVE'({'EXIT', _Pid, Reason}, _, S) ->
    % clean-up konduit stack
    free_socket(S#fsm.sock),
-   % erlang:exit(S#fsm.owner, Reason),
    {stop, Reason, S};
 
-'ACTIVE'({'DOWN', _, _, Owner, Reason}, _, #fsm{owner=Owner}=S) ->
+'ACTIVE'({'DOWN', _, _, Owner, _Reason}, _, #fsm{owner=Owner}=S) ->
+   % socket owner is down, gracefully terminate pipeline
    free_socket(S#fsm.sock),
-   {stop, Reason, S};
+   {stop, normal, S};
 
-'ACTIVE'(_, _, Sock) ->
+'ACTIVE'(Msg, _, Sock) ->
+   ?WARNING("knet [sock]: unexpected message", [Msg]),
    {next_state, 'ACTIVE', Sock}.
-
 
 %%%------------------------------------------------------------------
 %%%
@@ -152,6 +139,10 @@ init_socket(tcp, Opts) ->
 
 init_socket(ssl, Opts) ->
    {ok, A} = knet_ssl:start_link(Opts),
+   [A];
+
+init_socket(ssh, Opts) ->
+   {ok, A} = knet_ssh:start_link(Opts),
    [A];
 
 init_socket(udp, Opts) ->
