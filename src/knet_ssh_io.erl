@@ -57,7 +57,7 @@ handle_msg({'$pipe', _Side, {eof, _Status}}, #fsm{exec={}}=S) ->
    {stop, S#fsm.channel, S#fsm{error=normal}};
 
 handle_msg({'$pipe', _Side, {eof, Status}}, S) ->
-   {Reply, Q} = esq:deq(S#fsm.exec),
+   {Reply, Q} = q:deq(S#fsm.exec),
    ssh_connection:reply_request(S#fsm.ssh, Reply, success, S#fsm.channel),
    ssh_connection:exit_status(S#fsm.ssh, S#fsm.channel, Status),
    ssh_connection:send_eof(S#fsm.ssh, S#fsm.channel),
