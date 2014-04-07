@@ -85,14 +85,14 @@ free(_, #fsm{sock=undefined}) ->
 free(normal, S) ->
    Packets = knet_stream:packets(S#fsm.in) + knet_stream:packets(S#fsm.op),
    Octets  = knet_stream:octets(S#fsm.in)  + knet_stream:octets(S#fsm.op),
-   access_log(S#fsm.peer, S#fsm.addr, 'FIN', 'ACK', Octets, Packets),
+   ?access_log(tcp, [S#fsm.peer, S#fsm.addr, fin, ack, Octets, Packets]),
    (catch gen_tcp:close(S#fsm.sock)),
    ok;
 
 free(Reason, S) ->
    Packets = knet_stream:packets(S#fsm.in) + knet_stream:packets(S#fsm.op),
    Octets  = knet_stream:octets(S#fsm.in)  + knet_stream:octets(S#fsm.op),
-   access_log(S#fsm.peer, S#fsm.addr, 'FIN', Reason, Octets, Packets),
+   ?access_log(tcp, [S#fsm.peer, S#fsm.addr, fin, Reason, Octets, Packets]),
    (catch gen_tcp:close(S#fsm.sock)),
    ok.
 
@@ -116,7 +116,7 @@ ioctl(socket,   S) ->
          {ok, Peer} = inet:peername(Sock),
          {ok, Addr} = inet:sockname(Sock),
          ok         = pns:register(knet, {tcp, Peer}, self()),
-         access_log(Addr, Peer, 'SYN', 'SACK'),
+         ?access_log(tcp, [Addr, Peer, syn, sack]),
          so_stats({connect, tempus:diff(T)}, S#fsm{peer=Peer}),
          so_ioctl(Sock, S),
          pipe:a(Pipe, {tcp, Peer, established}), 
@@ -130,7 +130,7 @@ ioctl(socket,   S) ->
             }
          };
       {error, Reason} ->
-         access_log(undefined, Uri, 'SYN', Reason),
+         ?access_log(tcp, [undefined, Uri, syn, Reason]),
          pipe:a(Pipe, {tcp, {Host, Port}, {terminated, Reason}}),
          {stop, Reason, S}
    end;
@@ -145,7 +145,7 @@ ioctl(socket,   S) ->
    % @todo bind to address
    case gen_tcp:listen(Port, Opts) of
       {ok, Sock} -> 
-         access_log(undefined, Uri, 'LISTEN', 'OK'),
+         ?access_log(tcp, [undefined, Uri, listen, ok]),
          _ = pipe:a(Pipe, {tcp, {any, Port}, listen}),
          %% create acceptor pool
          Sup = knet:whereis(acceptor, Uri),
@@ -161,7 +161,7 @@ ioctl(socket,   S) ->
             }
          };
       {error, Reason} ->
-         access_log(undefined, Uri, 'LISTEN', Reason),
+         ?access_log(tcp, [undefined, Uri, listen, Reason]),
          pipe:a(Pipe, {tcp, {any, Port}, {terminated, Reason}}),
          {stop, Reason, S}
    end;
@@ -178,7 +178,7 @@ ioctl(socket,   S) ->
          {ok, Addr} = inet:sockname(Sock),
          ok         = pns:register(knet, {tcp, Peer}, self()),
          _ = so_ioctl(Sock, S),
-         access_log(Peer, Addr, 'SYN', 'SACK'),
+         ?access_log(tcp, [Peer, Addr, syn, sack]),
          pipe:a(Pipe, {tcp, Peer, established}),
          {next_state, 'ESTABLISHED', 
             S#fsm{
@@ -194,7 +194,7 @@ ioctl(socket,   S) ->
          {stop, normal, S};
       {error, Reason} ->
          {ok, _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri]),
-         access_log(undefined, Uri, 'SYN', Reason),
+         ?access_log(tcp, [undefined, Uri, syn, Reason]),
          pipe:a(Pipe, {tcp, {any, Port}, {terminated, Reason}}),      
          {stop, Reason, S}
    end;
@@ -287,30 +287,6 @@ ioctl(socket,   S) ->
 %%% private
 %%%
 %%%------------------------------------------------------------------   
-
-%%
-%% log incoming connection request
-%%   :source [:user] :request :response [:size] [:packet]
-access_log(Src, Dst, Req, Rsp) ->
-   {SrcAddr, SrcPort} = access_log_addr(Src),
-   {DstAddr, DstPort} = access_log_addr(Dst),
-   ?NOTICE("tcp://~s:~b - \"~s tcp://~s:~b\" ~s - -", [
-      SrcAddr, SrcPort, Req, DstAddr, DstPort, Rsp      
-   ]).
-
-access_log(Src, Dst, Req, Rsp, Size, Packet) ->
-   {SrcAddr, SrcPort} = access_log_addr(Src),
-   {DstAddr, DstPort} = access_log_addr(Dst),
-   ?NOTICE("tcp://~s:~b - \"~s tcp://~s:~b\" ~s ~b ~b", [
-      SrcAddr, SrcPort, Req, DstAddr, DstPort, Rsp, Size, Packet   
-   ]).
-
-access_log_addr({Peer, Port}) ->
-   {inet_parse:ntoa(Peer), Port};
-access_log_addr({uri, _, _}=Uri) ->
-   uri:authority(Uri);
-access_log_addr(undefined) ->
-   {"_", 0}.
 
 %%
 %% set socket i/o opts

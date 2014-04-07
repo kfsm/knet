@@ -32,6 +32,9 @@
 
   ,which/1
   ,acceptor/2
+
+  %% konduit helper
+  ,access_log/2
 ]).
 
 %%
@@ -194,6 +197,59 @@ which(_) ->
 
 acceptor(Fun, Uri) ->
    {ok, erlang:spawn_link(fun() -> bind(Uri), pipe:loop(Fun) end)}.
+
+%%
+%% compiles access log message
+%% :source :user :request :response :bytes :packets
+-spec(access_log/2 :: (atom(), list()) -> iolist()).
+
+access_log(Prot, [Src, Dst, Req, Rsp]) ->
+   {SrcAddr,_SrcPort} = access_log_src(Src),
+   {DstAddr, DstPort} = access_log_dst(Dst),
+   io_lib:format("~s  -  \"~s ~s://~s:~b\" ~s  -   - ", [
+      SrcAddr, Req,  
+      Prot, DstAddr, DstPort, Rsp
+   ]);      
+
+access_log(Prot, [Src, Dst, Req, Rsp, User]) ->
+   {SrcAddr,_SrcPort} = access_log_src(Src),
+   {DstAddr, DstPort} = access_log_dst(Dst),
+   io_lib:format("~s ~s \"~s ~s://~s:~b\" ~s  -   - ", [
+      SrcAddr, User, Req,  
+      Prot, DstAddr, DstPort, Rsp
+   ]);
+
+access_log(Prot, [Src, Dst, Req, Rsp, Bytes, Pckts]) ->
+   {SrcAddr,_SrcPort} = access_log_src(Src),
+   {DstAddr, DstPort} = access_log_dst(Dst),
+   io_lib:format("~s  -  \"~s ~s://~s:~b\" ~s ~b ~b", [
+      SrcAddr, Req,  
+      Prot, DstAddr, DstPort, Rsp,
+      Bytes, Pckts
+   ]);      
+
+access_log(Prot, [Src, Dst, Req, Rsp, User, Bytes, Pckts]) ->
+   {SrcAddr,_SrcPort} = access_log_src(Src),
+   {DstAddr, DstPort} = access_log_dst(Dst),
+   io_lib:format("~s ~s \"~s ~s://~s:~b\" ~s ~b ~b", [
+      SrcAddr, User, Req,  
+      Prot, DstAddr, DstPort, Rsp,
+      Bytes, Pckts
+   ]).
+
+access_log_src({Peer, Port}) ->
+   {inet_parse:ntoa(Peer), Port};
+access_log_src({uri, _, _}=Uri) ->
+   uri:authority(Uri);
+access_log_src(undefined) ->
+   {" - ", 0}.
+
+access_log_dst({Peer, Port}) ->
+   {inet_parse:ntoa(Peer), Port};
+access_log_dst({uri, _, _}=Uri) ->
+   uri:authority(Uri);
+access_log_dst(undefined) ->
+   {"...", 0}.
 
 %%%------------------------------------------------------------------
 %%%

@@ -125,6 +125,8 @@
 %%
 %%-----------------------------------------------------------------------------
 
+-define(access_log(Prot, X), lager:notice(knet:access_log(Prot, X))).
+
 %% 
 %% logger macros
 %%   debug, info, notice, warning, error, critical, alert, emergency
