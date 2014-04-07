@@ -52,7 +52,7 @@ encode(Msg, #stream{type=raw}=S) ->
    {[Msg], 
       S#stream{
          packet = S#stream.packet + 1
-        ,octet  = S#stream.octet  + byte_size(Msg)
+        ,octet  = S#stream.octet  + erlang:iolist_size(Msg)
       }
    };
 encode(Msg, #stream{type=line}=S) ->
@@ -60,7 +60,7 @@ encode(Msg, #stream{type=line}=S) ->
    {[<<X/binary, $\n>> || X <- Pckt], 
       S#stream{
          packet = S#stream.packet + length(Pckt)
-        ,octet  = S#stream.octet  + byte_size(Msg)
+        ,octet  = S#stream.octet  + erlang:iolist_size(Msg)
       }
    }.
 
@@ -78,7 +78,7 @@ decode(Pckt, Acc, #stream{type=raw}=S) ->
    {lists:reverse([Pckt | Acc]), 
       S#stream{
          packet = S#stream.packet + 1
-        ,octet  = S#stream.octet  + byte_size(Pckt)
+        ,octet  = S#stream.octet  + erlang:iolist_size(Pckt)
       }
    };
 decode(Pckt, Acc, #stream{type=line}=S) ->
@@ -87,7 +87,7 @@ decode(Pckt, Acc, #stream{type=line}=S) ->
       [_] ->
          decode(undefined, Acc,
             S#stream{
-               size = S#stream.size + byte_size(Pckt)
+               size = S#stream.size + erlang:iolist_size(Pckt)
               ,q    = deq:enq(Pckt, S#stream.q) 
             }
          );
@@ -99,7 +99,7 @@ decode(Pckt, Acc, #stream{type=line}=S) ->
          decode(Tail, [Msg | Acc], 
             S#stream{
                packet = S#stream.packet + 1
-              ,octet  = S#stream.octet  + byte_size(Msg)
+              ,octet  = S#stream.octet  + erlang:iolist_size(Msg)
               ,size   = 0
               ,q      = deq:new()
             }
