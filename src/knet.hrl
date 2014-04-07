@@ -3,8 +3,12 @@
 %% build config
 %%
 %%-----------------------------------------------------------------------------
-%%-define(CONFIG_DEBUG,    true).
+-define(CONFIG_DEBUG,    true).
 
+%% default access log configuration
+-define(CONFIG_ACCESS_LOG,       [tcp, ssl, http, ssh]).
+-define(CONFIG_ACCESS_LOG_FILE,  "log/access.log").
+-define(CONFIG_ACCESS_LOG_LEVEL, notice).
 
 %%-----------------------------------------------------------------------------
 %%
@@ -153,7 +157,7 @@
 -endif.
 
 -ifdef(CONFIG_DEBUG).
-   -define(DEBUG(Str, Args), lager:info(Str, Args)).
+   -define(DEBUG(Str, Args), lager:debug(Str, Args)).
 -else.
    -define(DEBUG(Str, Args), ok).
 -endif.

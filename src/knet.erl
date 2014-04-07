@@ -18,7 +18,7 @@
 -module(knet).
 -include("knet.hrl").
 
--export([start/0]).
+-export([start/0, config/0]).
 -export([
    listen/2
   ,bind/1
@@ -37,9 +37,17 @@
 %%
 %% start application
 start() -> 
-   lager:start(),
-   lager:set_loglevel(lager_console_backend, notice),   
-   applib:boot(?MODULE, []).
+   applib:boot(?MODULE, config()).
+
+%%
+%% config file
+config() ->
+   case code:priv_dir(knet) of
+      {error, bad_name} -> 
+         "./priv/knet.config";
+      Path ->
+         Path
+   end.
 
 %%
 %% listen incoming connection

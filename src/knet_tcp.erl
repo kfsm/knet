@@ -43,11 +43,13 @@
    active      = true        :: once | true | false, %% socket activity (pipe internally uses active once)
    tout_peer   = ?SO_TIMEOUT :: integer(),           %% timeout to connect peer
    tout_io     = ?SO_TIMEOUT :: integer(),           %% timeout to handle io
-   packet      = 0           :: integer(),           %% number of packets handled by socket in between of io timeouts
 
    pool        = 0         :: integer(),             %% socket acceptor pool size
    stats       = undefined :: pid(),                 %% knet stats function
    ts          = undefined :: integer()              %% stats timestamp
+
+  ,in          = undefined :: any()                  %% input stream
+  ,op          = undefined :: any()                  %% output stream
 }).
 
 %%%------------------------------------------------------------------
@@ -61,6 +63,7 @@ start_link(Opts) ->
 
 %%
 init(Opts) ->
+   Stream = opts:val(stream, raw, Opts),
    {ok, 'IDLE',
       #fsm{
          sopt      = opts:filter(?SO_TCP_ALLOWED, Opts),
@@ -69,15 +72,29 @@ init(Opts) ->
          tout_io   = opts:val(timeout_io,   ?SO_TIMEOUT, Opts),
          pool      = opts:val(pool, 0, Opts),
          stats     = opts:val(stats, undefined, Opts)
+        ,in        = knet_stream:new(Stream)
+        ,op        = knet_stream:new(Stream)        
       }
    }.
 
 %%
-free(_, S) ->
-   case erlang:port_info(S#fsm.sock) of
-      undefined -> ok;
-      _         -> gen_tcp:close(S#fsm.sock)
-   end.
+free(_, #fsm{sock=undefined}) ->
+   %% error at idle phase
+   ok; 
+
+free(normal, S) ->
+   Packets = knet_stream:packets(S#fsm.in) + knet_stream:packets(S#fsm.op),
+   Octets  = knet_stream:octets(S#fsm.in)  + knet_stream:octets(S#fsm.op),
+   access_log(S#fsm.peer, S#fsm.addr, 'FIN', 'ACK', Octets, Packets),
+   (catch gen_tcp:close(S#fsm.sock)),
+   ok;
+
+free(Reason, S) ->
+   Packets = knet_stream:packets(S#fsm.in) + knet_stream:packets(S#fsm.op),
+   Octets  = knet_stream:octets(S#fsm.in)  + knet_stream:octets(S#fsm.op),
+   access_log(S#fsm.peer, S#fsm.addr, 'FIN', Reason, Octets, Packets),
+   (catch gen_tcp:close(S#fsm.sock)),
+   ok.
 
 %% 
 ioctl(socket,   S) -> 
@@ -99,21 +116,21 @@ ioctl(socket,   S) ->
          {ok, Peer} = inet:peername(Sock),
          {ok, Addr} = inet:sockname(Sock),
          ok         = pns:register(knet, {tcp, Peer}, self()),
-         ?DEBUG("knet tcp ~p: established ~p (local ~p)", [self(), Peer, Addr]),
+         access_log(Addr, Peer, 'SYN', 'SACK'),
          so_stats({connect, tempus:diff(T)}, S#fsm{peer=Peer}),
-         pipe:a(Pipe, {tcp, Peer, established}),
          so_ioctl(Sock, S),
+         pipe:a(Pipe, {tcp, Peer, established}), 
          {next_state, 'ESTABLISHED', 
             S#fsm{
                sock    = Sock,
                addr    = Addr,
                peer    = Peer,
-               tout_io = tempus:event(S#fsm.tout_io, timeout_io),
+               tout_io = tempus:event(S#fsm.tout_io, {iochk, 0}),
                ts      = os:timestamp() 
             }
          };
       {error, Reason} ->
-         ?DEBUG("knet tcp ~p: terminated ~s (reason ~p)", [self(), uri:to_binary(Uri), Reason]),
+         access_log(undefined, Uri, 'SYN', Reason),
          pipe:a(Pipe, {tcp, {Host, Port}, {terminated, Reason}}),
          {stop, Reason, S}
    end;
@@ -128,7 +145,7 @@ ioctl(socket,   S) ->
    % @todo bind to address
    case gen_tcp:listen(Port, Opts) of
       {ok, Sock} -> 
-         ?DEBUG("knet tcp ~p: listen ~p", [self(), Port]),
+         access_log(undefined, Uri, 'LISTEN', 'OK'),
          _ = pipe:a(Pipe, {tcp, {any, Port}, listen}),
          %% create acceptor pool
          Sup = knet:whereis(acceptor, Uri),
@@ -144,7 +161,7 @@ ioctl(socket,   S) ->
             }
          };
       {error, Reason} ->
-         ?DEBUG("knet tcp ~p: terminated ~s (reason ~p)", [self(), uri:to_binary(Uri), Reason]),
+         access_log(undefined, Uri, 'LISTEN', Reason),
          pipe:a(Pipe, {tcp, {any, Port}, {terminated, Reason}}),
          {stop, Reason, S}
    end;
@@ -161,28 +178,29 @@ ioctl(socket,   S) ->
          {ok, Addr} = inet:sockname(Sock),
          ok         = pns:register(knet, {tcp, Peer}, self()),
          _ = so_ioctl(Sock, S),
-         ?DEBUG("knet tcp ~p: accepted ~p (local ~p)", [self(), Peer, Addr]),
+         access_log(Peer, Addr, 'SYN', 'SACK'),
          pipe:a(Pipe, {tcp, Peer, established}),
          {next_state, 'ESTABLISHED', 
             S#fsm{
                sock    = Sock, 
                addr    = Addr, 
                peer    = Peer,
-               tout_io = tempus:event(S#fsm.tout_io, timeout_io),
+               tout_io = tempus:event(S#fsm.tout_io, {iochk, 0}),
                ts      = os:timestamp()  
             }
          };
-      %% @todo {error, closed}
+      %% listen socket is closed
+      {error, closed} ->
+         {stop, normal, S};
       {error, Reason} ->
          {ok, _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri]),
-         ?DEBUG("knet tcp ~p: terminated ~s (reason ~p)", [self(), uri:to_binary(Uri), Reason]),
+         access_log(undefined, Uri, 'SYN', Reason),
          pipe:a(Pipe, {tcp, {any, Port}, {terminated, Reason}}),      
          {stop, Reason, S}
    end;
 
 %%
 'IDLE'(shutdown, _Pipe, S) ->
-   ?DEBUG("knet tcp ~p: terminated (reason normal)", [self()]),
    {stop, normal, S}.
 
 
@@ -193,7 +211,6 @@ ioctl(socket,   S) ->
 %%%------------------------------------------------------------------   
 
 'LISTEN'(shutdown, _Pipe, S) ->
-   ?DEBUG("knet tcp ~p: terminated (reason normal)", [self()]),
    {stop, normal, S};
 
 'LISTEN'(_Msg, _Pipe, S) ->
@@ -207,12 +224,10 @@ ioctl(socket,   S) ->
 %%%------------------------------------------------------------------   
 
 'ESTABLISHED'({tcp_error, _, Reason}, Pipe, S) ->
-   ?DEBUG("knet tcp ~p: terminated ~p (reason ~p)", [self(), S#fsm.peer, Reason]),
    _ = pipe:b(Pipe, {tcp, S#fsm.peer, {terminated, Reason}}),
    {stop, Reason, S};
    
 'ESTABLISHED'({tcp_closed, _}, Pipe, S) ->
-   ?DEBUG("knet tcp ~p: terminated ~p (reason ~p)", [self(), S#fsm.peer, normal]),
    _ = pipe:b(Pipe, {tcp, S#fsm.peer, {terminated, normal}}),
    {stop, normal, S};
 
@@ -222,46 +237,46 @@ ioctl(socket,   S) ->
    %% Essentially, you will be served the first message, then read as many as you 
    %% wish from the socket. When the socket is empty, you can again enable 
    %% {active, once}.
-   so_ioctl(S#fsm.sock, S),
    %% TODO: flexible flow control + explicit read
+   so_ioctl(S#fsm.sock, S),
+   %% decode packets and flush the to side B
+   {Queue, Stream} = knet_stream:decode(Pckt, S#fsm.in),
+   recv_q(Pipe, S#fsm.peer, Queue),
    so_stats({packet, tempus:diff(S#fsm.ts), size(Pckt)}, S),
-   _ = pipe:b(Pipe, {tcp, S#fsm.peer, Pckt}),
    {next_state, 'ESTABLISHED', 
       S#fsm{
-         packet = S#fsm.packet + 1,
          ts     = os:timestamp()
+        ,in     = Stream
       }
    };
 
 'ESTABLISHED'(shutdown, Pipe, S) ->
-   ?DEBUG("knet tcp ~p: terminated ~p (reason normal)", [self(), S#fsm.peer]),
    _ = pipe:b(Pipe, {tcp, S#fsm.peer, {terminated, normal}}),
    {stop, normal, S};
 
-'ESTABLISHED'(timeout_io,  Pipe, #fsm{packet = 0}=S) ->
-   ?DEBUG("knet tcp ~p: terminated ~p (reason timeout)", [self(), S#fsm.peer]),
-   _ = pipe:b(Pipe, {tcp, S#fsm.peer, {terminated, timeout}}),
-   {stop, normal, S};
-
-'ESTABLISHED'(timeout_io,  _Pipe, S) ->
-   {next_state, 'ESTABLISHED',
-      S#fsm{
-         packet  = 0,
-         tout_io = tempus:reset(S#fsm.tout_io, timeout_io)
-      }
-   };
-
-'ESTABLISHED'(Pckt, Pipe, S)
- when is_binary(Pckt) orelse is_list(Pckt) ->
-   case gen_tcp:send(S#fsm.sock, Pckt) of
-      ok    ->
-         {next_state, 'ESTABLISHED', 
+'ESTABLISHED'({iochk, N}, Pipe, S) ->
+   %% check i/o activity on the channel
+   case knet_stream:packets(S#fsm.in) + knet_stream:packets(S#fsm.op) of
+      X when X > N ->
+         {next_state, 'ESTABLISHED',
             S#fsm{
-               packet = S#fsm.packet + 1
+               tout_io = tempus:reset(S#fsm.tout_io, {iochk, X})
             }
          };
+      _ ->
+         ?DEBUG("knet [tcp]: connection ~p is idle", [S#fsm.peer]),
+         _ = pipe:b(Pipe, {tcp, S#fsm.peer, {terminated, timeout}}),
+         {stop, normal, S}
+   end;
+
+%% @todo {_, Pckt}
+'ESTABLISHED'(Pckt, Pipe, S)
+ when is_binary(Pckt) orelse is_list(Pckt) ->
+   {Queue, Stream} = knet_stream:encode(Pckt, S#fsm.op),
+   case send_q(S#fsm.sock, Queue) of
+      ok    ->
+         {next_state, 'ESTABLISHED', S#fsm{op = Stream}};
       {error, Reason} ->
-         ?DEBUG("knet tcp ~p: terminated ~p (reason ~p)", [self(), S#fsm.peer, Reason]),
          _ = pipe:a(Pipe, {tcp, S#fsm.peer, {terminated, Reason}}),
          {stop, Reason, S}
    end.
@@ -273,6 +288,31 @@ ioctl(socket,   S) ->
 %%%
 %%%------------------------------------------------------------------   
 
+%%
+%% log incoming connection request
+%%   :source [:user] :request :response [:size] [:packet]
+access_log(Src, Dst, Req, Rsp) ->
+   {SrcAddr, SrcPort} = access_log_addr(Src),
+   {DstAddr, DstPort} = access_log_addr(Dst),
+   ?NOTICE("tcp://~s:~b - \"~s tcp://~s:~b\" ~s - -", [
+      SrcAddr, SrcPort, Req, DstAddr, DstPort, Rsp      
+   ]).
+
+access_log(Src, Dst, Req, Rsp, Size, Packet) ->
+   {SrcAddr, SrcPort} = access_log_addr(Src),
+   {DstAddr, DstPort} = access_log_addr(Dst),
+   ?NOTICE("tcp://~s:~b - \"~s tcp://~s:~b\" ~s ~b ~b", [
+      SrcAddr, SrcPort, Req, DstAddr, DstPort, Rsp, Size, Packet   
+   ]).
+
+access_log_addr({Peer, Port}) ->
+   {inet_parse:ntoa(Peer), Port};
+access_log_addr({uri, _, _}=Uri) ->
+   uri:authority(Uri);
+access_log_addr(undefined) ->
+   {"_", 0}.
+
+%%
 %% set socket i/o opts
 so_ioctl(Sock, #fsm{active=true}) ->
    ok = inet:setopts(Sock, [{active, once}]);
@@ -285,4 +325,26 @@ so_stats(_Msg, #fsm{stats=undefined}) ->
 so_stats(Msg,  #fsm{stats=Pid, peer=Peer})
  when is_pid(Pid) ->
    pipe:send(Pid, {stats, {tcp, Peer}, Msg}).
+
+%%
+%% receive packet queue to pipeline
+recv_q(Pipe, Peer, [Head | Tail]) ->
+   _ = pipe:b(Pipe, {tcp, Peer, Head}),
+   recv_q(Pipe, Peer, Tail);
+
+recv_q(_Pipe, _Peer, []) ->
+   ok.
+
+%%
+%% send packet queue to socket
+send_q(Sock, [Head | Tail]) ->
+   case gen_tcp:send(Sock, Head) of
+      ok ->
+         send_q(Sock, Tail);
+      {error, _} = Error ->
+         Error
+   end;
+
+send_q(_Sock, []) ->
+   ok.
 
