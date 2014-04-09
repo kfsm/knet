@@ -36,10 +36,13 @@
 -record(fsm, {
    sock :: port(),  % tcp/ip socket
    peer :: any(),   % peer address  
-   addr :: any(),   % local address
+   addr :: any()    % local address
+
+   %% timers
+  ,t_init      = undefined   :: tempus:t()           %% session start time 
 
    % socket options
-   sopt        = undefined   :: list(),              %% list of socket opts    
+  ,sopt        = undefined   :: list(),              %% list of socket opts    
    active      = true        :: once | true | false, %% socket activity (pipe internally uses active once)
    tout_peer   = ?SO_TIMEOUT :: integer(),           %% timeout to connect peer
    tout_io     = ?SO_TIMEOUT :: integer(),           %% timeout to handle io
@@ -48,6 +51,7 @@
    stats       = undefined :: pid(),                 %% knet stats function
    ts          = undefined :: integer()              %% stats timestamp
 
+   %% data streams
   ,in          = undefined :: any()                  %% input stream
   ,op          = undefined :: any()                  %% output stream
 }).
@@ -83,16 +87,18 @@ free(_, #fsm{sock=undefined}) ->
    ok; 
 
 free(normal, S) ->
-   Packets = knet_stream:packets(S#fsm.in) + knet_stream:packets(S#fsm.op),
-   Octets  = knet_stream:octets(S#fsm.in)  + knet_stream:octets(S#fsm.op),
-   ?access_log(tcp, [S#fsm.peer, S#fsm.addr, fin, ack, Octets, Packets]),
+   Pack = knet_stream:packets(S#fsm.in) + knet_stream:packets(S#fsm.op),
+   Byte = knet_stream:octets(S#fsm.in)  + knet_stream:octets(S#fsm.op),
+   ?access_log(#log{prot=tcp, src=S#fsm.peer, dst=S#fsm.addr, req=fin, rsp=ack, 
+                    byte=Byte, pack=Pack, time=tempus:diff(S#fsm.t_init)}),
    (catch gen_tcp:close(S#fsm.sock)),
    ok;
 
 free(Reason, S) ->
-   Packets = knet_stream:packets(S#fsm.in) + knet_stream:packets(S#fsm.op),
-   Octets  = knet_stream:octets(S#fsm.in)  + knet_stream:octets(S#fsm.op),
-   ?access_log(tcp, [S#fsm.peer, S#fsm.addr, fin, Reason, Octets, Packets]),
+   Pack = knet_stream:packets(S#fsm.in) + knet_stream:packets(S#fsm.op),
+   Byte = knet_stream:octets(S#fsm.in)  + knet_stream:octets(S#fsm.op),
+   ?access_log(#log{prot=tcp, src=S#fsm.peer, dst=S#fsm.addr, req=fin, rsp=ack, 
+                    byte=Byte, pack=Pack, time=tempus:diff(S#fsm.t_init)}),
    (catch gen_tcp:close(S#fsm.sock)),
    ok.
 
@@ -116,7 +122,7 @@ ioctl(socket,   S) ->
          {ok, Peer} = inet:peername(Sock),
          {ok, Addr} = inet:sockname(Sock),
          ok         = pns:register(knet, {tcp, Peer}, self()),
-         ?access_log(tcp, [Addr, Peer, syn, sack]),
+         ?access_log(#log{prot=tcp, src=Addr, dst=Peer, req=syn, rsp=sack}),
          so_stats({connect, tempus:diff(T)}, S#fsm{peer=Peer}),
          so_ioctl(Sock, S),
          pipe:a(Pipe, {tcp, Peer, established}), 
@@ -127,10 +133,11 @@ ioctl(socket,   S) ->
                peer    = Peer,
                tout_io = tempus:event(S#fsm.tout_io, {iochk, 0}),
                ts      = os:timestamp() 
+              ,t_init  = os:timestamp() 
             }
          };
       {error, Reason} ->
-         ?access_log(tcp, [undefined, Uri, syn, Reason]),
+         ?access_log(#log{prot=tcp, dst=Uri, req=syn, rsp=Reason}),
          pipe:a(Pipe, {tcp, {Host, Port}, {terminated, Reason}}),
          {stop, Reason, S}
    end;
@@ -145,7 +152,7 @@ ioctl(socket,   S) ->
    % @todo bind to address
    case gen_tcp:listen(Port, Opts) of
       {ok, Sock} -> 
-         ?access_log(tcp, [undefined, Uri, listen, ok]),
+         ?access_log(#log{prot=tcp, dst=Uri, req=listen}),
          _ = pipe:a(Pipe, {tcp, {any, Port}, listen}),
          %% create acceptor pool
          Sup = knet:whereis(acceptor, Uri),
@@ -161,7 +168,7 @@ ioctl(socket,   S) ->
             }
          };
       {error, Reason} ->
-         ?access_log(tcp, [undefined, Uri, listen, Reason]),
+         ?access_log(#log{prot=tcp, dst=Uri, req=listen, rsp=Reason}),
          pipe:a(Pipe, {tcp, {any, Port}, {terminated, Reason}}),
          {stop, Reason, S}
    end;
@@ -178,7 +185,7 @@ ioctl(socket,   S) ->
          {ok, Addr} = inet:sockname(Sock),
          ok         = pns:register(knet, {tcp, Peer}, self()),
          _ = so_ioctl(Sock, S),
-         ?access_log(tcp, [Peer, Addr, syn, sack]),
+         ?access_log(#log{prot=tcp, src=Peer, dst=Addr, req=syn, rsp=sack}),
          pipe:a(Pipe, {tcp, Peer, established}),
          {next_state, 'ESTABLISHED', 
             S#fsm{
@@ -187,6 +194,7 @@ ioctl(socket,   S) ->
                peer    = Peer,
                tout_io = tempus:event(S#fsm.tout_io, {iochk, 0}),
                ts      = os:timestamp()  
+              ,t_init  = os:timestamp()
             }
          };
       %% listen socket is closed
@@ -194,7 +202,7 @@ ioctl(socket,   S) ->
          {stop, normal, S};
       {error, Reason} ->
          {ok, _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri]),
-         ?access_log(tcp, [undefined, Uri, syn, Reason]),
+         ?access_log(#log{prot=tcp, dst=Uri, req=syn, rsp=Reason}),
          pipe:a(Pipe, {tcp, {any, Port}, {terminated, Reason}}),      
          {stop, Reason, S}
    end;
@@ -287,6 +295,7 @@ ioctl(socket,   S) ->
 %%% private
 %%%
 %%%------------------------------------------------------------------   
+
 
 %%
 %% set socket i/o opts

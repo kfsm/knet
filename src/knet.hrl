@@ -118,15 +118,6 @@
 %% default identity of HTTP server
 -define(HTTP_SERVER,        <<"knet">>).
 
-
-%%-----------------------------------------------------------------------------
-%%
-%% macro
-%%
-%%-----------------------------------------------------------------------------
-
--define(access_log(Prot, X), lager:notice(knet:access_log(Prot, X))).
-
 %% 
 %% logger macros
 %%   debug, info, notice, warning, error, critical, alert, emergency
@@ -163,4 +154,24 @@
 -else.
    -define(DEBUG(Str, Args), ok).
 -endif.
+
+%%
+%% access_log 
+-define(access_log(X), lager:notice(knet_log:format(X))).
+-record(log, {
+   prot  = undefined :: any()  %% protocol identity
+  ,src   = undefined :: any()  %% source address
+  ,dst   = undefined :: any()  %% destination address
+
+  ,ua    = undefined :: any()  %% user agent   
+  ,user  = undefined :: any()  %% user identity
+
+  ,req   = undefined :: any()
+  ,rsp   = undefined :: any()
+
+  ,byte  = undefined :: any()  %% number of transfered bytes
+  ,pack  = undefined :: any()  %% number of transfered packets
+  ,time  = undefined :: any()  %% request /response latency
+}).
+
 

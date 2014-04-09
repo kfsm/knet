@@ -47,6 +47,9 @@
    recv      = undefined :: htstream:http(), % inbound  http state machine
    send      = undefined :: htstream:http(), % outbound http state machine
 
+   peer      = undefined :: any(),           % remote peer address
+   req       = undefined :: datum:q(),       % queue of server requests
+
    stats       = undefined :: pid(),         % knet stats function
    ts          = undefined :: integer()      % stats timestamp
 }).
@@ -67,6 +70,7 @@ init(Opts) ->
          timeout = opts:val('keep-alive', Opts),
          recv    = htstream:new(),
          send    = htstream:new(),
+         req     = q:new(),
          stats   = opts:val(stats, undefined, Opts) 
       }
    }.
@@ -133,11 +137,11 @@ ioctl(_, _) ->
 'SERVER'(shutdown, _Pipe, S) ->
    {stop, normal, S};
 
-'SERVER'({tcp, _, established}, _, S) ->
-   {next_state, 'SERVER', S#fsm{schema=http,  ts=os:timestamp()},  S#fsm.timeout};
+'SERVER'({tcp, Peer, established}, _, S) ->
+   {next_state, 'SERVER', S#fsm{schema=http,  ts=os:timestamp(), peer=Peer},  S#fsm.timeout};
 
-'SERVER'({ssl, _, established}, _, S) ->
-   {next_state, 'SERVER', S#fsm{schema=https, ts=os:timestamp()}, S#fsm.timeout};
+'SERVER'({ssl, Peer, established}, _, S) ->
+   {next_state, 'SERVER', S#fsm{schema=https, ts=os:timestamp(), peer=Peer}, S#fsm.timeout};
 
 'SERVER'({Prot, _, {terminated, _}}, _Pipe, S)
  when Prot =:= tcp orelse Prot =:= ssl ->
@@ -160,6 +164,7 @@ ioctl(_, _) ->
       %% TODO: expand http headers (Date + Server + Connection)
       {stop, normal, http_outbound(eof, Pipe, S)}
    catch _:Reason ->
+      io:format("----> ~p ~p~n", [Reason, erlang:get_stacktrace()]),      
       {stop, normal, http_failure(Reason, Pipe, b, S)}
    end;
 
@@ -168,6 +173,7 @@ ioctl(_, _) ->
       %% TODO: expand http headers (Date + Server + Connection)
       {next_state, 'SERVER', http_outbound(Msg, Pipe, S), S#fsm.timeout}
    catch _:Reason ->
+      io:format("----> ~p ~p~n", [Reason, erlang:get_stacktrace()]),
       {next_state, 'SERVER', http_failure(Reason, Pipe, b, S), S#fsm.timeout}
    end.
 
@@ -241,8 +247,22 @@ http_outbound(Msg, Pipe, S) ->
    {Pckt, Http} = htstream:encode(Msg, S#fsm.send),
    _ = pipe:b(Pipe, Pckt),
    case htstream:state(Http) of
-      eof -> S#fsm{send=htstream:new(Http)};
-      _   -> S#fsm{send=Http}
+      eof -> 
+         case htstream:http(Http) of
+            {request,  Req} ->
+               S#fsm{send=htstream:new(Http), req=q:enq(Req, S#fsm.req)};
+            {response, {Code, _, _}} ->
+               {{T, Req}, Q} = q:deq(S#fsm.req),
+               {_, R = {Method, _, Head}} = htstream:http(Req),
+               Ua   = opts:val('User-Agent', undefined, Head), 
+               Url  = request_url(R, S#fsm.schema, S#fsm.url),
+               Byte = htstream:octets(Req)  + htstream:octets(Http), 
+               Pack = htstream:packets(Req) + htstream:packets(Http),
+               ?access_log(#log{prot=http, src=S#fsm.peer, dst=Url, req=Method, rsp=Code, ua=Ua, byte=Byte, pack=Pack, time=tempus:diff(T)}),
+               S#fsm{send=htstream:new(Http), req=Q}
+         end;
+      _   -> 
+         S#fsm{send=Http}
    end.
 
 %%
@@ -258,7 +278,12 @@ http_inbound(Pckt, Peer, Pipe, S)
          % time to meaningful response
          _ = so_stats({ttmr, tempus:diff(S#fsm.ts)}, S),
          _ = pipe:b(Pipe, {http, Url, eof}),
-         S#fsm{url=Url, keepalive=Alive, recv=htstream:new(Http)};
+         case htstream:http(Http) of
+            {request,  _} ->
+               S#fsm{url=Url, keepalive=Alive, recv=htstream:new(Http), req=q:enq({S#fsm.ts, Http}, S#fsm.req)};
+            {response, _} ->
+               S#fsm{url=Url, keepalive=Alive, recv=htstream:new(Http)}
+         end;
       eoh -> 
          % time to first byte
          _ = so_stats({ttfb, tempus:diff(S#fsm.ts)}, S),
