@@ -10,7 +10,8 @@
       {applications,[
          kernel, 
          stdlib,
-         knet
+         knet,
+         ssl
       ]},
       {mod, {http_app, []}},
       {env, []}

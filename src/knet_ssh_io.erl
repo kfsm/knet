@@ -16,6 +16,7 @@
   ,ssh     = undefined :: pid()        %% ssh "socket" / io channel
   ,channel = undefined :: pid()        %% ssh channel
   ,peer    = undefined :: any()        %% ssh peer
+  ,addr    = undefined :: any()        %% ssh local address
   ,user    = undefined :: any()        %% ssh user
   ,reply   = undefined :: any()        %% reply flag
   ,error   = undefined :: any()        %% last error
@@ -67,17 +68,19 @@ handle_msg({'$pipe',_, Msg}, S) ->
 
 handle_msg({ssh_channel_up, Channel, Ssh}, S) ->
    %% ssh connection established, notify side
-   Opts      = ssh_connection_handler:connection_info(Ssh, [peer, user]),
+   Opts      = ssh_connection_handler:connection_info(Ssh, [peer, user, sockname]),
    {_, Peer} = opts:val(peer, Opts), 
+   {_, Addr} = opts:val(sockname, Opts), 
    User      = opts:val(user, Opts), 
    Uri       = uri:userinfo(User, uri:authority(Peer, uri:new(ssh))),
-   ?NOTICE("knet [ssh]: up ~s", [uri:s(Uri)]),
+   ?access_log(#log{prot=ssh, src=Peer, dst=Addr, req=login, rsp=ok, user=User}),
    pipe:send(S#fsm.side, {ssh, self(), {up, Uri}}),
    {ok, 
       S#fsm{
          channel = Channel
         ,ssh     = Ssh
         ,peer    = Peer    
+        ,addr    = Peer
         ,user    = User
       }
    };
@@ -103,6 +106,7 @@ handle_ssh_msg({ssh_cm, _Ssh, {data, _Channel, _Type, Pckt}}, S) ->
 
 handle_ssh_msg({ssh_cm, _Ssh, {exec, _Channel, Reply, Cmd}}, S) ->
    %% execute remote command, response is expected by remote peer
+   ?access_log(#log{prot=ssh, src=S#fsm.peer, dst=S#fsm.addr, req=Cmd, user=S#fsm.user}),   
    pipe:send(S#fsm.side, {ssh, S#fsm.peer, {exec, Cmd}}),
    {ok, 
       S#fsm{

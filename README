@@ -53,3 +53,23 @@ frame()  - binary frame (outgound data packet)
 
 %% {send,       <<...>>} - outgoing data packet
 %% {recv,           ...} - receive N-bytes
+
+
+Create SSL Certificate
+
+Step 1: Create the key
+
+$ openssl genrsa -des3 -out server.passwd.key 1024
+Step 2: Remove the password from the key
+
+Make sure the password-less key is only readable by root!
+
+$ openssl rsa -in server.passwd.key -out server.key
+Step 3: Generate the CSR
+
+$ openssl req -new -key server.key -out server.csr
+Step 4: Generate the Certificate
+
+$ openssl x509 -req -days 365 -in server.csr -signkey server.key -out server.crt
+
+

@@ -79,7 +79,7 @@ ioctl(_,  _) ->
    ok      = pns:register(knet, {ssh, {any, Port}}, self()),
    case ssh:daemon(Host, Port, so_listen(Uri, S#fsm.so)) of
       {ok, _} -> 
-         ?NOTICE("knet [ssh]: listen ~s", [uri:s(Uri)]),
+         ?access_log(#log{prot=ssh, dst=Uri, req=listen}),
          _   = pipe:a(Pipe, {ssh, self(), {listen, Uri}}),
          Sup = knet:whereis(acceptor, Uri),
          ok  = lists:foreach(

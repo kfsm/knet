@@ -227,14 +227,8 @@ ioctl(_, _) ->
    'CLIENT'({Mthd, uri:path(Uri), Heads, Msg}, Pipe, S#fsm{url=Uri, ts=os:timestamp()});
 
 'CLIENT'(Msg, Pipe, S) ->
-   try
-      {next_state, 'CLIENT', http_outbound(Msg, Pipe, S)}
-   catch _:Reason ->
-      %io:format("----> ~p ~p~n", [Reason, erlang:get_stacktrace()]),
-      {stop, Reason, S}
-   end.
-
-
+   {next_state, 'CLIENT', http_outbound(Msg, Pipe, S)}.
+   
 %%%------------------------------------------------------------------
 %%%
 %%% private

@@ -46,6 +46,9 @@ val(undefined) ->
 %    X;
 val({_,_,_}=X) ->
    scalar:c(tempus:u(X));
+val(X)
+ when is_tuple(X) ->
+   io_lib:format("~p", [X]);
 val(X) ->
    scalar:c(X).
 

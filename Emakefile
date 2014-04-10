@@ -16,6 +16,15 @@
    {parse_transform, lager_transform}
 ]}.
 
+{"examples/tls/src/*", [
+   report, 
+   verbose, 
+   {i, "include"}, 
+   {outdir, "examples/tls/ebin"},
+   debug_info, 
+   {parse_transform, lager_transform}
+]}.
+
 {"examples/http/src/*", [
    report, 
    verbose, 

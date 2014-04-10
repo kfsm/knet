@@ -16,29 +16,42 @@
 %%   limitations under the License.
 %%
 %% @description
-%%   example http application
--module(http_app).
--behaviour(application).
+%%   example tcp/ip application
+-module(tls_protocol).
+-behaviour(pipe).
 
 -export([
-   start/2,
-   stop/1
+	start_link/1,
+	init/1,
+	free/2,
+	ioctl/2,
+	handle/3
 ]).
 
-start(_Type, _Args) -> 
-   {ok,   _} = knet:listen("http://*:8888", [
-   	{acceptor, http_protocol}, 
-   	{pool,     256}, 
-   	{backlog,  256}
-   ]),
-   {ok,   _} = knet:listen("https://*:8443", [
-      {acceptor, http_protocol}
-     ,{pool,     256}
-     ,{backlog,  256}
-     ,{certfile, filename:join([code:priv_dir(http), "server.crt"])}
-     ,{keyfile,  filename:join([code:priv_dir(http), "server.key"])}
-   ]),
-   http_sup:start_link(). 
+%%
+%%
+start_link(Uri) ->
+	pipe:start_link(?MODULE, [Uri], []).
 
-stop(_State) ->
-   ok.
+init([Uri]) ->
+	{ok, Sock} = knet:bind(Uri),
+	{ok, handle, Sock}.
+
+free(_, Sock) ->
+	knet:close(Sock).
+
+%%
+ioctl(_, _) ->
+	throw(not_implemented).
+
+%%
+%%
+handle({ssl, _Peer, established}, _Pipe, Sock) ->
+	{next_state, handle, Sock};
+
+handle({ssl, _Peer, Msg}, Pipe, Sock) ->
+	pipe:a(Pipe, Msg),
+	{next_state, handle, Sock}.
+
+
+

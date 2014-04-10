@@ -1,13 +1,12 @@
 {code_paths,      [
 	"./ebin" 
+  ,"./deps/datum"
   ,"./deps/feta"
-  ,"./deps/kfsm"
-  ,"./deps/plib"
+  ,"./deps/goldrush"
+  ,"./deps/htstream"
+  ,"./deps/lager"
   ,"./deps/pipe"
   ,"./deps/pns"
-  ,"./deps/htstream"
-  ,"./deps/datum"
-  ,"./deps/lager"
 ]}.
 {log_level,       info}.
 {report_interval, 1}.
@@ -25,5 +24,6 @@
    {do,  1} 
 ]}.
 
-{url,       "http://localhost:8080/"}.
+%% {url,       "http://localhost:8888/"}.
+{url,       "https://localhost:8443/"}.
 {keepalive, 5}.

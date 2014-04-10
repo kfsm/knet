@@ -31,8 +31,6 @@
   ,ioctl/2
   ,'IDLE'/3
   ,'ACTIVE'/3
-  %% daemon api
-
 ]).
 
 %% internal state
@@ -150,18 +148,4 @@ socket(Pid) ->
 %%% private
 %%%
 %%%------------------------------------------------------------------   
-
-
-   % Service = pns:whereis(knet,  {service, uri:s(Uri)}),
-   % Port    = uri:get(port, Uri),
-   % ok      = pns:register(knet, {tcp, {any, Port}}, self()),
-   % % socket opts for listener socket requires {active, false}
-   % Opts = [{active, false}, {reuseaddr, true} | lists:keydelete(active, 1, S#fsm.sopt)],
-   % % @todo bind to address
-   % case gen_tcp:listen(Port, Opts) of
-   %    {ok, Sock} -> 
-   %       ?DEBUG("knet tcp ~p: listen ~p", [self(), Port]),
-   %       _ = pipe:a(Pipe, {tcp, {any, Port}, listen}),
-   %       [{ok, _} = knet_service_sup:init_acceptor(Service, Uri) || _ <- lists:seq(1, S#fsm.pool)],
-
 

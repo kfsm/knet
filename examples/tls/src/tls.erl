@@ -16,29 +16,10 @@
 %%   limitations under the License.
 %%
 %% @description
-%%   example http application
--module(http_app).
--behaviour(application).
+%%   example tcp/ip application
+-module(tls).
 
--export([
-   start/2,
-   stop/1
-]).
+-export([start/0]).
 
-start(_Type, _Args) -> 
-   {ok,   _} = knet:listen("http://*:8888", [
-   	{acceptor, http_protocol}, 
-   	{pool,     256}, 
-   	{backlog,  256}
-   ]),
-   {ok,   _} = knet:listen("https://*:8443", [
-      {acceptor, http_protocol}
-     ,{pool,     256}
-     ,{backlog,  256}
-     ,{certfile, filename:join([code:priv_dir(http), "server.crt"])}
-     ,{keyfile,  filename:join([code:priv_dir(http), "server.key"])}
-   ]),
-   http_sup:start_link(). 
-
-stop(_State) ->
-   ok.
+start() ->
+	applib:boot(?MODULE, knet:config()).

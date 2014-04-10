@@ -3,7 +3,7 @@
 %% build config
 %%
 %%-----------------------------------------------------------------------------
--define(CONFIG_DEBUG,    true).
+%-define(CONFIG_DEBUG,    true).
 
 %% default access log configuration
 -define(CONFIG_ACCESS_LOG,       [tcp, ssl, http, ssh]).
@@ -81,7 +81,7 @@
      ,password
      ,cacert
      ,cacertfile
-     ,ciphers
+     % ,ciphers -- option is explicitly defined by knet_ssl
    ]
 ).
 

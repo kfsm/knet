@@ -1,15 +1,16 @@
-{application, tcp,
+{application, tls,
    [
-      {description, "konduit network library - tcp example"},
+      {description, "konduit network library - ssl example"},
       {vsn,         "1.1.0"},
       {modules,     []},
       {registered,  []},
       {applications,[
          kernel, 
          stdlib,
-         knet
+         knet,
+         ssl
       ]},
-      {mod, {tcp_app, []}},
+      {mod, {tls_app, []}},
       {env, []}
    ]
 }.  

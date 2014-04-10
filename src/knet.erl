@@ -23,6 +23,8 @@
    listen/2
   ,bind/1
   ,bind/2
+  ,socket/1
+  ,socket/2
   ,connect/1 
   ,connect/2 
   ,close/1
@@ -33,6 +35,8 @@
   ,which/1
   ,acceptor/2
 ]).
+
+%% @todo: socket/ -> return empty (idle) socket
 
 %%
 %% start application
@@ -46,7 +50,7 @@ config() ->
       {error, bad_name} -> 
          "./priv/knet.config";
       Path ->
-         Path
+         filename:join([Path, "knet.config"])
    end.
 
 %%
@@ -122,6 +126,25 @@ bind(Url, Opts) ->
 bind(Url) ->
    bind(uri:new(Url), []).
 
+%%
+%% create socket
+-spec(socket/1 :: (any()) -> {ok, pid()} | {error, any()}).
+-spec(socket/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
+
+socket({uri, _, _}=Uri, Opts) ->
+   case supervisor:start_child(knet_sock_sup, [Uri, [{owner, self()}|Opts]]) of
+      {ok, Pid} -> 
+         knet_sock:socket(Pid);
+      Error     -> 
+         Error
+   end; 
+
+socket(Url, Opts) ->
+   socket(uri:new(Url), Opts).
+
+socket(Url) ->
+   socket(uri:new(Url), []).
+
 
 %%
 %% connect socket to remote peer
@@ -133,14 +156,13 @@ bind(Url) ->
 -spec(connect/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
 
 connect({uri, _, _}=Uri, Opts) ->
-   case supervisor:start_child(knet_sock_sup, [Uri, [{owner, self()}|Opts]]) of
-      {ok, Pid} -> 
-         {ok, Sock} = knet_sock:socket(Pid),
-         _ = pipe:send(Sock, {connect, Uri}),
+   case socket(Uri) of
+      {ok, Sock} -> 
+         _  = pipe:send(Sock, {connect, Uri}),
          {ok, Sock};
       Error     -> 
          Error
-   end; 
+   end;
 
 connect(Url, Opts) ->
    connect(uri:new(Url), Opts).

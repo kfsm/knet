@@ -34,8 +34,8 @@
 %%
 %%
 new(_Id) ->
+   _ = ssl:start(),
 	_ = knet:start(),
-
  	lager:set_loglevel(lager_console_backend, basho_bench_config:get(log_level, info)),
  	{ok,
  		#fsm{
@@ -46,9 +46,28 @@ new(_Id) ->
 %%
 %%
 run(do, _KeyGen, ValGen, #fsm{url={uri, tcp, _}}=S) ->
-	do_tcp(ValGen, S);
+   try
+      do_tcp(ValGen, S)
+   catch _:Reason ->
+      lager:error("process crash: ~p~n~p~n", [Reason, erlang:get_stacktrace()]),
+      {error, crash, S}
+   end;
+
 run(do, _KeyGen, ValGen, #fsm{url={uri, http, _}}=S) ->
-	do_http(ValGen, S).
+   try
+	  do_http(ValGen, S)
+   catch _:Reason ->
+      lager:error("process crash: ~p~n~p~n", [Reason, erlang:get_stacktrace()]),
+      {error, crash, S}
+   end;
+
+run(do, _KeyGen, ValGen, #fsm{url={uri, https, _}}=S) ->
+   try
+     do_http(ValGen, S)
+   catch _:Reason ->
+      lager:error("process crash: ~p~n~p~n", [Reason, erlang:get_stacktrace()]),
+      {error, crash, S}
+   end.
 
 
 %%%------------------------------------------------------------------
@@ -63,14 +82,14 @@ do_tcp(ValGen, #fsm{sock=undefined}=S)	->
    do_tcp(ValGen, 
    	S#fsm{
    		sock   = Sock,
-   		expire = tempus:sec(tempus:inc(basho_bench_config:get(keepalive, 5)))
+   		expire = ttl()
    	}
    );
 
 do_tcp(ValGen, S) ->
 	_ = pipe:send(S#fsm.sock, ValGen()),
 	_ = do_tcp_recv(),
-	Sock = case tempus:sec() of
+	Sock = case os:timestamp() of
 		X when X > S#fsm.expire ->
 			knet:close(S#fsm.sock),
 			undefined;
@@ -96,12 +115,12 @@ do_tcp_recv() ->
 %%%------------------------------------------------------------------   
 
 do_http(ValGen, #fsm{sock=undefined}=S)	->
-   {ok, Sock} = knet:socket(uri:get(schema, S#fsm.url), []),
+   {ok, Sock} = knet:socket(S#fsm.url, []),
    _ = pipe:recv(), 
    do_http(ValGen, 
    	S#fsm{
    		sock   = Sock,
-   		expire = tempus:sec(tempus:inc(basho_bench_config:get(keepalive, 5)))
+   		expire = ttl()
    	}
    );
 
@@ -111,12 +130,12 @@ do_http(ValGen, S) ->
 		{'Accept',       [{'*', '*'}]}, 
 		{'Content-Type', {text, plain}}, 
 		{'Transfer-Encoding', <<"chunked">>},
-		{'Host',   {"localhost", 8080}}
+		{'Host',   uri:authority(S#fsm.url)}
 	]}),
 	_ = pipe:send(S#fsm.sock, ValGen()),
 	_ = pipe:send(S#fsm.sock, eof),
 	_ = do_http_recv(),
-	Sock = case tempus:sec() of
+	Sock = case os:timestamp() of
 		X when X > S#fsm.expire ->
 			knet:close(S#fsm.sock),
 			undefined;
@@ -136,3 +155,10 @@ do_http_recv() ->
 		_ ->
 			do_http_recv()
 	end.
+
+ttl() ->
+   tempus:add(
+      os:timestamp(),
+      tempus:t(s, basho_bench_config:get(keepalive, 5))
+   ).
+
