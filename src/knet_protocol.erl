@@ -29,31 +29,24 @@
 %% init protocol pipeline
 -spec(init/2 :: (atom(), list()) -> [pid()]).
 
-init(tcp, Opts) ->
-   {ok, A} = knet_tcp:start_link(Opts),
-   bind([A], Opts);
+init(Prot, Opts) ->
+   bind(Opts, 
+      lists:map(
+         fun(Mod) ->
+            {ok, Pid} = Mod:start_link(Opts),
+            Pid
+         end,
+         opts:val(Prot, pipeline(Prot), knet)
+      )
+   ).
 
-init(ssl, Opts) ->
-   {ok, A} = knet_ssl:start_link(Opts),
-   bind([A], Opts);
-
-init(ssh, Opts) ->
-   {ok, A} = knet_ssh:start_link(Opts),
-   bind([A], Opts);
-
-init(udp, Opts) ->
-   {ok, A} = knet_udp:start_link(Opts),
-   bind([A], Opts);
-
-init(http, Opts) ->
-   {ok, A} = knet_tcp:start_link(Opts),
-   {ok, B} = knet_http:start_link(Opts),
-   bind([A, B], Opts);
-
-init(https, Opts) ->
-   {ok, A} = knet_ssl:start_link(Opts),
-   {ok, B} = knet_http:start_link(Opts),
-   bind([A, B], Opts).
+pipeline(tcp)  -> [knet_tcp];
+pipeline(ssl)  -> [knet_ssl];
+pipeline(ssh)  -> [knet_ssh];
+pipeline(udp)  -> [knet_udp];
+pipeline(http) -> [knet_tcp, knet_http];
+pipeline(https)-> [knet_ssl, knet_http];
+pipeline(_)    -> []. 
 
 
 %%
@@ -79,14 +72,14 @@ is_accept_socket(_)   -> true.
 
 %%
 %% bind socket pipeline with owner process
-bind(Prot, Opts) ->
+bind(Opts, Pipe) ->
    Owner = opts:val(owner, Opts),
    case opts:val(nopipe, undefined, Opts) of
       undefined ->
-         _ = pipe:make(Prot ++ [Owner]),
-         Prot;
+         _ = pipe:make(Pipe ++ [Owner]),
+         Pipe;
       nopipe    ->
-         _ = pipe:make(Prot),
-         Prot
+         _ = pipe:make(Pipe),
+         Pipe
    end.
 
