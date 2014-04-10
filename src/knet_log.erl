@@ -26,7 +26,10 @@ addr_src(_, undefined) ->
 addr_src(_, {uri, _, _}=Uri) ->   
    scalar:c(uri:s(Uri));
 addr_src(_, {IP, _Port}) ->
-   inet_parse:ntoa(IP).
+   inet_parse:ntoa(IP);
+addr_src(Prot, Port)
+ when is_integer(Port) ->
+   addr_src(Prot, {{0,0,0,0}, Port}).
 
 %%
 %%
@@ -35,7 +38,10 @@ addr_dst(_, undefined) ->
 addr_dst(_, {uri, _, _}=Uri) ->
    scalar:c(uri:s(Uri));
 addr_dst(Prot, {IP, Port}) ->
-   [scalar:c(Prot), "://", inet_parse:ntoa(IP), $:, scalar:c(Port)].
+   [scalar:c(Prot), "://", inet_parse:ntoa(IP), $:, scalar:c(Port)];
+addr_dst(Prot, Port)
+ when is_integer(Port) ->
+   addr_dst(Prot, {{0,0,0,0}, Port}).
 
 %%
 %%
