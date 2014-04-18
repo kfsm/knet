@@ -67,6 +67,7 @@
      ,tos
      ,inet
      ,inet6
+     ,ip
    ]
 ).
 
