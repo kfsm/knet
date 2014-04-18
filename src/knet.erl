@@ -156,7 +156,7 @@ socket(Url) ->
 -spec(connect/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
 
 connect({uri, _, _}=Uri, Opts) ->
-   case socket(Uri) of
+   case socket(Uri, Opts) of
       {ok, Sock} -> 
          _  = pipe:send(Sock, {connect, Uri}),
          {ok, Sock};

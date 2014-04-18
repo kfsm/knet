@@ -132,6 +132,7 @@ ioctl(socket,   S) ->
    SOpt = opts:filter(?SO_TCP_ALLOWED, S#fsm.so),
    Tout = opts:val(peer, ?SO_TIMEOUT, S#fsm.timeout),
    T    = os:timestamp(),
+   io:format("-> ~p~n", [S#fsm.so]),
    case gen_tcp:connect(Host, Port, SOpt, Tout) of
       {ok, Sock} ->
          Latency = tempus:diff(T),
