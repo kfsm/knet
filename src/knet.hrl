@@ -113,8 +113,7 @@
 ).
 
 %% default library-wide timeout
-%-define(SO_TIMEOUT,   10000).
--define(SO_TIMEOUT,   3600000).
+-define(SO_TIMEOUT,   10000).
 
 %% default library-wide pool size
 -define(SO_POOL,         10).

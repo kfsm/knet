@@ -38,6 +38,10 @@
   ,owner = undefined :: pid()     %% socket owner process
 }).
 
+%%
+%% timer to sleep
+-define(T_HIBERNATE,     5000).
+
 %%%------------------------------------------------------------------
 %%%
 %%% Factory
@@ -74,6 +78,7 @@ init([Uri, Opts]) ->
          ok
    end,
 
+   erlang:send_after(?T_HIBERNATE, self(), timeout),
    {ok, 'ACTIVE', 
       #fsm{
          sock  = Sock
@@ -106,7 +111,7 @@ socket(Pid) ->
 
 'ACTIVE'(socket, Tx, S) ->
    pipe:ack(Tx, {ok, lists:last(S#fsm.sock)}),
-   {next_state, 'ACTIVE', S};
+   {next_state, 'ACTIVE', S, ?T_HIBERNATE};
 
 'ACTIVE'({'EXIT', _Pid, normal}, _, S) ->
    free_socket(S#fsm.sock),
@@ -122,9 +127,12 @@ socket(Pid) ->
    free_socket(S#fsm.sock),
    {stop, normal, S};
 
-'ACTIVE'(Msg, _, Sock) ->
+'ACTIVE'(timeout, _, #fsm{}=S) ->
+   {next_state, 'ACTIVE', S, hibernate};
+
+'ACTIVE'(Msg, _, S) ->
    ?WARNING("knet [sock]: unexpected message", [Msg]),
-   {next_state, 'ACTIVE', Sock}.
+   {next_state, 'ACTIVE', S, ?T_HIBERNATE}.
 
 %%%------------------------------------------------------------------
 %%%

@@ -32,7 +32,8 @@
    ioctl/2,
    'IDLE'/3, 
    'LISTEN'/3, 
-   'ESTABLISHED'/3
+   'ESTABLISHED'/3,
+   'HIBERNATE'/3
 ]).
 
 %% internal state
@@ -42,9 +43,11 @@
   ,addr = undefined :: any()    %% local address
 
   ,active      = true        :: once | true | false  %% socket activity (pipe internally uses active once)
-  ,so          = [] :: [any()]               %% socket options
-  ,timeout     = [] :: [{atom(), timeout()}] %% socket timeouts 
-  ,session     = undefined   :: tempus:t()   %% session start timestamp
+  ,so          = [] :: [any()]                 %% socket options
+  ,timeout     = [] :: [{atom(), timeout()}]   %% socket timeouts 
+  ,session     = undefined   :: tempus:t()     %% session start time-stamp
+  ,t_hibernate = undefined   :: tempus:timer() %% socket hibernate timeout
+  % ,t_io        = undefined   :: temput:timer() %% socket i/o timeout
 
   ,pool        = 0         :: integer()      %% socket acceptor pool size
   ,stats       = undefined :: pid()          %% knet stats functor
@@ -66,12 +69,14 @@ start_link(Opts) ->
 %%
 init(Opts) ->
    Stream  = opts:val(stream, raw, Opts),
-   Timeout = opts:val(timeout, [], Opts),
+   Timeout = opts:val(timeout, [], Opts), %% @todo: take timeout opts 
    {ok, 'IDLE',
       #fsm{
          active  = opts:val(active, Opts)
         ,so      = Opts
         ,timeout = Timeout
+        ,t_hibernate = opts:val(hibernate, undefined, Timeout)
+        % ,t_io        = opts:val(io,        undefined, Timeout) 
         ,pool    = opts:val(pool, 0, Opts)
         ,stats   = opts:val(stats, undefined, Opts)
         ,recv    = knet_stream:new(Stream)
@@ -137,10 +142,12 @@ ioctl(socket,   S) ->
          Latency = tempus:diff(T),
          {next_state, 'ESTABLISHED',
             so_stats({connect, Latency},
-               so_set_io_timeout(opts:val(io, ?SO_TIMEOUT, S#fsm.timeout),
-                  so_ioctl(
-                     so_connected(Pipe, Latency,
-                        so_set_port(Sock, S)
+               so_set_timeout_hibernate(
+                  so_set_timeout_io(opts:val(io, ?SO_TIMEOUT, S#fsm.timeout),
+                     so_ioctl(
+                        so_connected(Pipe, Latency,
+                           so_set_port(Sock, S)
+                        )
                      )
                   )
                )
@@ -162,10 +169,12 @@ ioctl(socket,   S) ->
       {ok, Sock} ->
          {ok,    _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri]),
          {next_state, 'ESTABLISHED', 
-            so_set_io_timeout(opts:val(io, ?SO_TIMEOUT, S#fsm.timeout),
-               so_ioctl(
-                  so_accepted(Pipe, tempus:diff(T), 
-                     so_set_port(Sock, S)
+            so_set_timeout_hibernate(
+               so_set_timeout_io(opts:val(io, ?SO_TIMEOUT, S#fsm.timeout),
+                  so_ioctl(
+                     so_accepted(Pipe, tempus:diff(T), 
+                        so_set_port(Sock, S)
+                     )
                   )
                )
             )
@@ -233,11 +242,14 @@ ioctl(socket,   S) ->
    %% check i/o activity on the channel
    case knet_stream:packets(S#fsm.recv) + knet_stream:packets(S#fsm.send) of
       X when X > N ->
-         {next_state, 'ESTABLISHED', so_set_io_timeout(Timeout, S)};
+         {next_state, 'ESTABLISHED', so_set_timeout_io(Timeout, S)};
       _ ->
          ?DEBUG("knet [tcp]: connection ~p is idle", [S#fsm.peer]),
          {stop, normal, so_terminated(timeout, Pipe, S)}
    end;
+
+'ESTABLISHED'(hibernate, _, S) ->
+   {next_state, 'HIBERNATE', S, hibernate};
 
 %% @todo {_, Pckt}
 'ESTABLISHED'(Pckt, Pipe, S)
@@ -248,6 +260,11 @@ ioctl(socket,   S) ->
    catch _:{badmatch, {error, Reason}} ->
       {stop, Reason, so_terminated(Reason, Pipe, S)}
    end.
+
+
+'HIBERNATE'(Msg, Pipe, S) ->
+   'ESTABLISHED'(Msg, Pipe, S#fsm{t_hibernate=tempus:reset(S#fsm.t_hibernate, hibernate)}).
+
 
 %%%------------------------------------------------------------------
 %%%
@@ -304,10 +321,15 @@ so_ioctl(#fsm{}=S) ->
 
 %%
 %%
-so_set_io_timeout(Timeout, #fsm{}=S) ->
+so_set_timeout_io(Timeout, #fsm{}=S) ->
    Pack = knet_stream:packets(S#fsm.recv) + knet_stream:packets(S#fsm.send),
    tempus:event(Timeout, {iocheck, Timeout, Pack}),
    S.
+
+so_set_timeout_hibernate(#fsm{}=S) ->
+   S#fsm{
+      t_hibernate = tempus:event(S#fsm.t_hibernate, hibernate)
+   }.
 
 %%
 %% update socket statistic
