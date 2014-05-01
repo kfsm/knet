@@ -96,7 +96,7 @@ decode(Pckt, Acc, #stream{type=line}=S) ->
          Msg = erlang:iolist_to_binary(
             deq:list(deq:enq(Head, S#stream.q))
          ),
-         decode(Tail, [Msg | Acc], 
+         decode(binary:copy(Tail), [Msg | Acc], 
             S#stream{
                packet = S#stream.packet + 1
               ,octet  = S#stream.octet  + erlang:iolist_size(Msg)
