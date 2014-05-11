@@ -50,8 +50,8 @@
    peer      = undefined :: any(),           % remote peer address
    req       = undefined :: datum:q(),       % queue of server requests
 
-   stats       = undefined :: pid(),         % knet stats function
-   ts          = undefined :: integer()      % stats timestamp
+   trace     = undefined :: pid(),         % knet stats function
+   ts        = undefined :: integer()      % stats timestamp
 }).
 
 %%%------------------------------------------------------------------
@@ -71,7 +71,7 @@ init(Opts) ->
          recv    = htstream:new(),
          send    = htstream:new(),
          req     = q:new(),
-         stats   = opts:val(stats, undefined, Opts) 
+         trace   = opts:val(trace, undefined, Opts) 
       }
    }.
 
@@ -164,7 +164,7 @@ ioctl(_, _) ->
       %% TODO: expand http headers (Date + Server + Connection)
       {stop, normal, http_outbound(eof, Pipe, S)}
    catch _:Reason ->
-      io:format("----> ~p ~p~n", [Reason, erlang:get_stacktrace()]),      
+      % io:format("----> ~p ~p~n", [Reason, erlang:get_stacktrace()]),      
       {stop, normal, http_failure(Reason, Pipe, b, S)}
    end;
 
@@ -173,7 +173,7 @@ ioctl(_, _) ->
       %% TODO: expand http headers (Date + Server + Connection)
       {next_state, 'SERVER', http_outbound(Msg, Pipe, S), S#fsm.timeout}
    catch _:Reason ->
-      io:format("----> ~p ~p~n", [Reason, erlang:get_stacktrace()]),
+      % io:format("----> ~p ~p~n", [Reason, erlang:get_stacktrace()]),
       {next_state, 'SERVER', http_failure(Reason, Pipe, b, S), S#fsm.timeout}
    end.
 
@@ -200,7 +200,7 @@ ioctl(_, _) ->
    case htstream:state(S#fsm.recv) of
       payload -> 
          % time to meaningful response
-         _ = so_stats({ttmr, tempus:diff(S#fsm.ts)}, S),         
+         _ = knet:trace(S#fsm.trace, {http, ttmr, tempus:diff(S#fsm.ts)}),         
          _ = pipe:b(Pipe, {http, S#fsm.url, eof});
       _       -> 
          ok
@@ -270,7 +270,7 @@ http_inbound(Pckt, Peer, Pipe, S)
    case htstream:state(Http) of
       eof -> 
          % time to meaningful response
-         _ = so_stats({ttmr, tempus:diff(S#fsm.ts)}, S),
+         _ = knet:trace(S#fsm.trace, {http, ttmr, tempus:diff(S#fsm.ts)}),
          _ = pipe:b(Pipe, {http, Url, eof}),
          case htstream:http(Http) of
             {request,  _} ->
@@ -280,7 +280,7 @@ http_inbound(Pckt, Peer, Pipe, S)
          end;
       eoh -> 
          % time to first byte
-         _ = so_stats({ttfb, tempus:diff(S#fsm.ts)}, S),
+         _ = knet:trace(S#fsm.trace, {http, ttfb, tempus:diff(S#fsm.ts)}),
          http_inbound(<<>>, Peer, Pipe, S#fsm{url=Url, keepalive=Alive, recv=Http, ts=os:timestamp()});
       _   -> 
          S#fsm{url=Url, keepalive=Alive, recv=Http}
@@ -337,12 +337,3 @@ pass_inbound_http([], _Peer, _Url, _Pipe) ->
 pass_inbound_http(Chunk, _Peer, Url, Pipe) 
  when is_list(Chunk) ->
    _ = pipe:b(Pipe, {http, Url, iolist_to_binary(Chunk)}).
-
-
-%% handle socket statistic
-so_stats(_List, #fsm{stats=undefined}) ->
-   ok;
-so_stats(List,  #fsm{stats=Pid, url=Url})
- when is_pid(Pid) ->
-   pipe:send(Pid, {stats, {http, Url}, List}).
-

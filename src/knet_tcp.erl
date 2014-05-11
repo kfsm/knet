@@ -20,6 +20,7 @@
 %%
 %% @todo
 %%   * bind to interface / address
+%%   * send stats signal (before data (clean up stats handling))
 -module(knet_tcp).
 -behaviour(pipe).
 
@@ -50,7 +51,7 @@
   % ,t_io        = undefined   :: temput:timer() %% socket i/o timeout
 
   ,pool        = 0         :: integer()      %% socket acceptor pool size
-  ,stats       = undefined :: pid()          %% knet stats functor
+  ,trace       = undefined :: pid()          %% latency trace process
 
    %% data streams
   ,recv        = undefined :: any()          %% recv data stream
@@ -78,7 +79,7 @@ init(Opts) ->
         ,t_hibernate = opts:val(hibernate, undefined, Timeout)
         % ,t_io        = opts:val(io,        undefined, Timeout) 
         ,pool    = opts:val(pool, 0, Opts)
-        ,stats   = opts:val(stats, undefined, Opts)
+        ,trace   = opts:val(trace, undefined, Opts)
         ,recv    = knet_stream:new(Stream)
         ,send    = knet_stream:new(Stream)        
       }
@@ -140,14 +141,13 @@ ioctl(socket,   S) ->
    case gen_tcp:connect(Host, Port, SOpt, Tout) of
       {ok, Sock} ->
          Latency = tempus:diff(T),
+         ok = knet:trace(S#fsm.trace, {tcp, connect, Latency}),
          {next_state, 'ESTABLISHED',
-            so_stats({connect, Latency},
-               so_set_timeout_hibernate(
-                  so_set_timeout_io(opts:val(io, ?SO_TIMEOUT, S#fsm.timeout),
-                     so_ioctl(
-                        so_connected(Pipe, Latency,
-                           so_set_port(Sock, S)
-                        )
+            so_set_timeout_hibernate(
+               so_set_timeout_io(opts:val(io, ?SO_TIMEOUT, S#fsm.timeout),
+                  so_ioctl(
+                     so_connected(Pipe, Latency,
+                        so_set_port(Sock, S)
                      )
                   )
                )
@@ -227,11 +227,10 @@ ioctl(socket,   S) ->
    %% {active, once}.
    %% TODO: flexible flow control + explicit read
    {Queue, Stream} = knet_stream:decode(Pckt, S#fsm.recv),
+   ok = knet:trace(S#fsm.trace, {tcp, packet, byte_size(Pckt)}),
    {next_state, 'ESTABLISHED', 
-      so_stats({packet, byte_size(Pckt)},
-         so_ioctl(
-            recv_q(Queue, Pipe, S#fsm{recv = Stream})
-         )
+      so_ioctl(
+         recv_q(Queue, Pipe, S#fsm{recv = Stream})
       )
    };
 
@@ -330,15 +329,6 @@ so_set_timeout_hibernate(#fsm{}=S) ->
    S#fsm{
       t_hibernate = tempus:event(S#fsm.t_hibernate, hibernate)
    }.
-
-%%
-%% update socket statistic
-so_stats(_Event, #fsm{stats=undefined}=S) ->
-   S;
-so_stats(Event,  #fsm{stats=Pid}=S)
- when is_pid(Pid) ->
-   _ = pipe:send(Pid, {stats, {tcp, S#fsm.peer}, os:timestamp(), Event}),
-   S.
 
 %%
 %% receive packet queue to pipeline

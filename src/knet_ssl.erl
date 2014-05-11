@@ -41,7 +41,7 @@
   ,peer = undefined :: any()    %% peer address  
   ,addr = undefined :: any()    %% local address
 
-  ,cert    = undefined :: [any()]  % list of certificates
+  ,cert    = [] :: [any()]  % list of certificates
   ,ciphers = undefined :: []       % list of supported ciphers
 
   ,active      = true        :: once | true | false  %% socket activity (pipe internally uses active once)
@@ -50,7 +50,7 @@
   ,session     = undefined   :: tempus:t()   %% session start timestamp
 
   ,pool        = 0         :: integer()      %% socket acceptor pool size
-  ,stats       = undefined :: pid()          %% knet stats functor
+  ,trace       = undefined :: pid()          %% trace functor
 
    %% data streams
   ,recv        = undefined :: any()          %% recv data stream
@@ -77,7 +77,7 @@ init(Opts) ->
         ,ciphers = opts:val(ciphers, cipher_suites(), Opts)
         ,timeout = Timeout
         ,pool    = opts:val(pool, 0, Opts)
-        ,stats   = opts:val(stats, undefined, Opts)
+        ,trace   = opts:val(trace, undefined, Opts)
         ,recv    = knet_stream:new(Stream)
         ,send    = knet_stream:new(Stream)        
       }
@@ -137,17 +137,16 @@ ioctl(socket,   S) ->
    T1   = os:timestamp(),
    case gen_tcp:connect(Host, Port, TOpt, Tout) of
       {ok, Tcp} ->
-         State = so_stats({connect, tempus:diff(T1)}, so_set_tcp_port(Tcp, S)),
+         ok = knet:trace(S#fsm.trace, {tcp, connect, tempus:diff(T1)}),
          T2 = os:timestamp(),
          case ssl:connect(Tcp, [{verify_fun, {fun ssl_ca_hook/3, self()}}, {ciphers, S#fsm.ciphers} | SOpt], Tout) of
             {ok, Sock} ->
+               ok = knet:trace(S#fsm.trace, {ssl, handshake, tempus:diff(T2)}),
                {next_state, 'ESTABLISHED',
-                  so_stats({handshake, tempus:diff(T2)},
-                     so_set_io_timeout(opts:val(io, ?SO_TIMEOUT, S#fsm.timeout),
-                        so_ioctl(
-                           so_connected(Pipe, tempus:diff(T1),
-                              so_set_ssl_port(Sock, State)
-                           )
+                  so_set_io_timeout(opts:val(io, ?SO_TIMEOUT, S#fsm.timeout),
+                     so_ioctl(
+                        so_connected(Pipe, tempus:diff(T1),
+                           so_set_ssl_port(Sock, S)
                         )
                      )
                   )
@@ -234,11 +233,10 @@ ioctl(socket,   S) ->
    %% {active, once}.
    %% TODO: flexible flow control + explicit read
    {Queue, Stream} = knet_stream:decode(Pckt, S#fsm.recv),
+   ok = knet:trace(S#fsm.trace, {ssl, packet, byte_size(Pckt)}),
    {next_state, 'ESTABLISHED', 
-      so_stats({packet, byte_size(Pckt)},
-         so_ioctl(
-            recv_q(Queue, Pipe, S#fsm{recv = Stream})
-         )
+      so_ioctl(
+         recv_q(Queue, Pipe, S#fsm{recv = Stream})
       )
    };
 
@@ -263,8 +261,8 @@ ioctl(socket,   S) ->
    };
 
 'ESTABLISHED'({ssl_cert, peer, Cert}, _Pipe, S) ->
-   % Pckt = [public_key:pkix_encode('OTPCertificate', X, otp) || X <- [Cert | S#fsm.cert]],
-   % so_stats({packet, {0,0,0}, erlang:iolist_size(Pckt)}, S),
+   Pckt = [public_key:pkix_encode('OTPCertificate', X, otp) || X <- [Cert | S#fsm.cert]],
+   ok   = knet:trace(S#fsm.trace, {ssl, packet, erlang:iolist_size(Pckt)}), 
    {next_state, 'ESTABLISHED', 
       S#fsm{
          cert = [Cert | S#fsm.cert]
@@ -346,15 +344,6 @@ so_ioctl(#fsm{}=S) ->
 so_set_io_timeout(Timeout, #fsm{}=S) ->
    Pack = knet_stream:packets(S#fsm.recv) + knet_stream:packets(S#fsm.send),
    tempus:event(Timeout, {iocheck, Timeout, Pack}),
-   S.
-
-%%
-%% update socket statistic
-so_stats(_Event, #fsm{stats=undefined}=S) ->
-   S;
-so_stats(Event,  #fsm{stats=Pid}=S)
- when is_pid(Pid) ->
-   _ = pipe:send(Pid, {stats, {ssl, S#fsm.peer}, os:timestamp(), Event}),
    S.
 
 %%

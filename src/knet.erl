@@ -34,9 +34,12 @@
 
   ,which/1
   ,acceptor/2
+  ,trace/2
 ]).
 
-%% @todo: socket/ -> return empty (idle) socket
+%% @todo: 
+%%   * socket/ -> return empty (idle) socket
+%%   * monitor socket (link)
 
 %%
 %% start application
@@ -216,6 +219,18 @@ which(_) ->
 
 acceptor(Fun, Uri) ->
    {ok, erlang:spawn_link(fun() -> bind(Uri), pipe:loop(Fun) end)}.
+
+
+%%
+%% send trace message
+-spec(trace/2 :: (pid(), any()) -> ok).
+
+trace(undefined, _Msg) ->
+   ok;
+trace(Pid, Msg) ->
+   _ = pipe:send(Pid, {trace, self(), os:timestamp(), Msg}),
+   ok.
+
 
 %%%------------------------------------------------------------------
 %%%
