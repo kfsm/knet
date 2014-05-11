@@ -84,6 +84,8 @@
      ,password
      ,cacert
      ,cacertfile
+     ,reuse_session
+     ,reuse_sessions
      % ,ciphers -- option is explicitly defined by knet_ssl
    ]
 ).
