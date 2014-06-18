@@ -2,9 +2,7 @@
    [
       {description, "knet socket api example"},
       {vsn,         "0.0.0"},
-      {modules,     [
-         sock
-      ]},
+      {modules,     []},
       {registered,  []},
       {applications,[
          kernel, 

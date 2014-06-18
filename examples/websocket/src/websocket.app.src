@@ -1,6 +1,6 @@
-{application, http,
+{application, websocket,
    [
-      {description, "konduit network library - http example"},
+      {description, "konduit network library - websocket example"},
       {vsn,         "0.0.0"},
       {modules,     []},
       {registered,  []},
@@ -10,7 +10,7 @@
          knet,
          ssl
       ]},
-      {mod, {http_app, []}},
+      {mod, {websocket_app, []}},
       {env, []}
    ]
 }.  

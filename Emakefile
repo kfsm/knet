@@ -33,3 +33,13 @@
    debug_info, 
    {parse_transform, lager_transform}
 ]}.
+
+{"examples/websocket/src/*", [
+   report, 
+   verbose, 
+   {i, "include"}, 
+   {outdir, "examples/websocket/ebin"},
+   debug_info, 
+   {parse_transform, lager_transform}
+]}.
+

@@ -46,6 +46,7 @@ pipeline(ssh)  -> [knet_ssh];
 pipeline(udp)  -> [knet_udp];
 pipeline(http) -> [knet_tcp, knet_http];
 pipeline(https)-> [knet_ssl, knet_http];
+pipeline(ws)   -> [knet_tcp, knet_ws];
 pipeline(_)    -> []. 
 
 

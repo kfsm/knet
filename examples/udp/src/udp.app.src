@@ -2,10 +2,7 @@
    [
       {description, "konduit network library - udp example"},
       {vsn,         "1.1.0"},
-      {modules,     [
-         udp_sup,
-         udp_app
-      ]},
+      {modules,     []},
       {registered,  []},
       {applications,[
          kernel, 

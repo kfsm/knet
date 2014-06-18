@@ -167,6 +167,11 @@ init_socket(https, Opts) ->
    {ok, B} = knet_http:start_link(Opts),
    [A, B];
 
+init_socket(ws, Opts) ->
+   {ok, A} = knet_tcp:start_link(Opts),
+   {ok, B} = knet_ws:start_link(Opts),
+   [A, B];
+
 init_socket(_, _Opts) ->
    %% TODO: implement hook for new scheme
    exit(not_implemented).
