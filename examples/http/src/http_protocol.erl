@@ -46,21 +46,21 @@ ioctl(_, _) ->
 
 %%
 %%
-handle({http, Url, {Method, Heads, _Env}}, Pipe, Sock) ->
-	_ = pipe:a(Pipe, {ok, [
+handle({http, _Sock, {Method, Url, Head, _Env}}, Pipe, Sock) ->
+   _ = pipe:a(Pipe, {ok, [
       {'Server', <<"knet">>},
       {'Transfer-Encoding', <<"chunked">>},
-      {'Connection', connection(Heads)}
+      {'Connection', connection(Head)}
    ]}),
-	{Msg, _} = htstream:encode({Method, uri:get(path, Url), Heads}, htstream:new()),
-   _ = pipe:a(Pipe, iolist_to_binary(Msg)),
+   {Msg, _} = htstream:encode({Method, uri:get(path, Url), Head}, htstream:new()),
+   pipe:a(Pipe, iolist_to_binary(Msg)),
 	{next_state, handle, Sock};
 
-handle({http, _Url, eof}, Pipe, Sock) ->
+handle({http, _Sock, eof}, Pipe, Sock) ->
 	pipe:a(Pipe, eof),
 	{next_state, handle, Sock};
 
-handle({http, _Url, Msg}, Pipe, Sock) ->
+handle({http, _Sock, Msg}, Pipe, Sock) ->
 	pipe:a(Pipe, Msg),
 	{next_state, handle, Sock}.
 

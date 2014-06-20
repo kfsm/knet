@@ -121,7 +121,10 @@
 -define(SO_POOL,         10).
 
 %% default identity of HTTP server
--define(HTTP_SERVER,        <<"knet">>).
+-define(HTTP_SERVER,           <<"knet">>).
+
+%% http date format
+-define(HTTP_DATE, "%a %b %d %H:%M:%S %Y").
 
 %% 
 %% logger macros

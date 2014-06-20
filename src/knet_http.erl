@@ -44,8 +44,8 @@
    url       = undefined :: any(),           % active request url
    keepalive = 'keep-alive' :: close | 'keep-alive', % 
    timeout   = undefined :: integer(),       % http keep alive timeout
-   recv      = undefined :: htstream:http(), % inbound  http state machine
-   send      = undefined :: htstream:http(), % outbound http state machine
+   recv      = undefined :: htstream:http(), % inbound  http stream
+   send      = undefined :: htstream:http(), % outbound http stream
 
    peer      = undefined :: any(),           % remote peer address
    req       = undefined :: datum:q(),       % queue of server requests
@@ -53,6 +53,10 @@
    trace     = undefined :: pid(),         % knet stats function
    ts        = undefined :: integer()      % stats timestamp
 }).
+
+%%
+%% check if transport protocol
+-define(is_transport(X),  (X =:= tcp orelse X =:= ssl)).
 
 %%%------------------------------------------------------------------
 %%%
@@ -131,50 +135,97 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'SERVER'(timeout, _Pipe, S) ->
-   {stop, normal, S};
+'SERVER'(timeout, _Pipe,  State) ->
+   {stop, normal, State};
 
-'SERVER'(shutdown, _Pipe, S) ->
-   {stop, normal, S};
+'SERVER'(shutdown, _Pipe, State) ->
+   {stop, normal, State};
 
-'SERVER'({tcp, Peer, established}, _, S) ->
-   {next_state, 'SERVER', S#fsm{schema=http,  ts=os:timestamp(), peer=Peer},  S#fsm.timeout};
+'SERVER'({Prot, Peer, established}, _, State)
+ when ?is_transport(Prot) ->
+   {next_state, 'SERVER', 
+      State#fsm{
+         schema = schema(Prot)
+        ,ts     = os:timestamp()
+        ,peer   = Peer
+      }
+     ,State#fsm.timeout
+   };
 
-'SERVER'({ssl, Peer, established}, _, S) ->
-   {next_state, 'SERVER', S#fsm{schema=https, ts=os:timestamp(), peer=Peer}, S#fsm.timeout};
-
-'SERVER'({Prot, _, {terminated, _}}, _Pipe, S)
- when Prot =:= tcp orelse Prot =:= ssl ->
-   {stop, normal, S};
+'SERVER'({Prot, _, {terminated, _}}, _Pipe, State)
+ when ?is_transport(Prot) ->
+   {stop, normal, State};
 
 %%
-%% remote client request
-'SERVER'({Prot, Peer, Pckt}, Pipe, S)
- when is_binary(Pckt), Prot =:= tcp orelse Prot =:= ssl ->
+%% remote peer request
+'SERVER'({Prot, Peer, Pckt}, Pipe, State)
+ when ?is_transport(Prot), is_binary(Pckt) ->
    try
-      {next_state, 'SERVER', http_inbound(Pckt, Peer, Pipe, S), S#fsm.timeout}
+      {Msg, Http} = htstream:decode(Pckt, State#fsm.recv),
+      case htstream:state(Http) of
+         upgrade ->
+            server_upgrade(Msg, Pipe, State#fsm{recv=Http});
+
+         eoh     ->
+            % time to first byte event
+            knet:trace(State#fsm.trace, {http, ttfb, tempus:diff(State#fsm.ts)}),
+            send_to_acceptor(Msg, Pipe, State),
+            'SERVER'({Prot, Peer, <<>>}, Pipe, State#fsm{recv = Http, ts=os:timestamp()});
+
+         eof     ->
+            knet:trace(State#fsm.trace, {http, ttmr, tempus:diff(State#fsm.ts)}),
+            send_to_acceptor(Msg, Pipe, State),
+            pipe:b(Pipe, {http, self(), eof}),
+            {next_state, 'SERVER',
+               State#fsm{
+                  recv = htstream:new(Http)
+                 ,req  = q:enq({State#fsm.ts, Http}, State#fsm.req)
+               }
+            };
+
+         _       ->
+            send_to_acceptor(Msg, Pipe, State),
+            {next_state, 'SERVER', State#fsm{recv=Http}}
+      end
    catch _:Reason ->
-      {next_state, 'SERVER', http_failure(Reason, Pipe, a, S), S#fsm.timeout}
+      % io:format("--> ~p ~p~n", [Reason, erlang:get_stacktrace()]),
+      pipe:a(Pipe, erlang:element(1, htstream:encode({Reason, make_head()}))),
+      {stop, normal, State#fsm{recv=htstream:new()}}
    end;
+
 
 %%
 %% local acceptor response
-'SERVER'(eof, Pipe, #fsm{keepalive = <<"close">>}=S) ->
+'SERVER'(Msg, Pipe, State) ->
    try
-      %% TODO: expand http headers (Date + Server + Connection)
-      {stop, normal, http_outbound(eof, Pipe, S)}
-   catch _:Reason ->
-      % io:format("----> ~p ~p~n", [Reason, erlang:get_stacktrace()]),      
-      {stop, normal, http_failure(Reason, Pipe, b, S)}
-   end;
+      {Pckt, Send} = htstream:encode(Msg, State#fsm.send),
+      send_to_transport(Pckt, Pipe, State),
+      case htstream:state(Send) of
+         %% end of response is received
+         eof ->
+            {{T, Recv}, Queue} = q:deq(State#fsm.req),
+            {_, {Mthd,  Url,  Head}} = htstream:http(Recv),
+            {_, {Code, _Msg, _Head}} = htstream:http(Send),
+            UserAgent  = opts:val('User-Agent', undefined, Head), 
+            Uri  = request_url(State#fsm.schema, Url, Head),
+            Byte = htstream:octets(Recv)  + htstream:octets(Send), 
+            Pack = htstream:packets(Recv) + htstream:packets(Send),
+            ?access_log(#log{prot=http, src=State#fsm.peer, dst=Uri, req=Mthd, rsp=Code, ua=UserAgent, byte=Byte, pack=Pack, time=tempus:diff(T)}),
+            case opts:val('Connection', undefined, Head) of
+               <<"close">>   ->
+                  {stop, normal, State#fsm{send=htstream:new(Send), req=Queue}};
+               _             ->
+                  {next_state, 'SERVER', State#fsm{send=htstream:new(Send), req=Queue}}
+            end;
 
-'SERVER'(Msg, Pipe, S) ->
-   try
-      %% TODO: expand http headers (Date + Server + Connection)
-      {next_state, 'SERVER', http_outbound(Msg, Pipe, S), S#fsm.timeout}
+         %%
+         _   ->
+            {next_state, 'SERVER', State#fsm{send=Send}}
+      end
    catch _:Reason ->
-      % io:format("----> ~p ~p~n", [Reason, erlang:get_stacktrace()]),
-      {next_state, 'SERVER', http_failure(Reason, Pipe, b, S), S#fsm.timeout}
+      io:format("--> ~p ~p~n", [Reason, erlang:get_stacktrace()]),
+      pipe:b(Pipe, erlang:element(1, htstream:encode({Reason, make_head()}))),
+      {stop, normal, State}
    end.
 
 
@@ -236,6 +287,49 @@ ioctl(_, _) ->
 %%%------------------------------------------------------------------
 
 %%
+%%
+schema(tcp) -> http;
+schema(ssl) -> https.
+
+%%
+%% make request uri
+request_url(Schema, {uri, _, _}=Url, Head) ->
+   case uri:authority(Url) of
+      undefined ->
+         {'Host', Authority} = lists:keyfind('Host', 1, Head),
+         uri:authority(Authority, uri:schema(Schema, Url));
+      _ ->
+         uri:schema(Schema, Url)
+   end;
+request_url(Schema, Url, Head) ->
+   request_url(Schema, uri:new(Url), Head).
+
+
+%%
+%% send message to acceptor
+send_to_acceptor([], _Pipe, _State) ->
+   ok;
+
+send_to_acceptor({Mthd, Url, Head}, Pipe, State) ->
+   Uri = request_url(State#fsm.schema, Url, Head),
+   pipe:b(Pipe, {http, self(), {Mthd, Uri, Head, make_env(Uri, Head, State)}});
+
+send_to_acceptor(Chunk, Pipe, State) ->
+   pipe:b(Pipe, {http, self(), erlang:iolist_to_binary(Chunk)}).
+
+%%
+%% send message to transport
+send_to_transport([], _Pipe,  _State) ->
+   ok;
+
+send_to_transport(Pckt, Pipe, _State) ->
+   pipe:b(Pipe, Pckt).
+
+
+
+
+
+%%
 %% handle outbound HTTP message
 http_outbound(Msg, Pipe, S) ->
    {Pckt, Http} = htstream:encode(Msg, S#fsm.send),
@@ -295,23 +389,7 @@ http_failure(Reason, Pipe, Side, S) ->
    S#fsm{recv = htstream:new()}.
 
 
-%%
-%% decode resource url
-request_url({Method, HttpUrl, Heads}, Schema, _Default)
- when is_atom(Method), is_binary(HttpUrl) ->
-   Url = uri:new(HttpUrl),
-   case uri:authority(Url) of
-      % TODO: uri make undefined authority
-      {undefined, undefined} ->
-         {'Host', Authority} = lists:keyfind('Host', 1, Heads),
-         uri:authority(Authority,
-            uri:schema(Schema, Url)
-         );
-      _ ->
-         uri:schema(Schema, Url)
-   end;
-request_url(_, _, Default) ->
-   Default.
+
 
 %%
 %% decode request header
@@ -337,3 +415,120 @@ pass_inbound_http([], _Peer, _Url, _Pipe) ->
 pass_inbound_http(Chunk, _Peer, Url, Pipe) 
  when is_list(Chunk) ->
    _ = pipe:b(Pipe, {http, Url, iolist_to_binary(Chunk)}).
+
+
+% %%
+% %% server decode request / response
+% server_decode_request(Pckt, Pipe, #fsm{}=State) ->
+%    case htstream:decode(Pckt, State#fsm.recv) of
+%       %% nothing is received
+%       {[], Http} ->
+%          State#fsm{recv=Http};
+
+%       %% request is received
+%       {{Mthd, Url, Head}, Http} ->
+%          pipe:b(Pipe, {http, self(), {Mthd, Url, Head, make_env(Url, Head, State)}}),
+%          State#fsm{recv=Http};
+
+%       {Chunk, Http} ->
+%          pipe:b(Pipe, {http, self(), erlang:iolist_to_binary(Chunk)}),
+%          State#fsm{recv=Http}
+%    end.
+
+% server_encode_response(Msg, Pipe, #fsm{}=State) ->
+%    case htstream:encode(Msg, State#fsm.send) of
+%       %% nothing to send
+%       {[],   Http} ->
+%          State#fsm{send=Http};
+
+%       %% response of received
+%       {Pckt, Http} ->
+%          pipe:b(Pipe, Pckt),
+%          State#fsm{send=Http}
+%    end.
+
+% %%
+% %% server handle request / response
+% server_handle_request(Pipe, #fsm{}=State) ->
+%    case htstream:state(State#fsm.recv) of
+%       %% end of header is received
+%       eoh ->
+%          % time to first byte event
+%          _ = knet:trace(State#fsm.trace, {http, ttfb, tempus:diff(State#fsm.ts)}),
+%          server_handle_request(Pipe, 
+%             server_decode_request(<<>>, Pipe, 
+%                State#fsm{ts=os:timestamp()}
+%             )
+%          );
+
+%       %% end of request is received
+%       eof -> 
+%          % time to meaningful response
+%          _ = knet:trace(State#fsm.trace, {http, ttmr, tempus:diff(State#fsm.ts)}),
+%          _ = pipe:b(Pipe, {http, self(), eof}),
+%          {next_state, 'SERVER',
+%             State#fsm{
+%                recv = htstream:new(State#fsm.recv)
+%               ,req  = q:enq({State#fsm.ts, State#fsm.recv}, State#fsm.req)
+%             }
+%          };
+
+%       %% 
+%       _   ->
+%          {next_state, 'SERVER', State}
+%    end.
+
+% server_handle_response(Pipe, #fsm{send=Send}=State) ->
+%    case htstream:state(Send) of
+%       %% end of response is received
+%       eof ->
+%          {{T, Recv}, Queue} = q:deq(State#fsm.req),
+%          {_, {Mthd,  Url,  Head}} = htstream:http(Recv),
+%          {_, {Code, _Msg, _Head}} = htstream:http(Send),
+%          UserAgent  = opts:val('User-Agent', undefined, Head), 
+%          Uri  = request_url(State#fsm.schema, Url, Head),
+%          Byte = htstream:octets(Recv)  + htstream:octets(Send), 
+%          Pack = htstream:packets(Recv) + htstream:packets(Send),
+%          ?access_log(#log{prot=http, src=State#fsm.peer, dst=Uri, req=Mthd, rsp=Code, ua=UserAgent, byte=Byte, pack=Pack, time=tempus:diff(T)}),
+%          case opts:val('Connection', undefined, Head) of
+%             <<"close">>   ->
+%                {stop, normal, State#fsm{send=htstream:new(Send), req=Queue}};
+%             _             ->
+%                {next_state, 'SERVER', State#fsm{send=htstream:new(Send), req=Queue}}
+%          end;
+
+%       %%
+%       _   ->
+%          {next_state, 'SERVER', State}
+%    end.
+
+%%
+%%
+server_upgrade({Mthd, Url, Head}, Pipe, #fsm{}=State) ->
+   case opts:val('Upgrade', Head) of
+      <<"websocket">> ->
+         knet_ws:upgrade({Mthd, request_url(State#fsm.schema, Url, Head), Head}, Pipe);
+
+      _ ->
+         throw(not_implemented)
+   end.
+
+
+%%
+%% make environment
+%% @todo: handle cookie and request as PHP $_REQUEST
+make_env(_Url, _Head, #fsm{peer={IP, _}}) ->
+   [
+      {peer, IP}
+   ].
+
+%%
+%% make server headers
+make_head() ->
+   [
+      {'Server', ?HTTP_SERVER}
+     ,{'Date',   scalar:s(tempus:encode(?HTTP_DATE, os:timestamp()))}
+   ].
+
+
+

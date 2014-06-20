@@ -27,6 +27,7 @@
    init/1, 
    free/2, 
    ioctl/2,
+   upgrade/2,
    'IDLE'/3, 
    'LISTEN'/3, 
    % 'CLIENT'/3,
@@ -57,11 +58,11 @@ start_link(Opts) ->
 
 %%
 init(Opts) ->
-   {ok, 'IDLE', 
+   {ok, 'ACTIVE', 
       #fsm{
          % timeout = opts:val('keep-alive', Opts),
-         recv    = htstream:new(),
-         send    = htstream:new()
+         recv    = wsstream:new(server),
+         send    = wsstream:new(server)
          % req     = q:new(),
          % trace   = opts:val(trace, undefined, Opts) 
       }
@@ -74,6 +75,30 @@ free(_, _) ->
 %%
 ioctl(_, _) ->
    throw(not_implemented).
+
+
+%%
+%% upgrade pipe to websocket
+upgrade({_Mthd, Url, Head}, Pipe) ->
+   <<"Upgrade">>   = pair:lookup('Connection', Head),
+   <<"websocket">> = pair:lookup('Upgrade',    Head),
+   Key  = pair:lookup(<<"Sec-Websocket-Key">>, Head),
+   Hash = base64:encode(crypto:hash(sha, <<Key/binary, ?WS_GUID>>)),
+   {Msg, _} = htstream:encode(
+      {101
+        ,[
+            {'Upgrade',  <<"websocket">>}
+           ,{'Connection', <<"Upgrade">>}
+           ,{<<"Sec-WebSocket-Accept">>, Hash}
+         ]
+        ,<<>>
+      },
+      htstream:new()
+   ),
+   pipe:a(Pipe, Msg),
+   pipe:b(Pipe, {ws, self(), {Url, Head}}),
+   {upgrade, ?MODULE, []}.
+
 
 %%%------------------------------------------------------------------
 %%%
@@ -137,13 +162,17 @@ ioctl(_, _) ->
 %% remote client request (handshake websocket)
 'SERVER'({Prot, Peer, Pckt}, Pipe, State)
  when is_binary(Pckt), Prot =:= tcp orelse Prot =:= ssl ->
+   io:format("~s~n", [Pckt]),
+
    case htstream:decode(Pckt, State#fsm.recv) of
-      %% GET request is received
-      {{'GET', Url, Head}, _} ->
-         %% validate request
-         <<"websocket">> = pair:lookup('Upgrade',    Head),
+      %% continue request streaming
+      {[], Http} ->
+         {next_state, 'SERVER', State#fsm{recv = Http}};
+
+      %% GET Request
+      {{'GET', _, Head}, Http} ->
          <<"Upgrade">>   = pair:lookup('Connection', Head),
-         %% build response
+         <<"websocket">> = pair:lookup('Upgrade',    Head),
          Key  = pair:lookup(<<"Sec-Websocket-Key">>, Head),
          Hash = base64:encode(crypto:hash(sha, <<Key/binary, ?WS_GUID>>)),
          {Msg, _} = htstream:encode(
@@ -151,20 +180,12 @@ ioctl(_, _) ->
             htstream:new()
          ),
          pipe:a(Pipe, Msg),
-         {next_state, 'ACTIVE', State#fsm{recv = undefined}};
+         {next_state, 'ACTIVE', State#fsm{recv = wsstream:new(server), send = wsstream:new(server)}};
 
-      %% ANY request is received
-      {{_Method, _Url, _Head}, _} ->
-         {stop, normal, State};
-      % {M, Http} ->
-      %    io:format("-> ~p~n", [M]),
-      %    {stop, normal, State};
-
-
-      %% streaming request
-      {[], Http} ->
-         {next_state, 'SERVER', State#fsm{recv = Http}}
-   end;
+      %% ANY Request
+      _ ->
+         {stop, normal, State}       
+   end; 
 
    % try
    % {next_state, 'SERVER', http_inbound(Pckt, Peer, Pipe, S)};
@@ -185,7 +206,7 @@ ioctl(_, _) ->
    %    {stop, normal, http_failure(Reason, Pipe, b, S)}
    % end;
 
-'SERVER'(Msg, Pipe, S) ->
+'SERVER'(_Msg, Pipe, S) ->
    {next_state, 'SERVER', S}.
    % try
    %    %% TODO: expand http headers (Date + Server + Connection)
@@ -199,29 +220,32 @@ ioctl(_, _) ->
 'ACTIVE'(shutdown, _Pipe, S) ->
    {stop, normal, S};
 
-'ACTIVE'({tcp, _, Msg}, Pipe, S)
- when is_binary(Msg) ->
-   <<FIN:1, _:3, Code:4, Mask:1, Len:7, Key:4/binary, Payload/binary>> = Msg,
-   io:format("->  fin ~p~n", [FIN]),
-   io:format("-> code ~p~n", [Code]),
-   io:format("-> mask ~p~n", [Mask]),
-   io:format("->  len ~p~n", [Len]),
-   io:format("->  key ~p~n", [Key]),
-   io:format("-> data ~p~n", [Payload]),
-   io:format("->      ~s~n", [unmask(0, Key, Payload)]),
-
-   pipe:a(Pipe, <<1:1, 0:3, 1:4, 0:1, 3:7, "abc">>),
-   {next_state, 'ACTIVE', S};
+'ACTIVE'({tcp, _, Pckt}, Pipe, S)
+ when is_binary(Pckt) ->
+   io:format("~p~n", [Pckt]),
+   {Data, Recv} = wsstream:decode(Pckt, S#fsm.recv),
+   case wsstream:state(Recv) of
+      eof ->
+         {stop, normal, S};
+      _   ->
+         {Msg,  Send} = wsstream:encode(Data, S#fsm.send),
+         pipe:a(Pipe, Msg),
+         {next_state, 'ACTIVE', S#fsm{recv = Recv, send = Send}}
+   end;
 
 'ACTIVE'({tcp, _, Msg}, Pipe, S) ->
-   io:format("-> ~p~n", [Msg]),
+   io:format("-//-> ~p~n", [Msg]),
+   {next_state, 'ACTIVE', S};
+
+'ACTIVE'(Msg, Pipe, S) ->
+   io:format("-//-> ~p~n", [Msg]),
    {next_state, 'ACTIVE', S}.
 
-unmask(I, Key, <<X:8, Rest/binary>>) ->
-   J = I rem 4,
-   [ X bxor binary:at(Key, J) | unmask(I + 1, Key, Rest)];
-unmask(_, _, <<>>) ->
-   [].
+% unmask(I, Key, <<X:8, Rest/binary>>) ->
+%    J = I rem 4,
+%    [ X bxor binary:at(Key, J) | unmask(I + 1, Key, Rest)];
+% unmask(_, _, <<>>) ->
+%    [].
 
 
 
