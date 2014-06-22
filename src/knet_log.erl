@@ -27,6 +27,9 @@ addr_src(_, {uri, _, _}=Uri) ->
    scalar:c(uri:s(Uri));
 addr_src(_, {IP, _Port}) ->
    inet_parse:ntoa(IP);
+addr_src(_, Host)
+ when is_binary(Host) ->
+   Host;
 addr_src(Prot, Port)
  when is_integer(Port) ->
    addr_src(Prot, {{0,0,0,0}, Port}).

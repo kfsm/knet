@@ -183,3 +183,32 @@
 }).
 
 
+%%-----------------------------------------------------------------------------
+%%
+%% data types
+%%
+%%-----------------------------------------------------------------------------
+
+%%
+%% streaming protocols
+-record(stream, {
+   send  = undefined :: any()      %% outbound stream encoder 
+  ,recv  = undefined :: any()      %% inbound  stream encoder
+
+  ,peer  = undefined :: any()      %% remote peer address
+  ,addr  = undefined :: any()      %% local address
+
+  ,tss   = undefined :: tempus:t() %% time to start session
+  ,ts    = undefined :: temput:t() %% time stamp
+
+  ,ttl   = undefined :: any()      %% time to live (connection timeout)
+  ,tth   = undefined :: any()      %% time to hibernate
+  ,tio   = undefined :: any()      %% time to i/o  (idle timeout)
+
+  ,trace = undefined :: pid()      %% trace / debug / stats functor 
+  ,so    = undefined :: list()     %% socket / protocol options
+}).
+
+
+
+

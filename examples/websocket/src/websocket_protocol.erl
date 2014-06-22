@@ -34,7 +34,7 @@ start_link(Uri) ->
    pipe:start_link(?MODULE, [Uri], []).
 
 init([Uri]) ->
-   {ok, Sock} = knet:bind(Uri),
+   {ok, Sock} = knet:bind(Uri, [{timeout, [{io, 3600000}]}]),
    {ok, handle, Sock}.
 
 free(_, Sock) ->
@@ -46,32 +46,16 @@ ioctl(_, _) ->
 
 %%
 %%
-handle(Msg, Pipe, Sock) ->
-   io:format("--> ~p~n", [Msg]),
-   {next_state, handle, Sock}.
+handle({ws, _Sock, {_Mthd, _Url, _Head, _Env}}, _Pipe, State) ->
+   %% web socket is established
+   {next_state, handle, State};
 
-% handle({http, Url, {Method, Heads, _Env}}, Pipe, Sock) ->
-%    _ = pipe:a(Pipe, {ok, [
-%       {'Server', <<"knet">>},
-%       {'Transfer-Encoding', <<"chunked">>},
-%       {'Connection', connection(Heads)}
-%    ]}),
-%    {Msg, _} = htstream:encode({Method, uri:get(path, Url), Heads}, htstream:new()),
-%    _ = pipe:a(Pipe, iolist_to_binary(Msg)),
-%    {next_state, handle, Sock};
+handle({ws, _Sock, {terminated, _Reason}}, _Pipe, State) ->
+   %% web socket is terminated
+   {next_state, handle, State};
 
-% handle({http, _Url, eof}, Pipe, Sock) ->
-%    pipe:a(Pipe, eof),
-%    {next_state, handle, Sock};
-
-% handle({http, _Url, Msg}, Pipe, Sock) ->
-%    pipe:a(Pipe, Msg),
-%    {next_state, handle, Sock}.
-
-% %%
-% %% return http connection type 
-% connection(Heads) ->
-%    case lists:keyfind('Connection', 1, Heads) of
-%       false    -> <<"keep-alive">>;
-%       {_, Val} -> Val
-%    end.
+handle({ws, _Sock, Msg}, Pipe, State)
+ when is_binary(Msg) ->
+   %% web socket message received
+   pipe:a(Pipe, Msg),
+   {next_state, handle, State}.

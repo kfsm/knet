@@ -42,7 +42,7 @@
 -record(fsm, {
    schema    = undefined :: atom(),          % http transport schema (http, https)
    url       = undefined :: any(),           % active request url
-   keepalive = 'keep-alive' :: close | 'keep-alive', % 
+
    timeout   = undefined :: integer(),       % http keep alive timeout
    recv      = undefined :: htstream:http(), % inbound  http stream
    send      = undefined :: htstream:http(), % outbound http stream
@@ -52,6 +52,8 @@
 
    trace     = undefined :: pid(),         % knet stats function
    ts        = undefined :: integer()      % stats timestamp
+
+  ,so        = undefined :: list()           % socket options
 }).
 
 %%
@@ -75,7 +77,8 @@ init(Opts) ->
          recv    = htstream:new(),
          send    = htstream:new(),
          req     = q:new(),
-         trace   = opts:val(trace, undefined, Opts) 
+         trace   = opts:val(trace, undefined, Opts),
+         so      = Opts
       }
    }.
 
@@ -147,7 +150,7 @@ ioctl(_, _) ->
       State#fsm{
          schema = schema(Prot)
         ,ts     = os:timestamp()
-        ,peer   = Peer
+        ,peer   = uri:authority(Peer, uri:new(Prot))
       }
      ,State#fsm.timeout
    };
@@ -211,7 +214,7 @@ ioctl(_, _) ->
             Uri  = request_url(State#fsm.schema, Url, Head),
             Byte = htstream:octets(Recv)  + htstream:octets(Send), 
             Pack = htstream:packets(Recv) + htstream:packets(Send),
-            ?access_log(#log{prot=http, src=State#fsm.peer, dst=Uri, req=Mthd, rsp=Code, ua=UserAgent, byte=Byte, pack=Pack, time=tempus:diff(T)}),
+            ?access_log(#log{prot=http, src=uri:host(State#fsm.peer), dst=Uri, req=Mthd, rsp=Code, ua=UserAgent, byte=Byte, pack=Pack, time=tempus:diff(T)}),
             case opts:val('Connection', undefined, Head) of
                <<"close">>   ->
                   {stop, normal, State#fsm{send=htstream:new(Send), req=Queue}};
@@ -322,7 +325,7 @@ ioctl(_, _) ->
             Uri  = request_url(State#fsm.schema, Url, Head),
             Byte = htstream:octets(Recv)  + htstream:octets(Send), 
             Pack = htstream:packets(Recv) + htstream:packets(Send),
-            ?access_log(#log{prot=http, src=State#fsm.peer, dst=Uri, req=Mthd, rsp=Code, ua=UserAgent, byte=Byte, pack=Pack, time=tempus:diff(T)}),
+            ?access_log(#log{prot=http, src=uri:host(State#fsm.peer), dst=Uri, req=Mthd, rsp=Code, ua=UserAgent, byte=Byte, pack=Pack, time=tempus:diff(T)}),
             case opts:val('Connection', undefined, Head) of
                <<"close">>   ->
                   {stop, normal, State#fsm{send=htstream:new(Send), req=Queue}};
@@ -570,7 +573,13 @@ send_to_transport(Pckt, Pipe, _State) ->
 server_upgrade({Mthd, Url, Head}, Pipe, #fsm{}=State) ->
    case opts:val('Upgrade', Head) of
       <<"websocket">> ->
-         knet_ws:upgrade({Mthd, request_url(State#fsm.schema, Url, Head), Head}, Pipe);
+         Uri = request_url(State#fsm.schema, Url, Head),
+         Env = make_env(Uri, Head, State),
+         Req = {Mthd, Uri, Head, Env},
+         {Id, Msg, Upgrade} = knet_ws:ioctl({upgrade, Req, State#fsm.so}, undefined),
+         pipe:a(Pipe, Msg),
+         pipe:b(Pipe, {Id, self(), Req}),
+         Upgrade;
 
       _ ->
          throw(not_implemented)
@@ -580,9 +589,9 @@ server_upgrade({Mthd, Url, Head}, Pipe, #fsm{}=State) ->
 %%
 %% make environment
 %% @todo: handle cookie and request as PHP $_REQUEST
-make_env(_Url, _Head, #fsm{peer={IP, _}}) ->
+make_env(_Url, _Head, #fsm{peer=Peer}) ->
    [
-      {peer, IP}
+      {peer, Peer}
    ].
 
 %%

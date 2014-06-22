@@ -56,7 +56,13 @@
    %% data streams
   ,recv        = undefined :: any()          %% recv data stream
   ,send        = undefined :: any()          %% send data stream
+
+  ,stream
 }).
+
+%% iolist guard
+-define(is_iolist(X),   is_binary(X) orelse is_list(X)).
+
 
 %%%------------------------------------------------------------------
 %%%
@@ -73,7 +79,9 @@ init(Opts) ->
    Timeout = opts:val(timeout, [], Opts), %% @todo: take timeout opts 
    {ok, 'IDLE',
       #fsm{
-         active  = opts:val(active, Opts)
+         stream  = so_new(Opts)
+
+        ,active  = opts:val(active, Opts)
         ,so      = Opts
         ,timeout = Timeout
         ,t_hibernate = opts:val(hibernate, undefined, Timeout)
@@ -219,18 +227,17 @@ ioctl(socket,   S) ->
 'ESTABLISHED'({tcp_closed, _}, Pipe, S) ->
    {stop, normal, so_terminated(normal, Pipe, S)};
 
-'ESTABLISHED'({tcp, _, Pckt}, Pipe, S) ->
-   ?DEBUG("knet tcp ~p: recv ~p~n~p", [self(), S#fsm.peer, Pckt]),
+'ESTABLISHED'({tcp, _, Pckt}, Pipe, State) ->
+   % ?DEBUG("knet tcp ~p: recv ~p~n~p", [self(), S#fsm.peer, Pckt]),
    %% What one can do is to combine {active, once} with gen_tcp:recv().
    %% Essentially, you will be served the first message, then read as many as you 
    %% wish from the socket. When the socket is empty, you can again enable 
    %% {active, once}.
    %% TODO: flexible flow control + explicit read
-   {Queue, Stream} = knet_stream:decode(Pckt, S#fsm.recv),
-   ok = knet:trace(S#fsm.trace, {tcp, packet, byte_size(Pckt)}),
+   {_, Stream} = so_recv(Pckt, Pipe, State#fsm.stream),
    {next_state, 'ESTABLISHED', 
       so_ioctl(
-         recv_q(Queue, Pipe, S#fsm{recv = Stream})
+         State#fsm{stream=Stream}
       )
    };
 
@@ -240,6 +247,7 @@ ioctl(socket,   S) ->
 'ESTABLISHED'({iocheck, Timeout, N}, Pipe, S) ->
    %% check i/o activity on the channel
    case knet_stream:packets(S#fsm.recv) + knet_stream:packets(S#fsm.send) of
+   % case knet_stream:packets(S#fsm.recv) + knet_stream:packets(S#fsm.send) of
       X when X > N ->
          {next_state, 'ESTABLISHED', so_set_timeout_io(Timeout, S)};
       _ ->
@@ -251,13 +259,17 @@ ioctl(socket,   S) ->
    {next_state, 'HIBERNATE', S, hibernate};
 
 %% @todo {_, Pckt}
-'ESTABLISHED'(Pckt, Pipe, S)
- when is_binary(Pckt) orelse is_list(Pckt) ->
-   {Queue, Stream} = knet_stream:encode(Pckt, S#fsm.send),
+'ESTABLISHED'(Msg, Pipe, State)
+ when ?is_iolist(Msg) ->
    try
-      {next_state, 'ESTABLISHED', send_q(Queue, S#fsm{send = Stream})}
+      {_, Stream} = so_send(Msg, State#fsm.sock, State#fsm.stream),
+      {next_state, 'ESTABLISHED', 
+         so_ioctl(
+            State#fsm{stream=Stream}
+         )
+      }
    catch _:{badmatch, {error, Reason}} ->
-      {stop, Reason, so_terminated(Reason, Pipe, S)}
+      {stop, Reason, so_terminated(Reason, Pipe, State)}
    end.
 
 
@@ -270,6 +282,47 @@ ioctl(socket,   S) ->
 %%% private
 %%%
 %%%------------------------------------------------------------------   
+
+%%
+%% new socket stream
+so_new(SOpt) ->
+   #stream{
+      send = pstream:new(opts:val(stream, raw, SOpt))
+     ,recv = pstream:new(opts:val(stream, raw, SOpt))
+   }.
+
+%%
+%% log stream event
+so_log(Req, Reason, #stream{}=Sock) ->
+   Pack = knet_stream:packets(Sock#stream.recv) + knet_stream:packets(Sock#stream.send),
+   Byte = knet_stream:octets(Sock#stream.recv)  + knet_stream:octets(Sock#stream.send),
+   ?access_log(#log{prot=tcp, src=Sock#stream.peer, dst=Sock#stream.addr, req=Req, rsp=Reason, 
+                    byte=Byte, pack=Pack, time=tempus:diff(Sock#stream.tss)}),
+   Sock.
+
+
+%%
+%% recv packet
+so_recv(Pckt, Pipe, #stream{}=Sock) ->
+   ?DEBUG("knet [tcp] ~p: recv ~p~n~p", [self(), Sock#stream.peer, Pckt]),
+   {Msg, Recv} = pstream:decode(Pckt, Sock#stream.recv),
+   lists:foreach(fun(X) -> pipe:b(Pipe, {tcp, self(), X}) end, Msg),
+   knet:trace(Sock#stream.trace, {tcp, packet, byte_size(Pckt)}),
+   {active, Sock#stream{recv=Recv}}.
+
+%%
+%% send packet
+so_send(Msg, Pipe, #stream{}=Sock) ->
+   ?DEBUG("knet [tcp] ~p: send ~p~n~p", [self(), Sock#stream.peer, Msg]),
+   {Pckt, Send} = pstream:encode(Msg, Sock#stream.send),
+   lists:foreach(fun(X) -> ok = gen_tcp:send(Pipe, X) end, Pckt),
+   {active, Sock#stream{send=Send}}.
+
+
+
+
+
+
 
 %%
 %% set socket address(es) and port
@@ -330,21 +383,21 @@ so_set_timeout_hibernate(#fsm{}=S) ->
       t_hibernate = tempus:event(S#fsm.t_hibernate, hibernate)
    }.
 
-%%
-%% receive packet queue to pipeline
-recv_q([Head | Tail], Pipe, #fsm{}=S) ->
-   _ = pipe:b(Pipe, {tcp, S#fsm.peer, Head}),
-   recv_q(Tail, Pipe, S);
+% %%
+% %% receive packet queue to pipeline
+% recv_q([Head | Tail], Pipe, #fsm{}=S) ->
+%    _ = pipe:b(Pipe, {tcp, S#fsm.peer, Head}),
+%    recv_q(Tail, Pipe, S);
 
-recv_q([], _Pipe, S) ->
-   S.
+% recv_q([], _Pipe, S) ->
+%    S.
 
-%%
-%% send packet queue to socket
-send_q([Head | Tail], #fsm{}=S) ->
-   ok = gen_tcp:send(S#fsm.sock, Head),
-   send_q(Tail, S);
+% %%
+% %% send packet queue to socket
+% send_q([Head | Tail], #fsm{}=S) ->
+%    ok = gen_tcp:send(S#fsm.sock, Head),
+%    send_q(Tail, S);
 
-send_q([], S) ->
-   S.
+% send_q([], S) ->
+%    S.
 
