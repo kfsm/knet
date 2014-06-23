@@ -38,8 +38,8 @@
 %%
 %% internal state
 -record(fsm, {
-   schema    = undefined :: atom()           % websocket transport schema (ws, wss)   
-  ,stream    = undefined :: #stream{}        % websocket stream
+   stream    = undefined :: #stream{}        % websocket data stream
+  ,schema    = undefined :: atom()           % websocket transport schema (ws, wss)   
 }).
 
 %% transport protocol guard

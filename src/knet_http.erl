@@ -144,7 +144,7 @@ ioctl(_, _) ->
 'SERVER'(shutdown, _Pipe, State) ->
    {stop, normal, State};
 
-'SERVER'({Prot, Peer, established}, _, State)
+'SERVER'({Prot, _, {established, Peer}}, _, State)
  when ?is_transport(Prot) ->
    {next_state, 'SERVER', 
       State#fsm{
@@ -244,7 +244,7 @@ ioctl(_, _) ->
 'CLIENT'(shutdown, _Pipe, S) ->
    {stop, normal, S};
 
-'CLIENT'({Prot, Peer, established}, _, State)
+'CLIENT'({Prot, _, {established, Peer}}, _, State)
  when ?is_transport(Prot) ->
    {next_state, 'CLIENT', 
       State#fsm{

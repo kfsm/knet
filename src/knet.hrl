@@ -117,6 +117,10 @@
 %% default library-wide timeout
 -define(SO_TIMEOUT,   10000).
 
+%% default time to live / hibernate timeouts
+-define(SO_TTL,       10000).
+-define(SO_TTH,        2000).
+
 %% default library-wide pool size
 -define(SO_POOL,         10).
 
@@ -204,9 +208,6 @@
   ,ttl   = undefined :: any()      %% time to live (connection timeout)
   ,tth   = undefined :: any()      %% time to hibernate
   ,tio   = undefined :: any()      %% time to i/o  (idle timeout)
-
-  ,trace = undefined :: pid()      %% trace / debug / stats functor 
-  ,so    = undefined :: list()     %% socket / protocol options
 }).
 
 
