@@ -30,9 +30,9 @@
    ioctl/2,
    'IDLE'/3, 
    'LISTEN'/3, 
-   % 'CLIENT'/3,
-   'SERVER'/3
-  ,'ESTABLISHED'/3
+   'CLIENT'/3,
+   'SERVER'/3,
+   'ESTABLISHED'/3
 ]).
 
 %%
@@ -133,7 +133,22 @@ ioctl(_, _) ->
       State#fsm{
          schema = uri:schema(Uri)
       }
-   }.
+   };
+
+'IDLE'({connect, Uri}, Pipe, State) ->
+   % connect is compatibility wrapper for knet socket interface (translated to http GET request)
+   % TODO: htstream support HTTP/1.2 (see http://www.jmarshall.com/easy/http/)
+   pipe:b(Pipe, {connect, Uri}),
+   Hash = base64:encode(crypto:hash(md5, scalar:s(random:uniform(16#ffff)))),
+   Req  = {'GET', Uri, [
+      {'Connection',     <<"Upgrade">>}
+     ,{'Upgrade',      <<"websocket">>}
+     ,{'Host',      uri:authority(Uri)}
+     ,{<<"Sec-WebSocket-Key">>,   Hash}
+     ,{<<"Sec-WebSocket-Version">>, 13}
+   ]},
+  'CLIENT'(Req, Pipe, State).
+
 
 %%%------------------------------------------------------------------
 %%%
@@ -207,6 +222,97 @@ ioctl(_, _) ->
 
 %%%------------------------------------------------------------------
 %%%
+%%% CLIENT
+%%%
+%%%------------------------------------------------------------------   
+
+
+%%
+%% protocol signaling
+'CLIENT'(shutdown, _Pipe, S) ->
+   {stop, normal, S};
+
+'CLIENT'({Prot, _, {established, Peer}}, _, State)
+ when ?is_transport(Prot) ->
+   {next_state, 'CLIENT', 
+      State#fsm{
+        %  schema = schema(Prot)
+        % ,ts     = os:timestamp()
+        % ,peer   = Peer
+      }
+     % ,State#fsm.timeout
+   };
+
+'CLIENT'({Prot, _, {terminated, _}}, Pipe, State)
+ when ?is_transport(Prot) ->
+   % case htstream:state(State#fsm.recv) of
+   %    payload -> 
+   %       % time to meaningful response
+   %       _ = knet:trace(State#fsm.trace, {http, ttmr, tempus:diff(State#fsm.ts)}),         
+   %       _ = pipe:b(Pipe, {http, self(), eof});
+   %    _       -> 
+   %       ok
+   % end,
+   {stop, normal, State};
+
+%%
+%% remote acceptor response
+'CLIENT'({Prot, Peer, Pckt}, Pipe, State)
+ when ?is_transport(Prot), is_binary(Pckt) ->
+   try
+      {Msg, Http} = htstream:decode(Pckt, htstream:new()),
+      io:format("-> ~p~n", [Msg]),
+      {next_state, 'ESTABLISHED', State#fsm{stream=ws_new(server, [])}}
+      % {next_state, 'CLIENT', State}
+
+      % case htstream:state(Http) of
+      %    eoh     ->
+      %       % time to first byte
+      %       knet:trace(State#fsm.trace, {http, ttfb, tempus:diff(State#fsm.ts)}),
+      %       send_to_acceptor(Msg, Pipe, State),
+      %       'CLIENT'({Prot, Peer, <<>>}, Pipe, State#fsm{recv = Http, ts=os:timestamp()});
+
+      %    eof     ->
+      %       % time to meaningful response
+      %       knet:trace(State#fsm.trace, {http, ttmr, tempus:diff(State#fsm.ts)}),
+      %       send_to_acceptor(Msg, Pipe, State),
+      %       pipe:b(Pipe, {http, self(), eof}),
+      %       {next_state, 'CLIENT',
+      %          State#fsm{
+      %             recv = htstream:new(Http)
+      %            ,req  = q:enq({State#fsm.ts, Http}, State#fsm.req)
+      %          }
+      %       };
+
+      %    _       ->
+      %       send_to_acceptor(Msg, Pipe, State),
+      %       {next_state, 'CLIENT', State#fsm{recv=Http}}
+      % end
+   catch _:Reason ->
+      ?NOTICE("knet [http]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
+      {stop, Reason, State}
+   end;
+
+% S#fsm{url=Url, keepalive=Alive, recv=htstream:new(Http)}
+
+%%
+%% local client request
+'CLIENT'({Mthd, {uri, _, _}=Uri, Heads}, Pipe, State) ->
+   'CLIENT'({Mthd, uri:path(Uri), Heads}, Pipe, State);
+
+'CLIENT'(Msg, Pipe, State) ->
+   try
+      {Pckt, Send} = htstream:encode(Msg, htstream:new()),
+      pipe:b(Pipe, Pckt),
+      {next_state, 'CLIENT', State}
+   catch _:Reason ->
+      ?NOTICE("knet [http]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
+      {stop, Reason, State}
+   end.
+
+
+%%%------------------------------------------------------------------
+%%%
 %%% ESTABLISHED
 %%%
 %%%------------------------------------------------------------------   
@@ -272,8 +378,8 @@ ws_new(Type, Peer, Addr, SOpt) ->
 ws_log(Req, Reason, #stream{}=Ws) ->
    Pack = wsstream:packets(Ws#stream.recv) + wsstream:packets(Ws#stream.send),
    Byte = wsstream:octets(Ws#stream.recv)  + wsstream:octets(Ws#stream.send),
-   ?access_log(#log{prot=ws, src=uri:host(Ws#stream.peer), dst=Ws#stream.addr, req=Req, rsp=Reason, 
-                    byte=Byte, pack=Pack, time=tempus:diff(Ws#stream.tss)}),
+   % ?access_log(#log{prot=ws, src=uri:host(Ws#stream.peer), dst=Ws#stream.addr, req=Req, rsp=Reason, 
+   %                  byte=Byte, pack=Pack, time=tempus:diff(Ws#stream.tss)}),
    Ws.
 
 %%
