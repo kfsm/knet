@@ -17,10 +17,6 @@
 %%
 %% @description
 %%   client-server tcp/ip konduit
-%%
-%% @todo
-%%   * bind to interface / address
-%%   * send stats signal (before data (clean up stats handling))
 -module(knet_tcp).
 -behaviour(pipe).
 
@@ -45,23 +41,6 @@
   ,pool   = 0         :: integer()  %% socket acceptor pool size
   ,trace  = undefined :: pid()      %% trace / debug / stats functor 
   ,so     = undefined :: any()      %% socket options
-
-
-  % ,peer = undefined :: any()    %% peer address  
-  % ,addr = undefined :: any()    %% local address
-
-  % ,so          = [] :: [any()]                 %% socket options
-  % ,timeout     = [] :: [{atom(), timeout()}]   %% socket timeouts 
-  % ,session     = undefined   :: tempus:t()     %% session start time-stamp
-  % ,t_hibernate = undefined   :: tempus:timer() %% socket hibernate timeout
-  % % ,t_io        = undefined   :: temput:timer() %% socket i/o timeout
-
-  % ,trace       = undefined :: pid()          %% latency trace process
-
-  %  %% data streams
-  % ,recv        = undefined :: any()          %% recv data stream
-  % ,send        = undefined :: any()          %% send data stream
-
 }).
 
 %% iolist guard
@@ -79,8 +58,6 @@ start_link(Opts) ->
 
 %%
 init(Opts) ->
-   % Stream  = opts:val(stream, raw, Opts),
-   % Timeout = opts:val(timeout, [], Opts), %% @todo: take timeout opts 
    {ok, 'IDLE',
       #fsm{
          stream  = io_new(Opts)
@@ -88,14 +65,6 @@ init(Opts) ->
         ,trace   = opts:val(trace, undefined, Opts)
         ,active  = opts:val(active, Opts)
         ,so      = Opts
-        % 
-        %
-        % ,timeout = Timeout
-        % ,t_hibernate = opts:val(hibernate, undefined, Timeout)
-        % % ,t_io        = opts:val(io,        undefined, Timeout) 
-        % ,trace   = opts:val(trace, undefined, Opts)
-        % ,recv    = knet_stream:new(Stream)
-        % ,send    = knet_stream:new(Stream)        
       }
    }.
 
@@ -126,7 +95,7 @@ ioctl(socket,   S) ->
    case gen_tcp:listen(Port, Opts) of
       {ok, Sock} -> 
          ?access_log(#log{prot=tcp, dst=Uri, req=listen}),
-         _ = pipe:a(Pipe, {tcp, {any, Port}, listen}),
+         _ = pipe:a(Pipe, {tcp, self(), {listen, Uri}}),
          %% create acceptor pool
          Sup = knet:whereis(acceptor, Uri),
          ok  = lists:foreach(
@@ -138,7 +107,7 @@ ioctl(socket,   S) ->
          {next_state, 'LISTEN', S#fsm{sock = Sock}};
       {error, Reason} ->
          ?access_log(#log{prot=tcp, dst=Uri, req=listen, rsp=Reason}),
-         pipe:a(Pipe, {tcp, {any, Port}, {terminated, Reason}}),
+         pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),
          {stop, Reason, S}
    end;
 
@@ -160,7 +129,7 @@ ioctl(socket,   S) ->
 
       {error, Reason} ->
          ?access_log(#log{prot=tcp, dst=Uri, req=syn, rsp=Reason}),
-         pipe:a(Pipe, {tcp, {Host, Port}, {terminated, Reason}}),
+         pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),
          {stop, Reason, State}
    end;
 
