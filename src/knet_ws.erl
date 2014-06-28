@@ -42,11 +42,10 @@
   ,schema    = undefined :: atom()           % websocket transport schema (ws, wss)   
 }).
 
-%% transport protocol guard
+%%
+%% guard macro
 -define(is_transport(X),  (X =:= tcp orelse X =:= ssl)).
-
-%% iolist guard
--define(is_iolist(X),   is_binary(X) orelse is_list(X) orelse is_atom(X)).
+-define(is_iolist(X),     is_binary(X) orelse is_list(X) orelse is_atom(X)).
 
 %% web-socket magic number
 -define(WS_GUID, "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").
@@ -91,7 +90,7 @@ free(_, _) ->
    ok.
 
 %%
-ioctl({upgrade, {_Mthd, Url, Head, _Env}=Req, SOpt}, undefined) ->
+ioctl({upgrade, {_Mthd, Uri, Head, _Env}=Req, SOpt}, undefined) ->
    %% web socket upgrade request
    <<"Upgrade">>   = pair:lookup('Connection', Head),
    <<"websocket">> = pair:lookup('Upgrade',    Head),
@@ -108,7 +107,7 @@ ioctl({upgrade, {_Mthd, Url, Head, _Env}=Req, SOpt}, undefined) ->
       },
       htstream:new()
    ),
-   {ws, Msg, {upgrade, ?MODULE, [Req, SOpt]}};
+   {Msg, {upgrade, ?MODULE, [Req, SOpt]}};
 
 ioctl(_, _) ->
    throw(not_implemented).

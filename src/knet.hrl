@@ -203,7 +203,7 @@
   ,addr  = undefined :: any()      %% local address
 
   ,tss   = undefined :: tempus:t() %% time to start session
-  ,ts    = undefined :: temput:t() %% time stamp
+  ,ts    = undefined :: temput:t() %% time stamp @todo - move to FSM
 
   ,ttl   = undefined :: any()      %% time to live (connection timeout)
   ,tth   = undefined :: any()      %% time to hibernate
