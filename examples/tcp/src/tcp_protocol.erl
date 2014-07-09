@@ -46,7 +46,7 @@ ioctl(_, _) ->
 
 %%
 %%
-handle({tcp, _Peer, established}, _Pipe, Sock) ->
+handle({tcp, _Pid, {established, _Peer}}, _Pipe, Sock) ->
 	{next_state, handle, Sock};
 
 handle({tcp, _Peer, Msg}, Pipe, Sock) ->

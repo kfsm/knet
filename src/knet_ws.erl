@@ -242,7 +242,7 @@ ioctl(_, _) ->
      % ,State#fsm.timeout
    };
 
-'CLIENT'({Prot, _, {terminated, _}}, Pipe, State)
+'CLIENT'({Prot, _, {terminated, Reason}}, Pipe, State)
  when ?is_transport(Prot) ->
    % case htstream:state(State#fsm.recv) of
    %    payload -> 
@@ -252,6 +252,7 @@ ioctl(_, _) ->
    %    _       -> 
    %       ok
    % end,
+   pipe:b(Pipe, {ws, self(), {terminated, Reason}}),
    {stop, normal, State};
 
 %%
@@ -260,7 +261,6 @@ ioctl(_, _) ->
  when ?is_transport(Prot), is_binary(Pckt) ->
    try
       {Msg, Http} = htstream:decode(Pckt, htstream:new()),
-      io:format("-> ~p~n", [Msg]),
       {next_state, 'ESTABLISHED', State#fsm{stream=ws_new(server, [])}}
       % {next_state, 'CLIENT', State}
 
