@@ -42,7 +42,7 @@ start_link(Uri) ->
 init([]) -> 
    {ok,
       {
-         {simple_one_for_one, 0, 3600},
+         {simple_one_for_one, 1000000, 1},
          [
             ?CHILD(worker, knet_sock, [])
          ]
