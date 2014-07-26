@@ -34,8 +34,8 @@ start_link(Uri) ->
    pipe:start_link(?MODULE, [Uri], []).
 
 init([Uri]) ->
-   {ok, Sock} = knet:bind(Uri),
-   % {ok, Sock} = knet:bind(Uri, [{timeout, [{io, 3600000}]}]),
+   %{ok, Sock} = knet:bind(Uri),
+   {ok, Sock} = knet:bind(Uri, [{timeout, [{ttl, 3600000}]}]),
    {ok, handle, Sock}.
 
 free(_, Sock) ->
