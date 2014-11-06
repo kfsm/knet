@@ -54,8 +54,16 @@ frame()  - binary frame (outgound data packet)
 %% {send,       <<...>>} - outgoing data packet
 %% {recv,           ...} - receive N-bytes
 
+## Timeout management
 
-Create SSL Certificate
+{timeout, [...]}
+
+ * peer      - timeout to establish peer connection
+ * io        - timeout to handle i/o
+ * hibernate - timeout to hibernate process
+
+
+## Create SSL Certificate
 
 Step 1: Create the key
 
@@ -71,5 +79,34 @@ $ openssl req -new -key server.key -out server.csr
 Step 4: Generate the Certificate
 
 $ openssl x509 -req -days 365 -in server.csr -signkey server.key -out server.crt
+
+## Tune Kernel
+
+vim /etc/sysctl.conf
+
+fs.file-max = 999999
+net.ipv4.tcp_rmem = 4096 4096 16777216
+net.ipv4.tcp_wmem = 4096 4096 16777216
+
++ http://www.metabrew.com/article/a-million-user-comet-application-with-mochiweb-part-1
+
+sysctl -p
+
+vim /etc/security/limits.conf 
+*               -       nofile         999999
+
+
+## 1M connections
+
+http://shenfeng.me/600k-concurrent-connection-http-kit.html
+http://serverfault.com/questions/154663/how-to-find-the-number-of-open-ports-in-linux
+
+http://www.metabrew.com/article/a-million-user-comet-application-with-mochiweb-part-1
+http://www.metabrew.com/article/a-million-user-comet-application-with-mochiweb-part-3
+
+
+
+
+
 
 

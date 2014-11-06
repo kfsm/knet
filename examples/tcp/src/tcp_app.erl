@@ -30,7 +30,7 @@ start(_Type, _Args) ->
       {acceptor, tcp_protocol}
      ,{pool,     256}
      ,{backlog,  256}
-     ,inet6
+     ,inet
    ]),
    tcp_sup:start_link(). 
 
