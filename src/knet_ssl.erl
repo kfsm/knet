@@ -45,9 +45,6 @@
   ,so      = undefined :: [any()]    %% socket options
 }).
 
-%% iolist guard
--define(is_iolist(X),   is_binary(X) orelse is_list(X)).
-
 %%%------------------------------------------------------------------
 %%%
 %%% Factory

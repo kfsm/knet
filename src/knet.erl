@@ -19,6 +19,7 @@
 -include("knet.hrl").
 
 -export([start/0, config/0]).
+%% client interface
 -export([
    listen/2
   ,bind/1
@@ -28,8 +29,10 @@
   ,connect/1 
   ,connect/2 
   ,close/1
-
-  ,register/2
+]).
+%% konduit interface
+-export([
+   register/2
   ,whereis/2
 
   ,which/1
@@ -37,17 +40,37 @@
   ,trace/2
 ]).
 
+%%%------------------------------------------------------------------
+%%%
+%%% data type(s)
+%%%
+%%%------------------------------------------------------------------   
+
+%% time to live timeout in milliseconds
+-type(so_ttl()  :: {ttl, integer()}).
+
+%% time to hibernate in milliseconds
+-type(so_tth()  :: {tth, integer()}).
+
+%% socket framing
+-type(so_pack() :: {pack, raw | line}).
+
+%%%------------------------------------------------------------------
+%%%
+%%% knet client interface
+%%%
+%%%------------------------------------------------------------------   
+
+
 %% @todo: 
 %%   * socket/ -> return empty (idle) socket
 %%   * monitor socket (link)
 
 %%
-%% start application
+%% start application (RnD mode)
 start() -> 
    applib:boot(?MODULE, config()).
 
-%%
-%% config file
 config() ->
    case code:priv_dir(knet) of
       {error, bad_name} -> 
@@ -61,7 +84,7 @@ config() ->
 %% Options:
 %%   {acceptor,      atom()} - acceptor implementation
 %%   {pool,       integer()} - acceptor pool size
-%%   {timeout_io, integer()} - socket i/o timeout
+%%   {timeout,    [ttl(), tth()]} - socket i/o timeout
 %%   nopipe
 %%   {stats,          pid()} - statistic functor (destination pipe to handle knet i/o statistic)
 -spec(listen/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
@@ -179,7 +202,7 @@ connect(Url) ->
 -spec(close/1 :: (pid()) -> ok).
 
 close(Sock)
- when is_pid(Sock) ->
+ when is_pid(Sock) orelse is_atom(Sock) ->
    _ = pipe:send(Sock, shutdown),
    ok;
 
@@ -189,19 +212,31 @@ close({uri, _, _}=Uri) ->
 close(Uri) ->
    close(uri:new(Uri)).
 
+%%%------------------------------------------------------------------
+%%%
+%%% knet konduit interface
+%%%
+%%%------------------------------------------------------------------   
+
 %%
 %% register knet component
--spec(register/2 :: (atom(), {uri, _, _}) -> ok).
+-spec(register/2 :: (atom(), {uri, _, _} | any()) -> ok).
 
-register(Name, Uri) ->
-   pns:register(knet, {Name, uri:s(Uri)}, self()).
+register(Name, {uri, _, _} = Uri) ->
+   pns:register(knet, {Name, uri:s(Uri)}, self());
+
+register(Name, Uid) ->
+   pns:register(knet, {Name, Uid}, self()).
 
 %%
 %% lookup knet component
 -spec(whereis/2 :: (atom(), {uri, _, _}) -> pid() | undefined).
 
-whereis(Name, Uri) ->
-   pns:whereis(knet, {Name, uri:s(Uri)}).
+whereis(Name, {uri, _, _} = Uri) ->
+   pns:whereis(knet, {Name, uri:s(Uri)});
+
+whereis(Name, Uid) ->
+   pns:whereis(knet, {Name, Uid}).
 
 %%
 %% list active sockets

@@ -1,58 +1,125 @@
+%%
+%%   Copyright (c) 2012 - 2013, Dmitry Kolesnikov
+%%   Copyright (c) 2012 - 2013, Mario Cardona
+%%   All Rights Reserved.
+%%
+%%   Licensed under the Apache License, Version 2.0 (the "License");
+%%   you may not use this file except in compliance with the License.
+%%   You may obtain a copy of the License at
+%%
+%%       http://www.apache.org/licenses/LICENSE-2.0
+%%
+%%   Unless required by applicable law or agreed to in writing, software
+%%   distributed under the License is distributed on an "AS IS" BASIS,
+%%   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+%%   See the License for the specific language governing permissions and
+%%   limitations under the License.
+%%
 %% @description
-%%   common log formats
+%%   protocol common access log and helper macro
+%%
+%%   peer user "request addr" response "user-agent" byte pack time
+%%   
+%%   * peer - ip address of peer making request
+%%   * user - identifier of client / user
+%%   * request - protocol specific request string
+%%   * addr - local address
+%%   * response - protocol specific request code
+%%   * user-agent - user agent string if applicable
+%%   * byte - number of transmitted bytes
+%%   * pack - number of transmitted packets
+%%   * time - protocol latency is micro seconds 
+%%
+%% @example
+%%   127.0.0.1  -  "syn tcp://127.0.0.1:8888" sack " - " 0 0 37032886
+%%   127.0.0.1  -  "fin tcp://127.0.0.1:8888" normal " - " 252 5 7210
+%%   127.0.0.1  -  "GET http://127.0.0.1:8888/" 200 "curl/7.37.1" 252 4 37123209
 -module(knet_log).
-
 -include("knet.hrl").
 
 -export([
-   format/1
+   common/1
+  ,common/2
 ]).
 
-
 %%
-%% format log event
-format(#log{}=X) ->
+%% common log format
+common(X) ->
+   common(X#log.prot, 
+      #{
+         peer => X#log.src
+        ,addr => X#log.dst
+        ,user => X#log.user
+        ,req  => X#log.req
+        ,rsp  => X#log.rsp
+        ,byte => X#log.byte
+        ,pack => X#log.pack
+        ,time => X#log.time
+      }
+   ).
+
+common(Prot, Log) ->
+   {Request, Response} = request(Log),
    [
-      addr_src(X#log.prot, X#log.src), $ , val(X#log.user), $ , 
-      $", val(X#log.req), $ , addr_dst(X#log.prot, X#log.dst), $", $ ,
-      val(X#log.rsp), $ , $", val(X#log.ua), $", $ ,
-      val(X#log.byte),$ , val(X#log.pack), $ , val(X#log.time)
+      peer(Prot, x(peer, Log)), $ , val(x(user, Log)), $ , 
+      $", val(Request), $ , addr(Prot, x(addr, Log)), $", $ ,
+      val(Response), $ , $", val(x(ua, Log)), $", $ ,
+      val(x(byte, Log)),$ , val(x(pack, Log)), $ , val(x(time, Log))
    ].
 
 %%
+request(Log) ->
+   case maps:get(req, Log) of
+      {_, _} = X -> 
+         X;
+      X -> 
+         {X, undefined}
+   end.
+
+%% 
+x(Key, Map) ->
+   case maps:is_key(Key, Map) of
+      true  -> 
+         maps:get(Key, Map);
+      false ->
+         undefined
+   end.
+
 %%
-addr_src(_, undefined) ->
+%% peer address
+peer(_, undefined) ->
    " - ";
-addr_src(_, {uri, _, _}=Uri) ->   
+peer(_, {uri, _, _}=Uri) ->   
    scalar:c(uri:s(Uri));
-addr_src(_, {IP, _Port}) ->
+peer(_, {IP, _Port}) ->
    inet_parse:ntoa(IP);
-addr_src(_, Host)
+peer(_, Host)
  when is_binary(Host) ->
    Host;
-addr_src(Prot, Port)
+peer(Prot, Port)
  when is_integer(Port) ->
-   addr_src(Prot, {{0,0,0,0}, Port}).
+   peer(Prot, {{0,0,0,0}, Port}).
 
 %%
-%%
-addr_dst(_, undefined) ->
+%% local addr
+addr(_, nil) ->
    " - ";
-addr_dst(_, {uri, _, _}=Uri) ->
+addr(_, undefined) ->
+   " - ";
+addr(_, {uri, _, _}=Uri) ->
    scalar:c(uri:s(Uri));
-addr_dst(Prot, {IP, Port}) ->
+addr(Prot, {IP, Port}) ->
    [scalar:c(Prot), "://", inet_parse:ntoa(IP), $:, scalar:c(Port)];
-addr_dst(Prot, Port)
+addr(Prot, Port)
  when is_integer(Port) ->
-   addr_dst(Prot, {{0,0,0,0}, Port}).
+   addr(Prot, {{0,0,0,0}, Port}).
 
 %%
 %%
+val(nil) ->
+   " - ";
 val(undefined) ->
    " - ";
-% val(X) 
-%  when is_atom(X) orelse is_binary(X) orelse is_list(X) ->
-%    X;
 val({_,_,_}=X) ->
    scalar:c(tempus:u(X));
 val(X)

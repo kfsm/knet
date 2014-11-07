@@ -48,7 +48,7 @@
 %%
 %% guard macro
 -define(is_transport(X),  (X =:= tcp orelse X =:= ssl)).   
--define(is_iolist(X),     is_binary(X) orelse is_list(X)). 
+% -define(is_iolist(X),     is_binary(X) orelse is_list(X)). 
 -define(is_method(X),     is_atom(X) orelse is_binary(X)).  
 -define(is_status(X),     is_integer(X)). 
 

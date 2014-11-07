@@ -16,7 +16,8 @@
 %%   limitations under the License.
 %%
 %% @description
-%%   knet socket leader process, responsible for management operation of
+%%   knet protocol stack factory and socket leader process.
+%%   process instance is responsible for management operation of
 %%   communication pipelines.
 -module(knet_sock).
 -behaviour(pipe).

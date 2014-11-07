@@ -46,14 +46,14 @@ init([]) ->
    }.
 
 %%
-%% create new socket service
+%% initialize net service
 init_service(Uri, Opts) ->
    supervisor:start_child(?MODULE, 
       ?CHILD(supervisor, uri:s(Uri), knet_service_sup, [Uri, Opts])
    ).
 
 %%
-%%
+%% terminate net service
 free_service(Uri) ->
    case supervisor:terminate_child(?MODULE, uri:s(Uri)) of
       ok    ->

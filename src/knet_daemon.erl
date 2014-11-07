@@ -16,8 +16,7 @@
 %%   limitations under the License.
 %%
 %% @description
-%%   socket daemon process, manages server - side
-%%
+%%   net service daemon process
 -module(knet_daemon).
 -behaviour(pipe).
 

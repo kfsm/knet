@@ -43,10 +43,6 @@
   ,so     = undefined :: any()      %% socket options
 }).
 
-%% iolist guard
--define(is_iolist(X),   is_binary(X) orelse is_list(X)).
-
-
 %%%------------------------------------------------------------------
 %%%
 %%% Factory
@@ -69,9 +65,16 @@ init(Opts) ->
    }.
 
 %%
-free(Reason, State) ->
-   io_log(fin, Reason, State#fsm.stream),
-   (catch gen_tcp:close(State#fsm.sock)),
+free(Reason, #fsm{stream=Stream, sock=Sock}) ->
+   ?access_tcp(#{
+      req  => {fin, Reason}
+     ,peer => Stream#stream.peer 
+     ,addr => Stream#stream.addr
+     ,byte => pstream:octets(Stream#stream.recv) + pstream:octets(Stream#stream.send)
+     ,pack => pstream:packets(Stream#stream.recv) + pstream:packets(Stream#stream.send)
+     ,time => tempus:diff(Stream#stream.ts)
+   }),
+   (catch gen_tcp:close(Sock)),
    ok. 
 
 %% 
@@ -88,13 +91,13 @@ ioctl(socket,   S) ->
 %%
 'IDLE'({listen, Uri}, Pipe, S) ->
    Port = uri:port(Uri),
-   ok   = pns:register(knet, {tcp, {any, Port}}, self()),
+   ok   = knet:register(tcp, {any, Port}),
    % socket opts for listener socket requires {active, false}
    SOpt = opts:filter(?SO_TCP_ALLOWED, S#fsm.so),
    Opts = [{active, false}, {reuseaddr, true} | lists:keydelete(active, 1, SOpt)],
    case gen_tcp:listen(Port, Opts) of
       {ok, Sock} -> 
-         ?access_log(#log{prot=tcp, dst=Uri, req=listen}),
+         ?access_tcp(#{req => listen, addr => Uri}),
          _ = pipe:a(Pipe, {tcp, self(), {listen, Uri}}),
          %% create acceptor pool
          Sup = knet:whereis(acceptor, Uri),
@@ -106,7 +109,7 @@ ioctl(socket,   S) ->
          ),
          {next_state, 'LISTEN', S#fsm{sock = Sock}};
       {error, Reason} ->
-         ?access_log(#log{prot=tcp, dst=Uri, req=listen, rsp=Reason}),
+         ?access_tcp(#{req => listen, addr => Uri, rsp => Reason}),
          pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),
          {stop, Reason, S}
    end;
@@ -121,14 +124,14 @@ ioctl(socket,   S) ->
    T    = os:timestamp(),
    case gen_tcp:connect(Host, Port, SOpt, Tout) of
       {ok, Sock} ->
-         {ok, Peer} = inet:peername(Sock),
-         Stream = io_ttl(io_tth(io_connect(T, Sock, State#fsm.stream))),
-         pipe:a(Pipe, {tcp, self(), {established, Peer}}),
+         Stream = io_ttl(io_tth(io_connect(Sock, State#fsm.stream))),
+         ?access_tcp(#{req => {syn, sack}, peer => Stream#stream.peer, addr => Stream#stream.addr}),
+         pipe:a(Pipe, {tcp, self(), {established, Stream#stream.peer}}),
          knet:trace(State#fsm.trace, {tcp, connect, tempus:diff(T)}),
          {next_state, 'ESTABLISHED', tcp_ioctl(State#fsm{stream=Stream, sock=Sock})};
 
       {error, Reason} ->
-         ?access_log(#log{prot=tcp, dst=Uri, req=syn, rsp=Reason}),
+         ?access_tcp(#{req => {syn, Reason}, addr => Uri}),
          pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),
          {stop, Reason, State}
    end;
@@ -142,10 +145,10 @@ ioctl(socket,   S) ->
    case gen_tcp:accept(LSock) of
       %% connection is accepted
       {ok, Sock} ->
-         {ok,    _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri]),
-         {ok, Peer} = inet:peername(Sock),
-         Stream = io_ttl(io_tth(io_connect(T, Sock, State#fsm.stream))),
-         pipe:a(Pipe, {tcp, self(), {established, Peer}}),
+         {ok, _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri]),
+         Stream  = io_ttl(io_tth(io_connect(Sock, State#fsm.stream))),
+         ?access_tcp(#{req => {syn, sack}, peer => Stream#stream.peer, addr => Stream#stream.addr}),
+         pipe:a(Pipe, {tcp, self(), {established, Stream#stream.peer}}),
          knet:trace(State#fsm.trace, {tcp, connect, tempus:diff(T)}),
          {next_state, 'ESTABLISHED', tcp_ioctl(State#fsm{stream=Stream, sock=Sock})};
 
@@ -156,9 +159,9 @@ ioctl(socket,   S) ->
       %% unable to accept connection  
       {error, Reason} ->
          {ok, _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri]),
-         Stream  = io_log(syn, Reason, State#fsm.stream),
+         ?access_tcp(#{req => {syn, Reason}, addr => Uri}),
          pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),      
-         {stop, Reason, State#fsm{stream=Stream}}
+         {stop, Reason, State}
    end;
 
 %%
@@ -198,13 +201,12 @@ ioctl(socket,   S) ->
    %% Essentially, you will be served the first message, then read as many as you 
    %% wish from the socket. When the socket is empty, you can again enable 
    %% {active, once}.
-   %% TODO: flexible flow control + explicit read
+   %% @todo: {active, n()}
    {_, Stream} = io_recv(Pckt, Pipe, State#fsm.stream),
    knet:trace(State#fsm.trace, {tcp, packet, byte_size(Pckt)}),
    {next_state, 'ESTABLISHED', tcp_ioctl(State#fsm{stream=Stream})};
 
 'ESTABLISHED'(shutdown, _Pipe, State) ->
-   % pipe:b(Pipe, {tcp, self(), {terminated, normal}}),
    {stop, normal, State};
 
 'ESTABLISHED'({ttl, Pack}, Pipe, State) ->
@@ -216,8 +218,8 @@ ioctl(socket,   S) ->
          {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
    end;
 
-'ESTABLISHED'(hibernate, _, #fsm{stream=Sock}=State) ->
-   ?DEBUG("knet [tcp]: suspend ~p", [Sock#stream.peer]),
+'ESTABLISHED'(hibernate, _, State) ->
+   ?DEBUG("knet [tcp]: suspend ~p", [(State#fsm.stream)#stream.peer]),
    {next_state, 'HIBERNATE', State, hibernate};
 
 'ESTABLISHED'(Msg, Pipe, State)
@@ -250,31 +252,19 @@ ioctl(socket,   S) ->
 %% new socket stream
 io_new(SOpt) ->
    #stream{
-      send = pstream:new(opts:val(stream, raw, SOpt))
-     ,recv = pstream:new(opts:val(stream, raw, SOpt))
+      send = pstream:new(opts:val(pack, raw, SOpt))
+     ,recv = pstream:new(opts:val(pack, raw, SOpt))
      ,ttl  = pair:lookup([timeout, ttl], ?SO_TTL, SOpt)
      ,tth  = pair:lookup([timeout, tth], ?SO_TTH, SOpt)
      ,ts   = os:timestamp()
    }.
 
 %%
-%% set stream address(es)
-io_connect(T, Port, #stream{}=Sock) ->
+%% socket connected
+io_connect(Port, #stream{}=Sock) ->
    {ok, Peer} = inet:peername(Port),
    {ok, Addr} = inet:sockname(Port),
-   io_log(syn, sack, T,  Sock#stream{peer = Peer, addr = Addr, tss = os:timestamp(), ts = os:timestamp()}).
-
-%%
-%% log stream event
-io_log(Req, Reason, #stream{}=Sock) ->
-   io_log(Req, Reason, Sock#stream.ts, Sock).
-
-io_log(Req, Reason, T, #stream{}=Sock) ->
-   Pack = knet_stream:packets(Sock#stream.recv) + knet_stream:packets(Sock#stream.send),
-   Byte = knet_stream:octets(Sock#stream.recv)  + knet_stream:octets(Sock#stream.send),
-   ?access_log(#log{prot=tcp, src=Sock#stream.peer, dst=Sock#stream.addr, req=Req, rsp=Reason, 
-                    byte=Byte, pack=Pack, time=tempus:diff(T)}),
-   Sock.
+   Sock#stream{peer = Peer, addr = Addr, tss = os:timestamp(), ts = os:timestamp()}.
 
 %%
 %% set hibernate timeout
@@ -313,8 +303,6 @@ io_send(Msg, Pipe, #stream{}=Sock) ->
    {Pckt, Send} = pstream:encode(Msg, Sock#stream.send),
    lists:foreach(fun(X) -> ok = gen_tcp:send(Pipe, X) end, Pckt),
    {active, Sock#stream{send=Send}}.
-
-
 
 %%
 %% set socket i/o control flags

@@ -3,7 +3,7 @@
 %% build config
 %%
 %%-----------------------------------------------------------------------------
-%-define(CONFIG_DEBUG,    true).
+% -define(CONFIG_DEBUG,    true).
 
 %% default access log configuration
 -define(CONFIG_ACCESS_LOG,       [tcp, ssl, http, ssh]).
@@ -130,6 +130,41 @@
 %% http date format
 -define(HTTP_DATE, "%a %b %d %H:%M:%S %Y").
 
+%%
+%% guard macro
+-define(is_iolist(X),  is_binary(X) orelse is_list(X)).
+
+
+
+%%-----------------------------------------------------------------------------
+%%
+%% data types
+%%
+%%-----------------------------------------------------------------------------
+
+%%
+%% i/o stream state
+-record(stream, {
+   send  = undefined :: any()      %% outbound stream encoder 
+  ,recv  = undefined :: any()      %% inbound  stream encoder
+
+  ,peer  = undefined :: any()      %% remote peer address
+  ,addr  = undefined :: any()      %% local address
+
+  ,tss   = undefined :: tempus:t() %% time to start session
+  ,ts    = undefined :: temput:t() %% protocol time stamp
+
+  ,ttl   = undefined :: any()      %% time to live, inactivity timeout
+  ,tth   = undefined :: any()      %% time to hibernate
+  ,tio   = undefined :: any()      %% time to i/o  (idle timeout)
+}).
+
+%%-----------------------------------------------------------------------------
+%%
+%% logger macro
+%%
+%%-----------------------------------------------------------------------------
+
 %% 
 %% logger macros
 %%   debug, info, notice, warning, error, critical, alert, emergency
@@ -169,7 +204,7 @@
 
 %%
 %% access_log 
--define(access_log(X), lager:notice(knet_log:format(X))).
+-define(access_log(X), lager:notice(knet_log:common(X))).
 -record(log, {
    prot  = undefined :: any()  %% protocol identity
   ,src   = undefined :: any()  %% source address
@@ -187,29 +222,11 @@
 }).
 
 
-%%-----------------------------------------------------------------------------
-%%
-%% data types
-%%
-%%-----------------------------------------------------------------------------
-
-%%
-%% streaming protocols
--record(stream, {
-   send  = undefined :: any()      %% outbound stream encoder 
-  ,recv  = undefined :: any()      %% inbound  stream encoder
-
-  ,peer  = undefined :: any()      %% remote peer address
-  ,addr  = undefined :: any()      %% local address
-
-  ,tss   = undefined :: tempus:t() %% time to start session
-  ,ts    = undefined :: temput:t() %% time stamp @todo - move to FSM
-
-  ,ttl   = undefined :: any()      %% time to live (connection timeout)
-  ,tth   = undefined :: any()      %% time to hibernate
-  ,tio   = undefined :: any()      %% time to i/o  (idle timeout)
-}).
-
+-ifndef(CONFIG_LOG_TCP).
+-define(access_tcp(X), ok).
+-else.
+-define(access_tcp(X), lager:notice(knet_log:common(tcp, X))). 
+-endif.
 
 
 

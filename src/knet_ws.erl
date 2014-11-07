@@ -45,7 +45,7 @@
 %%
 %% guard macro
 -define(is_transport(X),  (X =:= tcp orelse X =:= ssl)).
--define(is_iolist(X),     is_binary(X) orelse is_list(X) orelse is_atom(X)).
+% -define(is_iolist(X),     is_binary(X) orelse is_list(X) orelse is_atom(X)).
 
 %% web-socket magic number
 -define(WS_GUID, "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").
