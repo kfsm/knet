@@ -32,6 +32,7 @@ knet_tcp_test_() ->
      ,fun free/1
      ,[
          fun tcp_request/1
+        ,fun tcp_listen/1
       ]
    }.
 
@@ -67,6 +68,19 @@ tcp_request(_) ->
      ,?_assertMatch(ok, knet:close(sock))
    ].
 
+tcp_listen(_) ->
+   [
+      ?_assertMatch({ok, _}, knet:listen("tcp://*:8888", [{pool, 2}, {acceptor, fun tcp_server/1}]))
+     ,?_assertMatch(ok,      register(server))         
+     ,?_assertMatch({ok, _}, knet:connect("tcp://127.0.0.1:8888"))
+     ,?_assertMatch(ok,      register(sock))
+     ,?_assertMatch({tcp, _, {established, _}},  pipe:recv())
+     ,?_assertMatch(?REQ, pipe:send(sock, ?REQ))
+     ,?_assertMatch({tcp, _, ?REQ}, pipe:recv())
+     ,?_assertMatch(ok, knet:close(sock))
+     ,?_assertMatch(ok, knet:close(server))
+   ].
+
 %%%------------------------------------------------------------------
 %%%
 %%% helper
@@ -79,6 +93,14 @@ register(Name) ->
    {ioctl, a, Sock} = pipe:recv(),
    erlang:register(Name, Sock),
    ok.
+
+%%
+%%
+tcp_server({tcp, _, Msg})
+ when is_binary(Msg) ->
+   Msg;
+tcp_server(_) ->
+   <<>>.
 
 
 % %%%----------------------------------------------------------------------------   
