@@ -55,6 +55,12 @@
 %% socket framing
 -type(so_pack() :: {pack, raw | line}).
 
+%% socket acceptor
+%% the acceptor is either 1-ary UDF or module name that implements pipe protocol 
+%% {acceptor, fun(_) -> <<>> end}
+%% {acceptor, tcp_echo}
+-type(so_acceptor() :: {acceptor, function() | atom()}).
+
 %%%------------------------------------------------------------------
 %%%
 %%% knet client interface
@@ -249,7 +255,7 @@ which(_) ->
    [].
 
 %%
-%% spawn acceptor process (used as supervisor bridge)
+%% spawn acceptor bridge process by wrapping a UDF into pipe loop
 -spec(acceptor/2 :: (function(), uri:uri()) -> {ok, pid()} | {error, any()}).
 
 acceptor(Fun, Uri) ->
