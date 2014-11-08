@@ -44,6 +44,16 @@ knet_ssl_test_() ->
       ]
    }.
 
+knet_http_test_() ->
+   {foreach,
+      fun init/0
+     ,fun free/1
+     ,[
+         fun http_request/1
+        ,fun http_listen/1
+      ]
+   }.
+
 %%%------------------------------------------------------------------
 %%%
 %%% init
@@ -84,7 +94,7 @@ tcp_listen(_) ->
    [
       ?_assertMatch({ok, _}, knet:listen("tcp://*:8888", [
          {pool,     2}
-        ,{acceptor, fun knet_server/1}
+        ,{acceptor, fun sock_server/1}
       ]))
      ,?_assertMatch(ok,      register(server))         
      ,?_assertMatch({ok, _}, knet:connect("tcp://127.0.0.1:8888"))
@@ -112,7 +122,7 @@ ssl_listen(_) ->
    [
       ?_assertMatch({ok, _}, knet:listen("ssl://*:8888", [
          {pool,     2}
-        ,{acceptor, fun knet_server/1}
+        ,{acceptor, fun sock_server/1}
         ,{certfile, "../examples/tls/priv/server.crt"}
         ,{keyfile,  "../examples/tls/priv/server.key"}
       ]))
@@ -125,6 +135,34 @@ ssl_listen(_) ->
      ,?_assertMatch(ok, knet:close(sock))
      ,?_assertMatch(ok, knet:close(server))
    ].
+
+%%
+%%
+http_request(_) ->
+   [
+      ?_assertMatch({ok, _}, knet:connect("http://" ++ ?HOST ++ ":80"))
+     ,?_assertMatch(ok,      register(sock))
+     ,?_assertMatch({http, _, {302, _, _, _}},         pipe:recv())
+     ,?_assertMatch({http, _, <<"<HTML>", _/binary>>}, pipe:recv())
+     ,?_assertMatch({http, _, eof},                    pipe:recv())
+   ].
+
+http_listen(_) ->
+   [
+      ?_assertMatch({ok, _}, knet:listen("http://*:8888", [
+         {pool,     2}
+        ,{acceptor, fun http_server/1}
+      ]))
+     ,?_assertMatch(ok,      register(server))         
+     ,?_assertMatch({ok, _}, knet:connect("http://127.0.0.1:8888"))
+     ,?_assertMatch(ok,      register(sock))
+     ,?_assertMatch({http, _, {200, _, _, _}},  pipe:recv())
+     ,?_assertMatch({http, _, <<"xxxx">>},      pipe:recv())
+     ,?_assertMatch({http, _, eof},             pipe:recv())
+     ,?_assertMatch(ok, knet:close(sock))
+     ,?_assertMatch(ok, knet:close(server))
+   ].
+
 
 
 %%%------------------------------------------------------------------
@@ -142,14 +180,23 @@ register(Name) ->
 
 %%
 %%
-knet_server({tcp, _, Msg})
+sock_server({tcp, _, Msg})
  when is_binary(Msg) ->
    Msg;
-knet_server({ssl, _, Msg})
+sock_server({ssl, _, Msg})
  when is_binary(Msg) ->
    Msg;
-knet_server(_) ->
+sock_server(_) ->
    <<>>.
+
+%%
+%%
+http_server({http, _, {'GET', _, _, _}}) ->
+   {ok, [{'Content-Length', 4}], <<"xxxx">>};
+
+http_server(_) ->
+   <<>>.
+
 
 
 % %%%----------------------------------------------------------------------------   

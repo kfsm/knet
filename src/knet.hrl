@@ -132,7 +132,8 @@
 
 %%
 %% guard macro
--define(is_iolist(X),  is_binary(X) orelse is_list(X)).
+-define(is_iolist(X),     is_binary(X) orelse is_list(X)).
+-define(is_transport(X),  (X =:= tcp orelse X =:= ssl)).   
 
 
 
@@ -232,6 +233,12 @@
 -define(access_ssl(X), ok).
 -else.
 -define(access_ssl(X), lager:notice(knet_log:common(ssl, X))). 
+-endif.
+
+-ifndef(CONFIG_LOG_HTTP).
+-define(access_http(X), ok).
+-else.
+-define(access_http(X), lager:notice(knet_log:common(http, X))). 
 -endif.
 
 

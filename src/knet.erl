@@ -48,6 +48,7 @@
 
 %% time to live timeout in milliseconds
 -type(so_ttl()  :: {ttl, timeout()}).
+-type(ht_keepalive() :: {'keep-alive', timeout()}).
 
 %% time to hibernate in milliseconds
 -type(so_tth()  :: {tth, timeout()}).
