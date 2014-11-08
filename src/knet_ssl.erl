@@ -312,7 +312,7 @@ io_ttl(#stream{}=Sock) ->
    erlang:element(2, io_ttl(-1, Sock)). 
 
 io_ttl(N, #stream{}=Sock) ->
-   case knet_stream:packets(Sock#stream.recv) + knet_stream:packets(Sock#stream.send) of
+   case pstream:packets(Sock#stream.recv) + pstream:packets(Sock#stream.send) of
       %% stream activity
       X when X > N ->
          {active, Sock#stream{ttl = tempus:timer(Sock#stream.ttl, {ttl, X})}};
