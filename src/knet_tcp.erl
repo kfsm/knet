@@ -109,7 +109,7 @@ ioctl(socket,   S) ->
          ),
          {next_state, 'LISTEN', S#fsm{sock = Sock}};
       {error, Reason} ->
-         ?access_tcp(#{req => listen, addr => Uri, rsp => Reason}),
+         ?access_tcp(#{req => {listen, Reason}, addr => Uri}),
          pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),
          {stop, Reason, S}
    end;
@@ -120,14 +120,14 @@ ioctl(socket,   S) ->
    Host = scalar:c(uri:get(host, Uri)),
    Port = uri:get(port, Uri),
    SOpt = opts:filter(?SO_TCP_ALLOWED, State#fsm.so),
-   Tout = pair:lookup([timeout, peer], ?SO_TIMEOUT, State#fsm.so),
+   Tout = pair:lookup([timeout, ttc], ?SO_TIMEOUT, State#fsm.so),
    T    = os:timestamp(),
    case gen_tcp:connect(Host, Port, SOpt, Tout) of
       {ok, Sock} ->
          Stream = io_ttl(io_tth(io_connect(Sock, State#fsm.stream))),
-         ?access_tcp(#{req => {syn, sack}, peer => Stream#stream.peer, addr => Stream#stream.addr}),
+         ?access_tcp(#{req => {syn, sack}, peer => Stream#stream.peer, addr => Stream#stream.addr, time => tempus:diff(T)}),
+         ?trace(State#fsm.trace, {tcp, connect, tempus:diff(T)}),
          pipe:a(Pipe, {tcp, self(), {established, Stream#stream.peer}}),
-         knet:trace(State#fsm.trace, {tcp, connect, tempus:diff(T)}),
          {next_state, 'ESTABLISHED', tcp_ioctl(State#fsm{stream=Stream, sock=Sock})};
 
       {error, Reason} ->
@@ -147,9 +147,9 @@ ioctl(socket,   S) ->
       {ok, Sock} ->
          {ok, _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri]),
          Stream  = io_ttl(io_tth(io_connect(Sock, State#fsm.stream))),
-         ?access_tcp(#{req => {syn, sack}, peer => Stream#stream.peer, addr => Stream#stream.addr}),
+         ?access_tcp(#{req => {syn, sack}, peer => Stream#stream.peer, addr => Stream#stream.addr, time => tempus:diff(T)}),
+         ?trace(State#fsm.trace, {tcp, connect, tempus:diff(T)}),
          pipe:a(Pipe, {tcp, self(), {established, Stream#stream.peer}}),
-         knet:trace(State#fsm.trace, {tcp, connect, tempus:diff(T)}),
          {next_state, 'ESTABLISHED', tcp_ioctl(State#fsm{stream=Stream, sock=Sock})};
 
       %% listen socket is closed
@@ -200,10 +200,9 @@ ioctl(socket,   S) ->
    %% What one can do is to combine {active, once} with gen_tcp:recv().
    %% Essentially, you will be served the first message, then read as many as you 
    %% wish from the socket. When the socket is empty, you can again enable 
-   %% {active, once}.
-   %% @todo: {active, n()}
+   %% {active, once}. @todo: {active, n()}
    {_, Stream} = io_recv(Pckt, Pipe, State#fsm.stream),
-   knet:trace(State#fsm.trace, {tcp, packet, byte_size(Pckt)}),
+   ?trace(State#fsm.trace, {tcp, packet, byte_size(Pckt)}),
    {next_state, 'ESTABLISHED', tcp_ioctl(State#fsm{stream=Stream})};
 
 'ESTABLISHED'(shutdown, _Pipe, State) ->

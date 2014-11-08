@@ -228,5 +228,18 @@
 -define(access_tcp(X), lager:notice(knet_log:common(tcp, X))). 
 -endif.
 
+-ifndef(CONFIG_LOG_SSL).
+-define(access_ssl(X), ok).
+-else.
+-define(access_ssl(X), lager:notice(knet_log:common(ssl, X))). 
+-endif.
 
+
+%%
+%% latency tracing macro
+-ifndef(CONFIG_TRACE).
+-define(trace(Pid, Msg),      ok).
+-else.
+-define(trace(Pid, Msg),      knet:trace(Pid, Msg)).
+-endif.
 

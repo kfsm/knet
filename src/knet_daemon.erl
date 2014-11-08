@@ -129,12 +129,12 @@ socket(Pid) ->
    {next_state, 'ACTIVE', S#fsm{q=Q}};
 
 'ACTIVE'({'EXIT', _Pid, _Reason}, _, S) ->
-   knet_protocol:free(S#fsm.sock),
+   knet_protocol:free(S#fsm.prot),
    {stop, normal, S};
 
 'ACTIVE'({'DOWN', _, _, Owner, _Reason}, _, #fsm{owner=Owner}=S) ->
    % socket owner is down, gracefully terminate pipeline
-   knet_protocol:free(S#fsm.sock),
+   knet_protocol:free(S#fsm.prot),
    {stop, normal, S};
 
 'ACTIVE'(Msg, _Pipe, S) ->

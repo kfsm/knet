@@ -47,10 +47,13 @@
 %%%------------------------------------------------------------------   
 
 %% time to live timeout in milliseconds
--type(so_ttl()  :: {ttl, integer()}).
+-type(so_ttl()  :: {ttl, timeout()}).
 
 %% time to hibernate in milliseconds
--type(so_tth()  :: {tth, integer()}).
+-type(so_tth()  :: {tth, timeout()}).
+
+%% time to connect
+-type(so_ttc()  :: {ttc, timeout()}).
 
 %% socket framing
 -type(so_pack() :: {pack, raw | line}).
@@ -263,7 +266,7 @@ acceptor(Fun, Uri) ->
 
 
 %%
-%% send trace message
+%% latency tracing message
 -spec(trace/2 :: (pid(), any()) -> ok).
 
 trace(undefined, _Msg) ->
