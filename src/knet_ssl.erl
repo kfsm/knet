@@ -342,6 +342,9 @@ io_send(Msg, Pipe, #stream{}=Sock) ->
 ssl_ioctl(#fsm{active=true}=State) ->
    ok = ssl:setopts(State#fsm.sock, [{active, once}]),
    State;
+ssl_ioctl(#fsm{active=once}=State) ->
+   ok = ssl:setopts(State#fsm.sock, [{active, once}]),
+   State;
 ssl_ioctl(#fsm{}=State) ->
    State.
 

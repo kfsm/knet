@@ -46,7 +46,7 @@ ioctl(_, _) ->
 
 %%
 %%
-handle({ssl, _Peer, established}, _Pipe, Sock) ->
+handle({ssl, _Peer, {established, _}}, _Pipe, Sock) ->
 	{next_state, handle, Sock};
 
 handle({ssl, _Peer, Msg}, Pipe, Sock) ->
