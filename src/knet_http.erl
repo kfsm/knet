@@ -315,6 +315,10 @@ server_upgrade(Pipe, Http, Stream, SOpt) ->
          Uri = request_url(Url, Head),
          Env = make_env(Head, Stream),
          Req = {Mthd, Uri, Head, Env},
+         %% @todo: upgrade requires better design 
+         %%  - new protocol needs to run state-less init code
+         %%  - it shall emit message
+         %%  - it shall return pipe compatible upgrade signature
          {Msg, Upgrade} = knet_ws:ioctl({upgrade, Req, SOpt}, undefined),
          pipe:a(Pipe, Msg),
          Upgrade;

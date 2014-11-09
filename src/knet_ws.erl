@@ -72,11 +72,6 @@ init(SOpt) ->
    {ok, 'IDLE', 
       #fsm{
          stream  = ht_new(SOpt)
-         % % timeout = opts:val('keep-alive', Opts),
-         % recv    = wsstream:new(server),
-         % send    = wsstream:new(server)
-         % % req     = q:new(),
-         % % trace   = opts:val(trace, undefined, Opts) 
       }
    }.
 
@@ -163,16 +158,12 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------   
 
-% 'SERVER'(timeout, _Pipe, S) ->
-%    {stop, normal, S};
-
 'SERVER'(shutdown, _Pipe, S) ->
    {stop, normal, S};
 
 'SERVER'({Prot, Peer,  established}, _Pipe, State)
  when ?is_transport(Prot) ->
    {next_state, 'SERVER', State};
-   % {next_state, 'SERVER', S#fsm{schema=http,  ts=os:timestamp(), peer=Peer},  S#fsm.timeout};
 
 'SERVER'({Prot, _, {terminated, _}}, _Pipe, State)
  when ?is_transport(Prot) ->
@@ -192,27 +183,8 @@ ioctl(_, _) ->
          {next_state, 'SERVER', State#fsm{stream=Stream}}
    end;
 
-%%
-%% local acceptor response
-% 'SERVER'(eof, Pipe, #fsm{keepalive = <<"close">>}=S) ->
-   % {stop, normal, S};
-   % try
-   %    %% TODO: expand http headers (Date + Server + Connection)
-   %    {stop, normal, http_outbound(eof, Pipe, S)}
-   % catch _:Reason ->
-   %    % io:format("----> ~p ~p~n", [Reason, erlang:get_stacktrace()]),      
-   %    {stop, normal, http_failure(Reason, Pipe, b, S)}
-   % end;
-
 'SERVER'(_Msg, Pipe, S) ->
    {next_state, 'SERVER', S}.
-   % try
-   %    %% TODO: expand http headers (Date + Server + Connection)
-   %    {next_state, 'SERVER', http_outbound(Msg, Pipe, S), S#fsm.timeout}
-   % catch _:Reason ->
-   %    % io:format("----> ~p ~p~n", [Reason, erlang:get_stacktrace()]),
-   %    {next_state, 'SERVER', http_failure(Reason, Pipe, b, S), S#fsm.timeout}
-   % end.
 
 %%%------------------------------------------------------------------
 %%%
@@ -228,25 +200,10 @@ ioctl(_, _) ->
 
 'CLIENT'({Prot, _, {established, Peer}}, _, State)
  when ?is_transport(Prot) ->
-   {next_state, 'CLIENT', 
-      State#fsm{
-        %  schema = schema(Prot)
-        % ,ts     = os:timestamp()
-        % ,peer   = Peer
-      }
-     % ,State#fsm.timeout
-   };
+   {next_state, 'CLIENT', State};
 
 'CLIENT'({Prot, _, {terminated, Reason}}, Pipe, State)
  when ?is_transport(Prot) ->
-   % case htstream:state(State#fsm.recv) of
-   %    payload -> 
-   %       % time to meaningful response
-   %       _ = knet:trace(State#fsm.trace, {http, ttmr, tempus:diff(State#fsm.ts)}),         
-   %       _ = pipe:b(Pipe, {http, self(), eof});
-   %    _       -> 
-   %       ok
-   % end,
    pipe:b(Pipe, {ws, self(), {terminated, Reason}}),
    {stop, normal, State};
 
@@ -257,37 +214,10 @@ ioctl(_, _) ->
    try
       {Msg, Http} = htstream:decode(Pckt, htstream:new()),
       {next_state, 'ESTABLISHED', State#fsm{stream=ws_new(server, [])}}
-      % {next_state, 'CLIENT', State}
-
-      % case htstream:state(Http) of
-      %    eoh     ->
-      %       % time to first byte
-      %       knet:trace(State#fsm.trace, {http, ttfb, tempus:diff(State#fsm.ts)}),
-      %       send_to_acceptor(Msg, Pipe, State),
-      %       'CLIENT'({Prot, Peer, <<>>}, Pipe, State#fsm{recv = Http, ts=os:timestamp()});
-
-      %    eof     ->
-      %       % time to meaningful response
-      %       knet:trace(State#fsm.trace, {http, ttmr, tempus:diff(State#fsm.ts)}),
-      %       send_to_acceptor(Msg, Pipe, State),
-      %       pipe:b(Pipe, {http, self(), eof}),
-      %       {next_state, 'CLIENT',
-      %          State#fsm{
-      %             recv = htstream:new(Http)
-      %            ,req  = q:enq({State#fsm.ts, Http}, State#fsm.req)
-      %          }
-      %       };
-
-      %    _       ->
-      %       send_to_acceptor(Msg, Pipe, State),
-      %       {next_state, 'CLIENT', State#fsm{recv=Http}}
-      % end
    catch _:Reason ->
       ?NOTICE("knet [http]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
       {stop, Reason, State}
    end;
-
-% S#fsm{url=Url, keepalive=Alive, recv=htstream:new(Http)}
 
 %%
 %% local client request
