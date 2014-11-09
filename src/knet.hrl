@@ -18,7 +18,7 @@
 -define(SO_TCP,  
    [
       binary
-     ,{active, true}
+     ,{active,  once}
      ,{nodelay, true}
    ]
 ). 
@@ -26,7 +26,7 @@
 -define(SO_UDP, 
    [
       binary
-     ,{active, once}
+     ,{active,  once}
      ,{nodelay, true}
    ]
 ).
@@ -227,6 +227,12 @@
 -define(access_tcp(X), ok).
 -else.
 -define(access_tcp(X), lager:notice(knet_log:common(tcp, X))). 
+-endif.
+
+-ifndef(CONFIG_LOG_UDP).
+-define(access_udp(X), ok).
+-else.
+-define(access_udp(X), lager:notice(knet_log:common(udp, X))). 
 -endif.
 
 -ifndef(CONFIG_LOG_SSL).

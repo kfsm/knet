@@ -117,8 +117,8 @@ ioctl(socket,   S) ->
 %%
 %%
 'IDLE'({connect, Uri}, Pipe, State) ->
-   Host = scalar:c(uri:get(host, Uri)),
-   Port = uri:get(port, Uri),
+   Host = scalar:c(uri:host(Uri)),
+   Port = uri:port(Uri),
    SOpt = opts:filter(?SO_TCP_ALLOWED, State#fsm.so),
    Tout = pair:lookup([timeout, ttc], ?SO_TIMEOUT, State#fsm.so),
    T    = os:timestamp(),
@@ -306,6 +306,9 @@ io_send(Msg, Pipe, #stream{}=Sock) ->
 %%
 %% set socket i/o control flags
 tcp_ioctl(#fsm{active=true}=State) ->
+   ok = inet:setopts(State#fsm.sock, [{active, once}]),
+   State;
+tcp_ioctl(#fsm{active=once}=State) ->
    ok = inet:setopts(State#fsm.sock, [{active, once}]),
    State;
 tcp_ioctl(#fsm{}=State) ->

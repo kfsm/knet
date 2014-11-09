@@ -18,12 +18,18 @@
 -module(knet_tests).
 -include_lib("eunit/include/eunit.hrl").
 
+-define(UNIT_TEST_TCP,  true).
+-define(UNIT_TEST_SSL,  true).
+-define(UNIT_TEST_UDP,  true).
+-define(UNIT_TEST_HTTP, true).
+
 %%%------------------------------------------------------------------
 %%%
 %%% suites
 %%%
 %%%------------------------------------------------------------------   
 
+-ifdef(UNIT_TEST_TCP).
 knet_tcp_test_() ->
    {foreach,
       fun init/0
@@ -33,7 +39,9 @@ knet_tcp_test_() ->
         ,fun tcp_listen/1
       ]
    }.
+-endif.
 
+-ifdef(UNIT_TEST_SSL).
 knet_ssl_test_() ->
    {foreach,
       fun init/0
@@ -43,7 +51,20 @@ knet_ssl_test_() ->
         ,fun ssl_listen/1
       ]
    }.
+-endif.
 
+-ifdef(UNIT_TEST_UDP).
+knet_udp_test_() ->
+   {foreach,
+      fun init/0
+     ,fun free/1
+     ,[
+         fun udp_listen/1
+      ]      
+   }.
+-endif.
+
+-ifdef(UNIT_TEST_HTTP).
 knet_http_test_() ->
    {foreach,
       fun init/0
@@ -53,6 +74,7 @@ knet_http_test_() ->
         ,fun http_listen/1
       ]
    }.
+-endif.
 
 %%%------------------------------------------------------------------
 %%%
@@ -138,6 +160,24 @@ ssl_listen(_) ->
 
 %%
 %%
+udp_listen(_) ->
+   [
+      ?_assertMatch({ok, _}, knet:listen("udp://*:8888", [
+         {pool,     2}
+        ,{acceptor, fun sock_server/1}
+      ]))
+     ,?_assertMatch(ok,      register(server))         
+     ,?_assertMatch({ok, _}, knet:connect("udp://127.0.0.1:8888"))
+     ,?_assertMatch(ok,      register(sock))
+     ,?_assertMatch({udp, _, {listen, _}},  pipe:recv())
+     ,?_assertMatch(?REQ, pipe:send(sock, ?REQ))
+     ,?_assertMatch({udp, _, {_, ?REQ}}, pipe:recv())
+     ,?_assertMatch(ok, knet:close(sock))
+     ,?_assertMatch(ok, knet:close(server))
+   ].
+
+%%
+%%
 http_request(_) ->
    [
       ?_assertMatch({ok, _}, knet:connect("http://" ++ ?HOST ++ ":80"))
@@ -185,6 +225,8 @@ sock_server({tcp, _, Msg})
    Msg;
 sock_server({ssl, _, Msg})
  when is_binary(Msg) ->
+   Msg;
+sock_server({udp, _, Msg}) ->
    Msg;
 sock_server(_) ->
    <<>>.

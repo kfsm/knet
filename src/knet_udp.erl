@@ -33,25 +33,20 @@
    ioctl/2,
    'IDLE'/3, 
    'LISTEN'/3, 
-   'ESTABLISHED'/3
+   'ESTABLISHED'/3,
+   'HIBERNATE'/3
 ]).
 
 %% internal state
 -record(fsm, {
-   sock :: port(),  % udp socket	
-   addr :: any(),   % local address
-   peer :: any(),   % default remote peer
-
-   % socket options
-   sopt        = undefined   :: list(),              %% list of socket opts    
-   active      = true        :: once | true | false, %% socket activity (pipe internally uses active once)
-   tout_io     = ?SO_TIMEOUT :: integer(),           %% timeout to handle io
-   packet      = 0           :: integer(),           %% number of packets handled by socket in between of io timeouts
-
-
-   service     = undefined :: pid(),                 %% service supervisor
-   pool        = 0         :: integer(),             %% socket acceptor pool size
-   acceptor    = undefined :: datum:q()              %% socket worker queue 
+   stream   = undefined :: #stream{}  %% udp packet stream
+  ,dispatch = undefined :: atom()     %% acceptor dispatch algorithm
+  ,acceptor = undefined :: datum:q()  %% acceptor queue (worker process handling udp message) 
+  ,sock     = undefined :: port()     %% udp socket
+  ,active   = true      :: once | true | false  %% socket activity (pipe internally uses active once)  
+  ,pool     = 0         :: integer()  %% socket acceptor pool size
+  ,trace    = undefined :: pid()      %% trace / debug / stats functor 
+  ,so       = undefined :: any()      %% socket options
 }).
 
 
@@ -62,35 +57,37 @@
 %%%------------------------------------------------------------------   
 
 start_link(Opts) ->
-   pipe:start_link(?MODULE, Opts ++ ?SO_TCP, []).
+   pipe:start_link(?MODULE, Opts ++ ?SO_UDP, []).
 
 %%
 init(Opts) ->
    {ok, 'IDLE', 
       #fsm{      
-         sopt      = opts:filter(?SO_UDP_ALLOWED, Opts),
-         active    = opts:val(active, Opts),
-         tout_io   = opts:val(timeout_io,   ?SO_TIMEOUT, Opts),
-         pool      = opts:val(pool, 0, Opts)
+         stream  = io_new(Opts)
+        ,dispatch= opts:val(dispatch, 'round-robin', Opts)
+        ,pool    = opts:val(pool, 0, Opts)
+        ,trace   = opts:val(trace, undefined, Opts)
+        ,active  = opts:val(active, Opts)
+        ,so      = Opts      
       }
    }.
 
 %%
-free(_, S) ->
-   case erlang:port_info(S#fsm.sock) of
-      undefined ->
-         ok;
-      _ ->
-         gen_tcp:close(S#fsm.sock)
-   end.
+free(Reason, #fsm{stream=Stream, sock=Sock}) ->
+   ?access_tcp(#{
+      req  => {fin, Reason}
+     ,peer => Stream#stream.peer 
+     ,addr => Stream#stream.addr
+     ,byte => pstream:octets(Stream#stream.recv) + pstream:octets(Stream#stream.send)
+     ,pack => pstream:packets(Stream#stream.recv) + pstream:packets(Stream#stream.send)
+     ,time => tempus:diff(Stream#stream.ts)
+   }),
+   (catch gen_tcp:close(Sock)),
+   ok. 
 
 %% 
-ioctl(socket,   S) -> 
-   S#fsm.sock;
-ioctl({peer, Peer}, S) ->
-	S#fsm{
-		peer = Peer
-	}.
+ioctl(socket, State) -> 
+   State#fsm.sock.
 
 %%%------------------------------------------------------------------
 %%%
@@ -99,68 +96,61 @@ ioctl({peer, Peer}, S) ->
 %%%------------------------------------------------------------------   
 
 %%
-'IDLE'({connect, Uri}, Pipe, S) ->
-   Host = scalar:c(uri:host(Uri)),
-   Port = so_port(uri:port(Uri)),
-	case gen_udp:open(Port, S#fsm.sopt) of
-		{ok, Sock} ->
-   		{ok, Addr} = inet:sockname(Sock),
-         ?DEBUG("knet udp ~p: local ~p", [self(), Addr]),
-         _ = so_ioctl(Sock, S),
-         {next_state, 'ESTABLISHED', 
-            S#fsm{
-               sock    = Sock,
-               addr    = Addr,
-               tout_io = tempus:event(S#fsm.tout_io, timeout_io) 
-            }
-         };
-		{error, Reason} ->
-         ?DEBUG("knet udp ~p: terminated ~s (reason ~p)", [self(), uri:to_binary(Uri), Reason]),
-         % @todo: what is message tag Uri or {Host, Port}
-         pipe:a(Pipe, {udp, {Host, Port}, {terminated, Reason}}),
-         {stop, Reason, S}		
-	end;
-
-%%
-'IDLE'({listen, Uri}, Pipe, S) ->
-   Host = scalar:c(uri:host(Uri)),   
-   Port = uri:get(port, Uri),
-   ok   = pns:register(knet, {udp, {any, Port}}),
-   case gen_udp:open(Port, S#fsm.sopt) of
+'IDLE'({listen, Uri}, Pipe, State) ->
+   Port = uri:port(Uri),
+   ok   = knet:register(udp, {any, Port}),
+   SOpt = opts:filter(?SO_UDP_ALLOWED, State#fsm.so),
+   case gen_udp:open(Port, SOpt) of
       {ok, Sock} -> 
-   		{ok, Addr} = inet:sockname(Sock),      
-         ?DEBUG("knet udp ~p: listen ~p", [self(), Addr]),
-         _ = so_ioctl(Sock, S),
-         _ = init_acceptor(S#fsm.pool, Uri),
-         {next_state, 'LISTEN', 
-            S#fsm{
-               sock     = Sock,
-               addr     = Addr,
-               service  = pns:whereis(knet, {service, uri:s(Uri)}),
-               acceptor = deq:new()
-            }
-         };
+         ?access_udp(#{req => listen, addr => Uri}),
+         _ = pipe:a(Pipe, {udp, self(), {listen, Uri}}),
+         %% create acceptor pool
+         Sup = knet:whereis(acceptor, Uri),
+         ok  = lists:foreach(
+            fun(_) ->
+               {ok, _} = supervisor:start_child(Sup, [Uri])
+            end,
+            lists:seq(1, State#fsm.pool)
+         ),
+         {next_state, 'LISTEN', udp_ioctl(State#fsm{sock=Sock, acceptor=q:new()})};
+
       {error, Reason} ->
-         ?DEBUG("knet udp ~p: terminated ~s (reason ~p)", [self(), uri:to_binary(Uri), Reason]),
-         pipe:a(Pipe, {udp, {Host, Port}, {terminated, Reason}}),
-         {stop, Reason, S}
+         ?access_tcp(#{req => {listen, Reason}, addr => Uri}),
+         pipe:a(Pipe, {udp, self(), {terminated, Reason}}),
+         {stop, Reason, State}
    end;
 
 %%
-'IDLE'({accept, Uri}, Pipe, S) ->
-   Service    = pns:whereis(knet, {service, uri:s(Uri)}),
-   Port       = uri:get(port, Uri),
-   Pid        = pns:whereis(knet, {udp, {any, Port}}),
-   % @todo: by-pass udp-stub for recv operation
-   {ok, Sock} = plib:call(Pid, {bind, {pipe, self(), pipe:a(Pipe)}}),
-  	{ok, Addr} = inet:sockname(Sock),
-   ?DEBUG("knet udp ~p: accepted (local ~p)", [self(), Addr]),
-	{next_state, 'ESTABLISHED', 
-      S#fsm{
-         sock    = Sock, 
-         addr    = Addr
-      }
-   };
+'IDLE'({connect, Uri}, Pipe, State) ->
+   SOpt = opts:filter(?SO_UDP_ALLOWED, State#fsm.so),
+	case gen_udp:open(0, SOpt) of
+		{ok, Sock} ->
+         Stream = io_ttl(io_tth(io_connect(Sock, Uri, State#fsm.stream))),
+         ?access_udp(#{req => listen, addr => Uri}),
+         _ = pipe:a(Pipe, {udp, self(), {listen, uri:authority(Stream#stream.addr, Uri)}}),
+         {next_state, 'ESTABLISHED', udp_ioctl(State#fsm{stream=Stream, sock=Sock})};
+
+		{error, Reason} ->
+         ?access_udp(#{req => {listen, Reason}, addr => Uri}),
+         pipe:a(Pipe, {udp, self(), {terminated, Reason}}),
+         {stop, Reason, State}
+	end;
+
+
+%%
+'IDLE'({accept, Uri}, _Pipe, State) ->
+   Port = uri:get(port, Uri),
+   Pid  = knet:whereis(udp, {any, Port}), 
+   case pipe:call(Pid, accept, infinity) of
+      % each acceptor handles udp packet
+      {'round-robin', Sock} ->
+         {next_state, 'ESTABLISHED', State#fsm{sock = Sock}};
+
+      % each acceptor handles dedicate peer, spawn new acceptor    
+      {peer, Sock} ->
+         {ok, _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri]),
+         {next_state, 'ESTABLISHED', State#fsm{sock = Sock}}
+   end;
 
 %%
 'IDLE'(shutdown, _Pipe, S) ->
@@ -174,24 +164,43 @@ ioctl({peer, Peer}, S) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'LISTEN'({bind, Pipe0}, Pipe, S) ->
-	% bind acceptor process to listen socket
-	plib:ack(Pipe, {ok, S#fsm.sock}),
-	{next_state, 'LISTEN', S#fsm{acceptor= deq:enq(Pipe0, S#fsm.acceptor)}};
+'LISTEN'(accept, Pipe, #fsm{dispatch='round-robin'}=State) ->
+   Pid = pipe:a(Pipe),
+   pipe:ack(Pipe, {'round-robin', State#fsm.sock}),
+	{next_state, 'LISTEN', State#fsm{acceptor=q:enq(Pid, State#fsm.acceptor)}};
 
-'LISTEN'(shutdown, _Pipe, S) ->
-   ?DEBUG("knet udp ~p: terminated (reason normal)", [self()]),
-   {stop, normal, S};
+'LISTEN'(accept, Pipe, #fsm{dispatch=peer}=State) ->
+   {next_state, 'LISTEN', State#fsm{acceptor=q:enq(Pipe, State#fsm.acceptor)}};
 
-'LISTEN'({udp, _, Host, Port, Pckt}, _Pipe, S) ->
+
+'LISTEN'(shutdown, _Pipe, State) ->
+   {stop, normal, State};
+
+'LISTEN'({udp, _, Host, Port, Pckt}, _Pipe, #fsm{dispatch='round-robin'}=State) ->
    ?DEBUG("knet udp ~p: recv ~p~n~p", [self(), {Host, Port}, Pckt]),
-   so_ioctl(S#fsm.sock, S),   
-   {Pipe, Q} = deq:deq(S#fsm.acceptor),
-   _ = pipe:relay(Pipe, {udp, {Host, Port}, Pckt}),
-	{next_state, 'LISTEN', S#fsm{acceptor=deq:enq(Pipe, Q)}};
+   {Pid, Queue} = q:deq(State#fsm.acceptor),
+   pipe:send(Pid, {udp, self(), {{Host, Port}, Pckt}}),
+   {next_state, 'LISTEN', udp_ioctl(State#fsm{acceptor = q:enq(Pid, Queue)})};
 
-'LISTEN'(_Msg, _Pipe, S) ->
-   {next_state, 'LISTEN', S}.
+'LISTEN'({udp, _, Host, Port, Pckt}, _Pipe, #fsm{dispatch=peer}=State) ->
+   ?DEBUG("knet udp ~p: recv ~p~n~p", [self(), {Host, Port}, Pckt]),
+   case pns:whereis(knet, {udp, {Host, Port}}) of
+      %% peer handler unknown, allocate new one
+      undefined ->
+         {Pipe, Queue} = q:deq(State#fsm.acceptor),
+         Pid = pipe:a(Pipe),
+         pipe:ack(Pipe, {peer, State#fsm.sock}),
+         pns:register(knet, {udp, {Host, Port}}, Pid),
+         pipe:send(Pid, {udp, self(), {{Host, Port}, Pckt}}),
+         {next_state, 'LISTEN', udp_ioctl(State#fsm{acceptor = Queue})};
+      %% peer handler exists
+      Pid ->
+         pipe:send(Pid, {udp, self(), {{Host, Port}, Pckt}}),
+         {next_state, 'LISTEN', udp_ioctl(State)}
+   end;
+   
+'LISTEN'(_Msg, _Pipe, State) ->
+   {next_state, 'LISTEN', State}.
 
 
 %%%------------------------------------------------------------------
@@ -200,57 +209,55 @@ ioctl({peer, Peer}, S) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'ESTABLISHED'({udp, _, Host, Port, Pckt}, Pipe, S) ->
-   ?DEBUG("knet udp ~p: recv ~p~n~p", [self(), {Host, Port}, Pckt]),
-   so_ioctl(S#fsm.sock, S),
-   _ = pipe:b(Pipe, {udp, {Host, Port}, Pckt}),
-   {next_state, 'ESTABLISHED', 
-      S#fsm{
-         packet = S#fsm.packet + 1
-      }
-   };
+'ESTABLISHED'({udp, _, Host, Port, Pckt}, Pipe, State) ->
+   {_, Stream} = io_recv({{Host, Port}, Pckt}, Pipe, State#fsm.stream),
+   ?trace(State#fsm.trace, {udp, packet, byte_size(Pckt)}),
+   {next_state, 'ESTABLISHED', udp_ioctl(State#fsm{stream=Stream})};
 
-'ESTABLISHED'({udp, _Peer, _Pckt}=Msg, Pipe, S) ->
-	_ = pipe:b(Pipe, Msg),
-	{next_state, 'ESTABLISHED', S};
+'ESTABLISHED'({udp, _, Msg}, Pipe, State) ->
+   {_, Stream} = io_recv(Msg, Pipe, State#fsm.stream),
+   ?trace(State#fsm.trace, {udp, packet, byte_size(Pckt)}),
+   {next_state, 'ESTABLISHED', State#fsm{stream=Stream}};
 
+'ESTABLISHED'(shutdown, _Pipe, State) ->
+   {stop, normal, State};
 
-'ESTABLISHED'(shutdown, Pipe, S) ->
-   ?DEBUG("knet udp ~p: terminated ~p (reason normal)", [self(), S#fsm.addr]),
-   _ = pipe:b(Pipe, {udp, S#fsm.addr, {terminated, normal}}),
-   {stop, normal, S};
-
-'ESTABLISHED'(timeout_io,  Pipe, #fsm{packet = 0}=S) ->
-   ?DEBUG("knet udp ~p: terminated ~p (reason timeout)", [self(), S#fsm.addr]),
-   _ = pipe:b(Pipe, {udp, S#fsm.addr, {terminated, timeout}}),
-   {stop, normal, S};
-
-'ESTABLISHED'(timeout_io,  Pipe, S) ->
-   {next_state, 'ESTABLISHED',
-      S#fsm{
-         packet  = 0,
-         tout_io = tempus:reset(S#fsm.tout_io, timeout_io)
-      }
-   };
-
-'ESTABLISHED'({{Host, Port}, Pckt}, Pipe, S)
- when is_binary(Pckt) orelse is_list(Pckt) ->
-   case gen_udp:send(S#fsm.sock, Host, Port, Pckt) of
-      ok    ->
-         {next_state, 'ESTABLISHED', 
-            S#fsm{
-               packet = S#fsm.packet + 1
-            }
-         };
-      {error, Reason} ->
-         ?DEBUG("knet udp ~p: terminated ~p (reason ~p)", [self(), S#fsm.addr, Reason]),
-         _ = pipe:a(Pipe, {tcp, S#fsm.addr, {terminated, Reason}}),
-         {stop, Reason, S}
+'ESTABLISHED'({ttl, Pack}, Pipe, State) ->
+   case io_ttl(Pack, State#fsm.stream) of
+      {eof, Stream} ->
+         pipe:b(Pipe, {tcp, self(), {terminated, timeout}}),
+         {stop, normal, State#fsm{stream=Stream}};
+      {_,   Stream} ->
+         {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
    end;
 
-'ESTABLISHED'(Pckt, Pipe, S)
- when is_binary(Pckt) orelse is_list(Pckt) ->
- 	'ESTABLISHED'({S#fsm.peer, Pckt}, Pipe, S).
+'ESTABLISHED'(hibernate, _, State) ->
+   ?DEBUG("knet [udp]: suspend ~p", [self()]),
+   {next_state, 'HIBERNATE', State, hibernate};
+
+'ESTABLISHED'({{_Host, _Port}, Pckt} = Msg, Pipe, State)
+ when ?is_iolist(Pckt) ->
+   try
+      {_, Stream} = io_send(Msg, State#fsm.sock, State#fsm.stream),
+      {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
+   catch _:{badmatch, {error, Reason}} ->
+      pipe:b(Pipe, {udp, self(), {terminated, Reason}}),
+      {stop, Reason, State}
+   end;
+
+'ESTABLISHED'(Pckt, Pipe, #fsm{stream=Stream}=State)
+ when ?is_iolist(Pckt) ->
+ 	'ESTABLISHED'({Stream#stream.peer, Pckt}, Pipe, State).
+
+%%%------------------------------------------------------------------
+%%%
+%%% HIBERNATE
+%%%
+%%%------------------------------------------------------------------   
+
+'HIBERNATE'(Msg, Pipe, State) ->
+   ?DEBUG("knet [tcp]: resume ~p", [Sock#stream.peer]),
+   'ESTABLISHED'(Msg, Pipe, State#fsm{stream=io_tth(State#fsm.stream)}).
 
 
 %%%------------------------------------------------------------------
@@ -260,26 +267,78 @@ ioctl({peer, Peer}, S) ->
 %%%------------------------------------------------------------------   
 
 %%
-%% set socket i/o opts
-so_ioctl(Sock, #fsm{active=true}) ->
-   ok = inet:setopts(Sock, [{active, once}]);
-so_ioctl(_Sock, _) ->
-   ok.
-
-%% socket port
-so_port(undefined) ->
-	0;
-so_port(Port) ->
-	Port.	
+%% new socket stream
+io_new(SOpt) ->
+   #stream{
+      send = pstream:new(opts:val(pack, raw, SOpt))
+     ,recv = pstream:new(opts:val(pack, raw, SOpt))
+     ,ttl  = pair:lookup([timeout, ttl], ?SO_TTL, SOpt)
+     ,tth  = pair:lookup([timeout, tth], ?SO_TTH, SOpt)
+     ,ts   = os:timestamp()
+   }.
 
 %%
-%% init acceptor queue
-init_acceptor(N, Uri) ->
-	init_acceptor(N, pns:whereis(knet, {service, uri:s(Uri)}), Uri).
+%% socket connected
+io_connect(Port, Uri, #stream{}=Sock) ->
+   Peer = case uri:host(Uri) of
+      <<$*>> ->
+         undefined;
+      Host   ->
+         Inet = case uri:schema(Uri) of
+            udp  -> inet;
+            udp6 -> inet6
+         end,
+         {ok, IP} = inet:getaddr(scalar:c(Host), Inet),
+         {IP, uri:port(Uri)}
+   end,
+   {ok, Addr} = inet:sockname(Port),
+   Sock#stream{addr = Addr, peer = Peer, tss = os:timestamp(), ts = os:timestamp()}.
 
-init_acceptor(0, _Service, _Uri) ->
-	ok;
-init_acceptor(N, Service, Uri) ->
-	% @todo: recover failed acceptor
-	{ok, _} = knet_service_sup:init_acceptor(Service, Uri),
-	init_acceptor(N - 1, Service, Uri).
+%%
+%% set hibernate timeout
+io_tth(#stream{}=Sock) ->
+   Sock#stream{
+      tth = tempus:timer(Sock#stream.tth, hibernate)
+   }.
+
+%%
+%% set time-to-live timeout
+io_ttl(#stream{}=Sock) ->
+   erlang:element(2, io_ttl(-1, Sock)). 
+
+io_ttl(N, #stream{}=Sock) ->
+   case pstream:packets(Sock#stream.recv) + pstream:packets(Sock#stream.send) of
+      %% stream activity
+      X when X > N ->
+         {active, Sock#stream{ttl = tempus:timer(Sock#stream.ttl, {ttl, X})}};
+      %% no stream activity
+      _ ->
+         {eof, Sock}
+   end.
+
+%%
+%% recv packet
+io_recv({{_Host, _Port}=Peer, Pckt}, Pipe, #stream{}=Sock) ->
+   ?DEBUG("knet [udp] ~p: recv ~p~n~p", [self(), Peer, Pckt]),
+   {Msg, Recv} = pstream:decode(Pckt, Sock#stream.recv),
+   lists:foreach(fun(X) -> pipe:b(Pipe, {udp, self(), {Peer, X}}) end, Msg),
+   {active, Sock#stream{recv=Recv}}.
+
+%%
+%% send packet
+io_send({{Host, Port}, Msg}, Pipe, #stream{}=Sock) ->
+   ?DEBUG("knet [udp] ~p: send ~p~n~p", [self(), Peer, Msg]),
+   {Pckt, Send} = pstream:encode(Msg, Sock#stream.send),
+   lists:foreach(fun(X) -> ok = gen_udp:send(Pipe, Host, Port, X) end, Pckt),
+   {active, Sock#stream{send=Send}}.
+
+%%
+%% set socket i/o control flags
+udp_ioctl(#fsm{active=true}=State) ->
+   ok = inet:setopts(State#fsm.sock, [{active, once}]),
+   State;
+udp_ioctl(#fsm{active=once}=State) ->
+   ok = inet:setopts(State#fsm.sock, [{active, once}]),
+   State;
+udp_ioctl(#fsm{}=State) ->
+   State.

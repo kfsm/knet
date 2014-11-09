@@ -56,8 +56,11 @@
 %% time to connect
 -type(so_ttc()  :: {ttc, timeout()}).
 
-%% socket framing
+%% socket packet framing
 -type(so_pack() :: {pack, raw | line}).
+
+%% socket acceptor dispatch algorithm
+-type(so_dispatch() :: {dispatch, 'round-robin' | peer}).
 
 %% socket acceptor
 %% the acceptor is either 1-ary UDF or module name that implements pipe protocol 
