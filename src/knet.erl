@@ -62,6 +62,9 @@
 %% socket acceptor dispatch algorithm
 -type(so_dispatch() :: {dispatch, 'round-robin' | peer}).
 
+%% bind socket to local address
+-type(so_addr() :: {addr, {any(), integer()}}).
+
 %% socket acceptor
 %% the acceptor is either 1-ary UDF or module name that implements pipe protocol 
 %% {acceptor, fun(_) -> <<>> end}

@@ -122,7 +122,7 @@ ioctl(socket, State) ->
 
 %%
 'IDLE'({connect, Uri}, Pipe, State) ->
-   Port = scalar:i(uri:q(<<"local">>, <<"0">>, Uri)),
+   {_Host, Port} = opts:val(addr, {any, 0}, State#fsm.so),
    SOpt = opts:filter(?SO_UDP_ALLOWED, State#fsm.so),
 	case gen_udp:open(Port, SOpt) of
 		{ok, Sock} ->
