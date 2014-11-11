@@ -46,8 +46,8 @@ ioctl(_, _) ->
 
 %%
 %%
-handle({udp, Peer, Msg}, Pipe, Sock) ->
-	pipe:a(Pipe, {Peer, Msg}),
+handle({udp, _, Msg}, Pipe, Sock) ->
+	pipe:a(Pipe, Msg),
 	{next_state, handle, Sock}.
 
 
