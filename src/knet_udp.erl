@@ -122,12 +122,13 @@ ioctl(socket, State) ->
 
 %%
 'IDLE'({connect, Uri}, Pipe, State) ->
+   Port = scalar:i(uri:q(<<"local">>, <<"0">>, Uri)),
    SOpt = opts:filter(?SO_UDP_ALLOWED, State#fsm.so),
-	case gen_udp:open(0, SOpt) of
+	case gen_udp:open(Port, SOpt) of
 		{ok, Sock} ->
          Stream = io_ttl(io_tth(io_connect(Sock, Uri, State#fsm.stream))),
          ?access_udp(#{req => listen, addr => Uri}),
-         _ = pipe:a(Pipe, {udp, self(), {listen, uri:authority(Stream#stream.addr, Uri)}}),
+         _ = pipe:a(Pipe, {udp, self(), {listen, uri:authority(Stream#stream.addr, uri:new(udp))}}),
          {next_state, 'ESTABLISHED', udp_ioctl(State#fsm{stream=Stream, sock=Sock})};
 
 		{error, Reason} ->
