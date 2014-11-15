@@ -105,7 +105,7 @@ ioctl(socket,   S) ->
          Sup = knet:whereis(acceptor, Uri),
          ok  = lists:foreach(
             fun(_) ->
-               {ok, _} = supervisor:start_child(Sup, [Uri])
+               {ok, _} = supervisor:start_child(Sup, [Uri, S#fsm.so])
             end,
             lists:seq(1, S#fsm.pool)
          ),
@@ -159,7 +159,7 @@ ioctl(socket,   S) ->
       {ok, Sock} ->
          ?trace(S#fsm.trace, {tcp, connect, tempus:diff(T1)}),
          T2      = os:timestamp(), 
-         {ok, _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri]),
+         {ok, _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri, S#fsm.so]),
          case ssl:ssl_accept(Sock) of
             ok ->
                Stream = io_ttl(io_tth(io_connect(T1, Sock, S#fsm.stream))),
@@ -176,7 +176,7 @@ ioctl(socket,   S) ->
       {error, closed} ->
          {stop, normal, S};
       {error, Reason} ->
-         {ok,    _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri]),
+         {ok,    _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri, S#fsm.so]),
          ?access_ssl(#{req => {syn, Reason}, addr => Uri}),
          pipe:a(Pipe, {ssl, self(), {terminated, Reason}}),      
          {stop, Reason, S}

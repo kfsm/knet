@@ -9,14 +9,14 @@
 %%
 run(Uri) ->
    %% listen on socket, use defined acceptor to handle incoming connections
-   knet:listen(Uri, [{acceptor, fun acceptor/1}, {pool, 100}, {backlog, 10240}]).
+   knet:listen(Uri, [{acceptor, fun acceptor/2}, {pool, 100}, {backlog, 10240}]).
 
 %%
 %% create new acceptor process
-acceptor(Uri) ->
+acceptor(Uri, Opts) ->
    spawn(fun() -> 
       %% bind acceptor process to socket   
-      {ok, Sock} = knet:bind(Uri),
+      {ok, Sock} = knet:bind(Uri, Opts),
       loop(Sock)
    end).
 

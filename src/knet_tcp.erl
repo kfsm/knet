@@ -103,7 +103,7 @@ ioctl(socket,   S) ->
          Sup = knet:whereis(acceptor, Uri),
          ok  = lists:foreach(
             fun(_) ->
-               {ok, _} = supervisor:start_child(Sup, [Uri])
+               {ok, _} = supervisor:start_child(Sup, [Uri, S#fsm.so])
             end,
             lists:seq(1, S#fsm.pool)
          ),
@@ -145,7 +145,7 @@ ioctl(socket,   S) ->
    case gen_tcp:accept(LSock) of
       %% connection is accepted
       {ok, Sock} ->
-         {ok, _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri]),
+         {ok, _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri, State#fsm.so]),
          Stream  = io_ttl(io_tth(io_connect(Sock, State#fsm.stream))),
          ?access_tcp(#{req => {syn, sack}, peer => Stream#stream.peer, addr => Stream#stream.addr, time => tempus:diff(T)}),
          ?trace(State#fsm.trace, {tcp, connect, tempus:diff(T)}),
@@ -158,7 +158,7 @@ ioctl(socket,   S) ->
 
       %% unable to accept connection  
       {error, Reason} ->
-         {ok, _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri]),
+         {ok, _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri, State#fsm.so]),
          ?access_tcp(#{req => {syn, Reason}, addr => Uri}),
          pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),      
          {stop, Reason, State}

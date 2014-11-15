@@ -21,7 +21,7 @@
 -behaviour(pipe).
 
 -export([
-	start_link/1,
+	start_link/2,
 	init/1,
 	free/2,
 	ioctl/2,
@@ -30,11 +30,11 @@
 
 %%
 %%
-start_link(Uri) ->
-	pipe:start_link(?MODULE, [Uri], []).
+start_link(Uri, Opts) ->
+	pipe:start_link(?MODULE, [Uri, Opts], []).
 
-init([Uri]) ->
-	{ok, Sock} = knet:bind(Uri),
+init([Uri, Opts]) ->
+	{ok, Sock} = knet:bind(Uri, Opts),
 	{ok, handle, Sock}.
 
 free(_, Sock) ->

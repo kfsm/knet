@@ -108,7 +108,7 @@ ioctl(socket, State) ->
          Sup = knet:whereis(acceptor, Uri),
          ok  = lists:foreach(
             fun(_) ->
-               {ok, _} = supervisor:start_child(Sup, [Uri])
+               {ok, _} = supervisor:start_child(Sup, [Uri, State#fsm.so])
             end,
             lists:seq(1, State#fsm.pool)
          ),
@@ -149,7 +149,7 @@ ioctl(socket, State) ->
 
       % each acceptor handles dedicate peer, spawn new acceptor    
       {peer, Sock} ->
-         {ok, _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri]),
+         {ok, _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri, State#fsm.so]),
          {next_state, 'ESTABLISHED', State#fsm{sock = Sock}}
    end;
 

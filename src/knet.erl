@@ -36,7 +36,7 @@
   ,whereis/2
 
   ,which/1
-  ,acceptor/2
+  ,acceptor/3
   ,trace/2
 ]).
 
@@ -266,11 +266,17 @@ which(_) ->
 
 %%
 %% spawn acceptor bridge process by wrapping a UDF into pipe loop
--spec(acceptor/2 :: (function(), uri:uri()) -> {ok, pid()} | {error, any()}).
+-spec(acceptor/3 :: (function(), uri:uri(), list()) -> {ok, pid()} | {error, any()}).
 
-acceptor(Fun, Uri) ->
-   {ok, erlang:spawn_link(fun() -> bind(Uri), pipe:loop(Fun) end)}.
-
+acceptor(Fun, Uri, Opts) ->
+   {ok, 
+      erlang:spawn_link(
+         fun() -> 
+            bind(Uri, Opts),
+            pipe:loop(Fun) 
+         end
+      )
+   }.
 
 %%
 %% latency tracing message
