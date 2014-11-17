@@ -139,7 +139,7 @@ ioctl(socket, State) ->
 
 
 %%
-'IDLE'({accept, Uri}, _Pipe, State) ->
+'IDLE'({accept, Uri}, _Pipe, #fsm{stream=Stream}=State) ->
    Port = uri:get(port, Uri),
    Pid  = knet:whereis(udp, {any, Port}), 
    case pipe:call(Pid, accept, infinity) of
@@ -148,9 +148,9 @@ ioctl(socket, State) ->
          {next_state, 'ESTABLISHED', State#fsm{sock = Sock}};
 
       % each acceptor handles dedicate peer, spawn new acceptor    
-      {peer, Sock} ->
+      {peer, Peer, Sock} ->
          {ok, _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri, State#fsm.so]),
-         {next_state, 'ESTABLISHED', State#fsm{sock = Sock}}
+         {next_state, 'ESTABLISHED', State#fsm{stream = Stream#stream{peer = Peer}, sock = Sock}}
    end;
 
 %%
@@ -189,10 +189,11 @@ ioctl(socket, State) ->
       %% peer handler unknown, allocate new one
       undefined ->
          {Pipe, Queue} = q:deq(State#fsm.acceptor),
-         Pid = pipe:a(Pipe),
-         pipe:ack(Pipe, {peer, State#fsm.sock}),
-         pns:register(knet, {udp, {Host, Port}}, Pid),
-         pipe:send(Pid, {udp, self(), {{Host, Port}, Pckt}}),
+         Pid  = pipe:a(Pipe),
+         Peer = {Host, Port},
+         pipe:ack(Pipe, {peer, Peer, State#fsm.sock}),
+         pns:register(knet, {udp, Peer}, Pid),
+         pipe:send(Pid, {udp, self(), {Peer, Pckt}}),
          {next_state, 'LISTEN', udp_ioctl(State#fsm{acceptor = Queue})};
       %% peer handler exists
       Pid ->
