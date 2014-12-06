@@ -97,15 +97,15 @@ ioctl(_, _) ->
 'IDLE'({connect, Uri}, Pipe, State) ->
    % connect is compatibility wrapper for knet socket interface (translated to http GET request)
    % @todo: htstream support HTTP/1.2 (see http://www.jmarshall.com/easy/http/)
-   'IDLE'({'GET', Uri, [{'Connection', <<"close">>}, {'Host', uri:authority(Uri)}]}, Pipe, State);
+   'IDLE'({'GET', Uri, [{'Connection', <<"close">>}]}, Pipe, State);
 
-'IDLE'({Mthd, {uri, _, _}=Uri, Head}, Pipe, State) ->
+'IDLE'({_Mthd, {uri, _, _}=Uri, _Head}=Req, Pipe, State) ->
    pipe:b(Pipe, {connect, Uri}),
-   'STREAM'({Mthd, uri:path(Uri), Head}, Pipe, State);
+   'STREAM'(Req, Pipe, State);
 
-'IDLE'({Mthd, {uri, _, _}=Uri, Head, Msg}, Pipe, State) ->
+'IDLE'({_Mthd, {uri, _, _}=Uri, _Head, _Msg}=Req, Pipe, State) ->
    pipe:b(Pipe, {connect, Uri}),
-   'STREAM'({Mthd, uri:path(Uri), Head, Msg}, Pipe, State).
+   'STREAM'(Req, Pipe, State).
 
 %%%------------------------------------------------------------------
 %%%
@@ -194,31 +194,20 @@ ioctl(_, _) ->
    try
       case io_send(Msg, Pipe, State#fsm.stream) of
          {eof, #stream{send=Send}=Stream} ->
-            {T, Recv} = q:head(State#fsm.req),
-            {_, {Mthd,  Url,  Head}} = htstream:http(Recv),
-            {_, {Code, _Msg, _Head}} = htstream:http(Send),
-            ?access_http(#{
-               req  => {Mthd, Code}
-              ,peer => uri:host(Stream#stream.peer)
-              ,addr => request_url(Url, Head)
-              ,ua   => opts:val('User-Agent', undefined, Head)
-              ,byte => htstream:octets(Recv)  + htstream:octets(Send)
-              ,pack => htstream:packets(Recv) + htstream:packets(Send)
-              ,time => tempus:diff(T)
-            }),
+            {_, {Code, _Msg, Head}} = htstream:http(Send),
             case opts:val('Connection', undefined, Head) of
                <<"close">>   ->
                   {stop, normal, 
                      State#fsm{
-                        stream = Stream#stream{send = htstream:new(Send)}, 
-                        req    = q:tail(State#fsm.req)
+                        stream = Stream#stream{send = htstream:new(Send)}%, 
+                       ,req    = access_log(Send, State)
                      }
                   };
                _             ->
                   {next_state, 'STREAM', 
                      State#fsm{
-                        stream = Stream#stream{send = htstream:new(Send)}, 
-                        req    = q:tail(State#fsm.req)
+                        stream = Stream#stream{send = htstream:new(Send)}%, 
+                       ,req    = access_log(Send, State)
                      }
                   }
             end;
@@ -226,6 +215,7 @@ ioctl(_, _) ->
             {next_state, 'STREAM', State#fsm{stream=Stream}}
       end
    catch _:Reason ->
+      %% this is applicable to server side only
       ?NOTICE("knet [http]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
       pipe:b(Pipe, erlang:element(1, htstream:encode({Reason, make_head()}))),
       {stop, normal, State}
@@ -270,12 +260,17 @@ io_recv(Pckt, Pipe, #stream{}=Sock) ->
 
 %%
 %% send packet
+io_send({Mthd, {uri, _, _}=Uri, Head}, Pipe, Sock) ->
+   io_send({Mthd, uri:path(Uri), [{'Host', uri:authority(Uri)}|Head]}, Pipe, Sock);
+
+io_send({Mthd, {uri, _, _}=Uri, Head, Msg}, Pipe, Sock) ->
+   io_send({Mthd, uri:path(Uri), [{'Host', uri:authority(Uri)}|Head], Msg}, Pipe, Sock);
+
 io_send(Msg, Pipe, #stream{}=Sock) ->
    ?DEBUG("knet [http] ~p: send ~p~n~p", [self(), Sock#stream.peer, Msg]),
    {Pckt, Send} = htstream:encode(Msg, Sock#stream.send),
    lists:foreach(fun(X) -> pipe:b(Pipe, X) end, Pckt),
    {htstream:state(Send), Sock#stream{send=Send}}.
-
 
 
 %%
@@ -343,3 +338,21 @@ make_head() ->
      ,{'Date',   scalar:s(tempus:encode(?HTTP_DATE, os:timestamp()))}
    ].
 
+%%
+%% process access log
+access_log(_, #fsm{req={}}) ->
+   {};
+access_log(Send, State) ->
+   {T, Recv} = q:head(State#fsm.req),
+   {_, {Mthd,  Url,  Head}} = htstream:http(Recv),
+   {_, {Code, _Msg, _Head}} = htstream:http(Send),
+   ?access_http(#{
+      req  => {Mthd, Code}
+     ,peer => uri:host(State#fsm.stream#stream.peer)
+     ,addr => request_url(Url, Head)
+     ,ua   => opts:val('User-Agent', undefined, Head)
+     ,byte => htstream:octets(Recv)  + htstream:octets(Send)
+     ,pack => htstream:packets(Recv) + htstream:packets(Send)
+     ,time => tempus:diff(T)
+   }),
+   q:tail(State#fsm.req).
