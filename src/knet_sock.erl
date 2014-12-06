@@ -67,6 +67,15 @@ init([Uri, Opts]) ->
          _ = pipe:make(Sock)
    end,
 
+   %% bind socket pipeline to owner process
+   %% but owner process is not bound
+   case opts:val(ioctl, undefined, Opts) of
+      undefined ->
+         ok;
+      ioctl     ->
+         _ = pipe:bind(b, Sock, Owner)
+   end,
+
    %% configure socket to automatically listen / accept / connect
    case opts:val([listen, accept, connect], undefined, Opts) of
       listen  ->  
