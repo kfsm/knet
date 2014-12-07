@@ -169,7 +169,11 @@ bind(Url) ->
    bind(uri:new(Url), []).
 
 %%
+%% @todo: lift up and make documentation
 %% create socket
+%%   Options
+%%     nopipe - 
+%%     ioctl  -
 -spec(socket/1 :: (any()) -> {ok, pid()} | {error, any()}).
 -spec(socket/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
 
