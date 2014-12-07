@@ -69,7 +69,7 @@ init([Uri, Opts]) ->
             iob2b     ->
                _ = pipe:make(Sock),
                _ = pipe:bind(b, Sock, Owner),
-               _ = pipe:bind(b, Owner, Sock)
+               _ = pipe:bind(b, Owner, lists:last(Sock))
          end;
       nopipe    ->
          _ = pipe:make(Sock)
