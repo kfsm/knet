@@ -60,7 +60,7 @@
 start_link(Opts) ->
    pipe:start_link(?MODULE, Opts ++ ?SO_HTTP, []).
 
-%%
+%% @todo: http headers from options
 init(Opts) ->
    {ok, 'IDLE', 
       #fsm{
@@ -320,11 +320,11 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------
 
-'TUNNEL'({Prot, _, {terminated, _}}, Pipe, #fsm{stream=Stream}=State)
+'TUNNEL'({Prot, _, {terminated, _}}, _Pipe, State)
  when ?is_transport(Prot) ->
    {stop, normal, State};
 
-'TUNNEL'({Prot, Peer, Pckt}, Pipe, State)
+'TUNNEL'({Prot, _Peer, Pckt}, Pipe, State)
  when ?is_transport(Prot), is_binary(Pckt) ->
    pipe:b(Pipe, {http, self(), Pckt}),
    {next_state, 'TUNNEL', State};

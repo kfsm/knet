@@ -28,17 +28,17 @@
 start(_Type, _Args) -> 
    {ok,   _} = knet:listen("http://*:8888", [
    	{acceptor, http_protocol}, 
-   	{pool,     256}, 
-   	{backlog,  256}
+   	{pool,     64}, 
+   	{backlog,  64}
    ]),
-   {ok,   _} = knet:listen("https://*:8443", [
-      {acceptor, http_protocol}
-     ,{pool,     256}
-     ,{backlog,  256}
-     ,{certfile, filename:join([code:priv_dir(http), "server.crt"])}
-     ,{keyfile,  filename:join([code:priv_dir(http), "server.key"])}
-     ,{ciphers,  [{rsa,rc4_128,sha}]}
-   ]),
+%   {ok,   _} = knet:listen("https://*:8443", [
+%      {acceptor, http_protocol}
+%     ,{pool,     256}
+%     ,{backlog,  256}
+%     ,{certfile, filename:join([code:priv_dir(http), "server.crt"])}
+%     ,{keyfile,  filename:join([code:priv_dir(http), "server.key"])}
+%     ,{ciphers,  [{rsa,rc4_128,sha}]}
+%   ]),
    http_sup:start_link(). 
 
 stop(_State) ->
