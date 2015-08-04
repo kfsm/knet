@@ -15,6 +15,8 @@
 %%   See the License for the specific language governing permissions and
 %%   limitations under the License.
 %%
+%% @todo
+%%   huge leaked of processes - acceptor process is not terminated when socket is closed 
 -module(knet).
 -include("knet.hrl").
 
@@ -148,6 +150,7 @@ bind({uri, _, _}=Uri, Opts) ->
          case supervisor:start_child(Sup, [Uri, [{owner, self()} | Opts] ]) of
             {ok, Pid} -> 
                {ok, Sock} = knet_sock:socket(Pid),
+               %% @todo: do we need to link bound process
                _ = pipe:send(Sock, {accept, Uri}),
                {ok, Sock};
             Error     -> 
@@ -177,13 +180,19 @@ bind(Url) ->
 -spec(socket/1 :: (any()) -> {ok, pid()} | {error, any()}).
 -spec(socket/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
 
-socket({uri, _, _}=Uri, Opts) ->
-   case supervisor:start_child(knet_sock_sup, [Uri, [{owner, self()}|Opts]]) of
-      {ok, Pid} -> 
-         knet_sock:socket(Pid);
-      Error     -> 
-         Error
-   end; 
+socket({uri, tcp, _}=Uri, Opts) ->
+   pipe:spawn(knet_tcp, Opts);
+
+socket({uri, http, _}=Uri, Opts) ->
+   pipe:spawn(knet_http, Opts);
+
+% socket({uri, _, _}=Uri, Opts) ->
+%    case supervisor:start_child(knet_sock_sup, [Uri, [{owner, self()}|Opts]]) of
+%       {ok, Pid} -> 
+%          knet_sock:socket(Pid);
+%       Error     -> 
+%          Error
+%    end; 
 
 socket(Url, Opts) ->
    socket(uri:new(Url), Opts).

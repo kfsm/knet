@@ -271,7 +271,7 @@ ioctl(socket,   S) ->
 %%%------------------------------------------------------------------   
 
 'HIBERNATE'(Msg, Pipe, State) ->
-   ?DEBUG("knet [ssl]: resume ~p", [Sock#stream.peer]),
+   ?DEBUG("knet [ssl]: resume ~p", [State#stream.peer]),
    'ESTABLISHED'(Msg, Pipe, State#fsm{stream=io_tth(State#fsm.stream)}).
 
 

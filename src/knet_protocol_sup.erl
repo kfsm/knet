@@ -15,20 +15,22 @@
 %%   See the License for the specific language governing permissions and
 %%   limitations under the License.
 %%
-%% @description
-%%   root supervisor
--module(knet_sup).
+%% @doc
+%%   protocol factory
+-module(knet_protocol_sup).
 -behaviour(supervisor).
 
 -export([
    start_link/0, 
    init/1
 ]).
+-export([
+   tcp/1,
+   http/1
+]).
 
 %%
--define(CHILD(Type, I),            {I,  {I, start_link,   []}, permanent, 5000, Type, dynamic}).
--define(CHILD(Type, I, Args),      {I,  {I, start_link, Args}, permanent, 5000, Type, dynamic}).
--define(CHILD(Type, ID, I, Args),  {ID, {I, start_link, Args}, permanent, 5000, Type, dynamic}).
+-define(CHILD(I, F, O),            {I,  {pipe, spawner,   [I, F, O]}, permanent, 5000, worker, dynamic}).
 
 %%
 start_link() ->
@@ -39,13 +41,26 @@ init([]) ->
       {
          {one_for_one, 4, 1800},
          [
-            % ?CHILD(supervisor, knet_sock_sup,  [knet_sock_sup]),
-            % ?CHILD(supervisor, knet_service_root_sup)
-            ?CHILD(supervisor, knet_protocol_sup)
-           ,?CHILD(supervisor, knet_tcp_sup)
-           ,?CHILD(supervisor, knet_http_sup)
+            ?CHILD(knet_tcp,  {?MODULE,  tcp}, [])
+           ,?CHILD(knet_http, {?MODULE, http}, [])
          ]
       }
    }.
+
+%%%------------------------------------------------------------------
+%%%
+%%% private
+%%%
+%%%------------------------------------------------------------------   
+
+tcp(Opts) ->
+   {ok, A} = supervisor:start_child(knet_tcp_sup, [Opts]),
+   [A].
+
+http(Opts) ->
+   {ok, A} = supervisor:start_child(knet_tcp_sup,  [Opts]),
+   {ok, B} = supervisor:start_child(knet_http_sup, [Opts]),
+   [B,  A].
+   
 
 

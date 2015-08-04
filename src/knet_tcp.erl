@@ -227,7 +227,7 @@ ioctl(socket,   S) ->
       {_, Stream} = io_send(Msg, State#fsm.sock, State#fsm.stream),
       {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
    catch _:{badmatch, {error, Reason}} ->
-      pipe:b(Pipe, {tcp, self(), {terminated, Reason}}),
+      pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),
       {stop, Reason, State}
    end.
 
@@ -238,7 +238,7 @@ ioctl(socket,   S) ->
 %%%------------------------------------------------------------------   
 
 'HIBERNATE'(Msg, Pipe, State) ->
-   ?DEBUG("knet [tcp]: resume ~p", [Sock#stream.peer]),
+   ?DEBUG("knet [tcp]: resume ~p", [State#stream.peer]),
    'ESTABLISHED'(Msg, Pipe, State#fsm{stream=io_tth(State#fsm.stream)}).
 
 %%%------------------------------------------------------------------
@@ -292,7 +292,7 @@ io_ttl(N, #stream{}=Sock) ->
 io_recv(Pckt, Pipe, #stream{}=Sock) ->
    ?DEBUG("knet [tcp] ~p: recv ~p~n~p", [self(), Sock#stream.peer, Pckt]),
    {Msg, Recv} = pstream:decode(Pckt, Sock#stream.recv),
-   lists:foreach(fun(X) -> pipe:b(Pipe, {tcp, self(), X}) end, Msg),
+   lists:foreach(fun(X) -> pipe:a(Pipe, {tcp, self(), X}) end, Msg),
    {active, Sock#stream{recv=Recv}}.
 
 %%

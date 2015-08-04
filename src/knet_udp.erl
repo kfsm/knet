@@ -258,7 +258,7 @@ ioctl(socket, State) ->
 %%%------------------------------------------------------------------   
 
 'HIBERNATE'(Msg, Pipe, State) ->
-   ?DEBUG("knet [tcp]: resume ~p", [Sock#stream.peer]),
+   ?DEBUG("knet [tcp]: resume ~p", [State#stream.peer]),
    'ESTABLISHED'(Msg, Pipe, State#fsm{stream=io_tth(State#fsm.stream)}).
 
 
@@ -328,7 +328,7 @@ io_recv({{_Host, _Port}=Peer, Pckt}, Pipe, #stream{}=Sock) ->
 
 %%
 %% send packet
-io_send({{Host, Port}, Msg}, Pipe, #stream{}=Sock) ->
+io_send({{Host, Port} = Peer, Msg}, Pipe, #stream{}=Sock) ->
    ?DEBUG("knet [udp] ~p: send ~p~n~p", [self(), Peer, Msg]),
    {Pckt, Send} = pstream:encode(Msg, Sock#stream.send),
    lists:foreach(fun(X) -> ok = gen_udp:send(Pipe, Host, Port, X) end, Pckt),

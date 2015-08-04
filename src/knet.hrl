@@ -3,7 +3,6 @@
 %% build config
 %%
 %%-----------------------------------------------------------------------------
-% -define(CONFIG_DEBUG,    true).
 
 %% default access log configuration
 -define(CONFIG_ACCESS_LOG,       [tcp, ssl, http, ssh]).

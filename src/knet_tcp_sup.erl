@@ -14,22 +14,21 @@
 %%   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %%   See the License for the specific language governing permissions and
 %%   limitations under the License.
-%%
-%% @description
-%%   root supervisor
--module(knet_sup).
+-module(knet_tcp_sup).
 -behaviour(supervisor).
 
 -export([
-   start_link/0, 
-   init/1
+   start_link/0
+  ,init/1
 ]).
 
 %%
--define(CHILD(Type, I),            {I,  {I, start_link,   []}, permanent, 5000, Type, dynamic}).
--define(CHILD(Type, I, Args),      {I,  {I, start_link, Args}, permanent, 5000, Type, dynamic}).
--define(CHILD(Type, ID, I, Args),  {ID, {I, start_link, Args}, permanent, 5000, Type, dynamic}).
+-define(CHILD(Type, I),            {I,  {I, start_link,   []}, temporary, 60000, Type, dynamic}).
+-define(CHILD(Type, I, Args),      {I,  {I, start_link, Args}, temporary, 60000, Type, dynamic}).
+-define(CHILD(Type, ID, I, Args),  {ID, {I, start_link, Args}, temporary, 60000, Type, dynamic}).
 
+
+%%
 %%
 start_link() ->
    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
@@ -37,15 +36,10 @@ start_link() ->
 init([]) -> 
    {ok,
       {
-         {one_for_one, 4, 1800},
+         {simple_one_for_one, 100000, 1},
          [
-            % ?CHILD(supervisor, knet_sock_sup,  [knet_sock_sup]),
-            % ?CHILD(supervisor, knet_service_root_sup)
-            ?CHILD(supervisor, knet_protocol_sup)
-           ,?CHILD(supervisor, knet_tcp_sup)
-           ,?CHILD(supervisor, knet_http_sup)
+            ?CHILD(worker, knet_tcp)
          ]
       }
    }.
-
 
