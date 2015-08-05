@@ -22,4 +22,4 @@
 -export([start/0]).
 
 start() ->
-	applib:boot(?MODULE, knet:config()).
+	applib:boot(?MODULE, code:where_is_file("knet.config")).

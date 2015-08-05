@@ -24,7 +24,6 @@
 -include("knet.hrl").
 
 -export([start/0]).
-%% client interface
 -export([
    listen/2
   ,bind/1
@@ -35,46 +34,46 @@
   ,connect/2 
   ,close/1
 ]).
-%% konduit interface
--export([
-   register/2
-  ,whereis/2
+% %% konduit interface
+% -export([
+%    register/2
+%   ,whereis/2
 
-  ,which/1
-  % ,acceptor/3
-  ,trace/2
-]).
+%   ,which/1
+%   % ,acceptor/3
+%   ,trace/2
+% ]).
 
-%%%------------------------------------------------------------------
-%%%
-%%% data type(s)
-%%%
-%%%------------------------------------------------------------------   
+% %%%------------------------------------------------------------------
+% %%%
+% %%% data type(s)
+% %%%
+% %%%------------------------------------------------------------------   
 
-%% time to live timeout in milliseconds
--type(so_ttl()  :: {ttl, timeout()}).
--type(ht_keepalive() :: {'keep-alive', timeout()}).
+% %% time to live timeout in milliseconds
+% -type(so_ttl()  :: {ttl, timeout()}).
+% -type(ht_keepalive() :: {'keep-alive', timeout()}).
 
-%% time to hibernate in milliseconds
--type(so_tth()  :: {tth, timeout()}).
+% %% time to hibernate in milliseconds
+% -type(so_tth()  :: {tth, timeout()}).
 
-%% time to connect
--type(so_ttc()  :: {ttc, timeout()}).
+% %% time to connect
+% -type(so_ttc()  :: {ttc, timeout()}).
 
-%% socket packet framing
--type(so_pack() :: {pack, raw | line}).
+% %% socket packet framing
+% -type(so_pack() :: {pack, raw | line}).
 
-%% socket acceptor dispatch algorithm
--type(so_dispatch() :: {dispatch, 'round-robin' | peer}).
+% %% socket acceptor dispatch algorithm
+% -type(so_dispatch() :: {dispatch, 'round-robin' | peer}).
 
-%% bind socket to local address
--type(so_addr() :: {addr, {any(), integer()}}).
+% %% bind socket to local address
+% -type(so_addr() :: {addr, {any(), integer()}}).
 
-%% socket acceptor
-%% the acceptor is either 1-ary UDF or module name that implements pipe protocol 
-%% {acceptor, fun(_) -> <<>> end}
-%% {acceptor, tcp_echo}
--type(so_acceptor() :: {acceptor, function() | atom()}).
+% %% socket acceptor
+% %% the acceptor is either 1-ary UDF or module name that implements pipe protocol 
+% %% {acceptor, fun(_) -> <<>> end}
+% %% {acceptor, tcp_echo}
+% -type(so_acceptor() :: {acceptor, function() | atom()}).
 
 %%%------------------------------------------------------------------
 %%%
@@ -92,9 +91,11 @@ start() ->
 %%
 %%  Options common 
 %%     nopipe - 
+%%    {timeout, [ttl(), tth()]} - socket i/o timeouts
 %%
 %%  Options tcp
-%%    backlog - defines length of acceptor pool (see also tcp backlog)
+%%    {backlog, integer()} - defines length of acceptor pool (see also tcp backlog)
+%%
 -spec(socket/1 :: (any()) -> pid()).
 -spec(socket/2 :: (any(), any()) -> pid()).
 
@@ -126,11 +127,7 @@ create(Stack, Opts) ->
 %% listen incoming connection
 %%
 %% Options:
-%%   {acceptor,      atom()} - acceptor implementation
-%%   {pool,       integer()} - acceptor pool size
-%%   {timeout,    [ttl(), tth()]} - socket i/o timeout
-%%   nopipe
-%%   {stats,          pid()} - statistic functor (destination pipe to handle knet i/o statistic)
+%%   {acceptor,      atom() | pid()} - acceptor module/factory
 -spec(listen/2 :: (any(), any()) -> pid()).
 
 listen({uri, _, _}=Uri, Opts)
@@ -159,43 +156,13 @@ listen(Uri, Opts)
 %% 
 %% Options:
 %%    nopipe 
--spec(bind/1 :: (any()) -> {ok, pid()} | {error, any()}).
--spec(bind/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
+-spec(bind/1 :: (any()) -> pid()).
+-spec(bind/2 :: (any(), any()) -> pid()).
 
 bind({uri, _, _}=Uri, Opts) ->
    Sock = socket(Uri, Opts),
    _    = pipe:send(Sock, {accept, Uri}),
    Sock;
-   % case knet:whereis(socket, Uri) of
-   %    %%
-   %    %% protocol do not have "socket factory" for accepted connections.
-   %    %% it is based on callback model, underlying subsystem instantiates
-   %    %% acceptor process, which needs to be bound with application stack.
-   %    undefined ->
-   %       case knet:whereis(service, Uri) of
-   %          undefined ->
-   %             {error, badarg};
-   %          Pid       ->
-   %             pipe:call(Pid, {enq, self()})
-   %       end;
-   %    Sup       ->
-   %       case supervisor:start_child(Sup, [Uri, [{owner, self()} | Opts] ]) of
-   %          {ok, Pid} -> 
-   %             {ok, Sock} = knet_sock:socket(Pid),
-   %             %% @todo: do we need to link bound process
-   %             _ = pipe:send(Sock, {accept, Uri}),
-   %             {ok, Sock};
-   %          Error     -> 
-   %             Error
-   %       end
-   %       % case knet_service_sup:init_socket(Sup, Uri, self(), Opts) of
-   %       %    {ok, Sock} ->
-   %       %       _ = pipe:send(Sock, {accept, Uri}),
-   %       %       {ok, Sock};
-   %       %    Error      ->
-   %       %       Error
-   %       % end
-   % end;
 
 bind(Url, Opts) ->
    bind(uri:new(Url), Opts).
@@ -206,10 +173,7 @@ bind(Url) ->
 
 %%
 %% connect socket to remote peer
-%% Options:
-%%   nopipe
-%%   {stats, pid()} - statistic functor (destination pipe to handle knet i/o statistic)
-%%   @todo
+%%  Options
 -spec(connect/1 :: (any()) -> {ok, pid()} | {error, any()}).
 -spec(connect/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
 
@@ -217,14 +181,6 @@ connect({uri, _, _}=Uri, Opts) ->
    Sock = socket(Uri, Opts),
    _ = pipe:send(Sock, {connect, Uri}),
    Sock;
-
-   % case  of
-   %    {ok, Sock} -> 
-   %       ,
-   %       {ok, Sock};
-   %    Error     -> 
-   %       Error
-   % end;
 
 connect(Url, Opts) ->
    connect(uri:new(Url), Opts).
@@ -237,76 +193,78 @@ connect(Url) ->
 %% @todo: close listen socket
 -spec(close/1 :: (pid()) -> ok).
 
-close(Sock)
- when is_pid(Sock) orelse is_atom(Sock) ->
-   _ = pipe:send(Sock, shutdown),
-   ok;
+close(Sock) ->
+   pipe:free(Sock).
 
-close({uri, _, _}=Uri) ->
-   knet_service_root_sup:free_service(Uri);
+ % when is_pid(Sock) orelse is_atom(Sock) ->
+ %   _ = pipe:send(Sock, shutdown),
+ %   ok;
 
-close(Uri) ->
-   close(uri:new(Uri)).
+% close({uri, _, _}=Uri) ->
+%    knet_service_root_sup:free_service(Uri);
 
-%%%------------------------------------------------------------------
-%%%
-%%% knet konduit interface
-%%%
-%%%------------------------------------------------------------------   
+% close(Uri) ->
+%    close(uri:new(Uri)).
 
-%%
-%% register knet component
--spec(register/2 :: (atom(), {uri, _, _} | any()) -> ok).
-
-register(Name, {uri, _, _} = Uri) ->
-   pns:register(knet, {Name, uri:s(Uri)}, self());
-
-register(Name, Uid) ->
-   pns:register(knet, {Name, Uid}, self()).
-
-%%
-%% lookup knet component
--spec(whereis/2 :: (atom(), {uri, _, _}) -> pid() | undefined).
-
-whereis(Name, {uri, _, _} = Uri) ->
-   pns:whereis(knet, {Name, uri:s(Uri)});
-
-whereis(Name, Uid) ->
-   pns:whereis(knet, {Name, Uid}).
-
-%%
-%% list active sockets
--spec(which/1 :: (atom()) -> [{binary(), pid()}]).
-
-which(tcp) ->
-   [{uri:authority(X, uri:new(tcp)), Y} || {{tcp, X}, Y} <- pns:lookup(knet, {tcp, '_'})];
-
-which(_) ->
-   [].
+% %%%------------------------------------------------------------------
+% %%%
+% %%% knet konduit interface
+% %%%
+% %%%------------------------------------------------------------------   
 
 % %%
-% %% spawn acceptor bridge process by wrapping a UDF into pipe loop
-% -spec(acceptor/3 :: (function(), uri:uri(), list()) -> {ok, pid()} | {error, any()}).
+% %% register knet component
+% -spec(register/2 :: (atom(), {uri, _, _} | any()) -> ok).
 
-% acceptor(Fun, Uri, Opts) ->
-%    {ok, 
-%       erlang:spawn_link(
-%          fun() -> 
-%             bind(Uri, Opts),
-%             pipe:loop(Fun) 
-%          end
-%       )
-%    }.
+% register(Name, {uri, _, _} = Uri) ->
+%    pns:register(knet, {Name, uri:s(Uri)}, self());
 
-%%
-%% latency tracing message
--spec(trace/2 :: (pid(), any()) -> ok).
+% register(Name, Uid) ->
+%    pns:register(knet, {Name, Uid}, self()).
 
-trace(undefined, _Msg) ->
-   ok;
-trace(Pid, Msg) ->
-   _ = pipe:send(Pid, {trace, self(), os:timestamp(), Msg}),
-   ok.
+% %%
+% %% lookup knet component
+% -spec(whereis/2 :: (atom(), {uri, _, _}) -> pid() | undefined).
+
+% whereis(Name, {uri, _, _} = Uri) ->
+%    pns:whereis(knet, {Name, uri:s(Uri)});
+
+% whereis(Name, Uid) ->
+%    pns:whereis(knet, {Name, Uid}).
+
+% %%
+% %% list active sockets
+% -spec(which/1 :: (atom()) -> [{binary(), pid()}]).
+
+% which(tcp) ->
+%    [{uri:authority(X, uri:new(tcp)), Y} || {{tcp, X}, Y} <- pns:lookup(knet, {tcp, '_'})];
+
+% which(_) ->
+%    [].
+
+% % %%
+% % %% spawn acceptor bridge process by wrapping a UDF into pipe loop
+% % -spec(acceptor/3 :: (function(), uri:uri(), list()) -> {ok, pid()} | {error, any()}).
+
+% % acceptor(Fun, Uri, Opts) ->
+% %    {ok, 
+% %       erlang:spawn_link(
+% %          fun() -> 
+% %             bind(Uri, Opts),
+% %             pipe:loop(Fun) 
+% %          end
+% %       )
+% %    }.
+
+% %%
+% %% latency tracing message
+% -spec(trace/2 :: (pid(), any()) -> ok).
+
+% trace(undefined, _Msg) ->
+%    ok;
+% trace(Pid, Msg) ->
+%    _ = pipe:send(Pid, {trace, self(), os:timestamp(), Msg}),
+%    ok.
 
 
 %%%------------------------------------------------------------------

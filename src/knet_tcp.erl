@@ -16,7 +16,7 @@
 %%   limitations under the License.
 %%
 %% @description
-%%   client-server tcp/ip konduit
+%%   tcp/ip protocol konduit
 -module(knet_tcp).
 -behaviour(pipe).
 
@@ -39,7 +39,6 @@
   ,sock     = undefined :: port()     %% tcp/ip socket
   ,active   = true      :: once | true | false  %% socket activity (pipe internally uses active once)
   ,backlog  = 0         :: integer()  %% length of acceptor pool
-  ,trace    = undefined :: pid()      %% trace / debug / stats functor 
   ,so       = undefined :: any()      %% socket options
 }).
 
@@ -56,11 +55,10 @@ start_link(Opts) ->
 init(Opts) ->
    {ok, 'IDLE',
       #fsm{
-         stream   = io_new(Opts)
-        ,backlog  = opts:val(backlog, 0, Opts)
-        ,trace    = opts:val(trace, undefined, Opts)
-        ,active   = opts:val(active, Opts)
-        ,so       = Opts
+         stream  = io_new(Opts)
+        ,backlog = opts:val(backlog, 5, Opts)
+        ,active  = opts:val(active, Opts)
+        ,so      = Opts
       }
    }.
 
@@ -89,47 +87,31 @@ ioctl(socket,   S) ->
 
 %%
 %%
-'IDLE'({listen, Uri}, Pipe, S) ->
-   Port = uri:port(Uri),
-   ok   = knet:register(tcp, {any, Port}),
-   % socket opts for listener socket requires {active, false}
-   SOpt = opts:filter(?SO_TCP_ALLOWED, S#fsm.so),
-   Opts = [{active, false}, {reuseaddr, true} | lists:keydelete(active, 1, SOpt)],
-   case gen_tcp:listen(Port, Opts) of
-      {ok, Sock} -> 
+'IDLE'({listen, Uri}, Pipe, State) ->
+   case tcp_listen(Uri, State) of
+      {ok, Sock} ->
          ?access_tcp(#{req => listen, addr => Uri}),
-         _   = pipe:a(Pipe, {tcp, self(), {listen, Uri}}),
-         %% create acceptor pool
-         Sup = opts:val(acceptor,  S#fsm.so), 
-         % Sup = knet:whereis(acceptor, Uri),
-         ok  = lists:foreach(
-            fun(_) ->
-               {ok, _} = supervisor:start_child(Sup, [Uri, S#fsm.so])
-            end,
-            lists:seq(1, S#fsm.backlog)
-         ),
-         {next_state, 'LISTEN', S#fsm{sock = Sock}};
+         create_acceptor_pool(Uri, State),
+         pipe:a(Pipe, {tcp, self(), {listen, Uri}}),
+         {next_state, 'LISTEN', State#fsm{sock = Sock}};
       {error, Reason} ->
          ?access_tcp(#{req => {listen, Reason}, addr => Uri}),
          pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),
-         {stop, Reason, S}
+         {stop, Reason, State}
    end;
 
 %%
 %%
-'IDLE'({connect, Uri}, Pipe, State) ->
-   Host = scalar:c(uri:host(Uri)),
-   Port = uri:port(Uri),
-   SOpt = opts:filter(?SO_TCP_ALLOWED, State#fsm.so),
-   Tout = pair:lookup([timeout, ttc], ?SO_TIMEOUT, State#fsm.so),
+'IDLE'({connect, Uri}, Pipe, #fsm{stream = Stream0} = State) ->
    T    = os:timestamp(),
-   case gen_tcp:connect(Host, Port, SOpt, Tout) of
+   case tcp_connect(Uri, State) of
       {ok, Sock} ->
-         Stream = io_ttl(io_tth(io_connect(Sock, State#fsm.stream))),
-         ?access_tcp(#{req => {syn, sack}, peer => Stream#stream.peer, addr => Stream#stream.addr, time => tempus:diff(T)}),
-         ?trace(State#fsm.trace, {tcp, connect, tempus:diff(T)}),
-         pipe:a(Pipe, {tcp, self(), {established, Stream#stream.peer}}),
-         {next_state, 'ESTABLISHED', tcp_ioctl(State#fsm{stream=Stream, sock=Sock})};
+         #stream{addr = Addr, peer = Peer} = Stream1 = 
+            io_ttl(io_tth(io_connect(Sock, Stream0))),
+         ?access_tcp(#{req => {syn, sack}, peer => Peer, addr => Addr, time => tempus:diff(T)}),
+         pipe:a(Pipe, {tcp, self(), {established, Peer}}),
+         {next_state, 'ESTABLISHED', 
+            tcp_ioctl(State#fsm{stream=Stream1, sock=Sock})};
 
       {error, Reason} ->
          ?access_tcp(#{req => {syn, Reason}, addr => Uri}),
@@ -137,22 +119,19 @@ ioctl(socket,   S) ->
          {stop, Reason, State}
    end;
 
-
 %%
-'IDLE'({accept, Uri}, Pipe, State) ->
-   Port  = uri:get(port, Uri),
-   LSock = pipe:ioctl(pns:whereis(knet, {tcp, {any, Port}}), socket),
+%%
+'IDLE'({accept, Uri}, Pipe, #fsm{stream = Stream0} = State) ->
    T     = os:timestamp(),   
-   case gen_tcp:accept(LSock) of
-      %% connection is accepted
+   case tcp_accept(Uri, State) of
       {ok, Sock} ->
-         Sup = opts:val(acceptor,  State#fsm.so), 
-         {ok, _} = supervisor:start_child(Sup, [Uri, State#fsm.so]),
-         Stream  = io_ttl(io_tth(io_connect(Sock, State#fsm.stream))),
-         ?access_tcp(#{req => {syn, sack}, peer => Stream#stream.peer, addr => Stream#stream.addr, time => tempus:diff(T)}),
-         ?trace(State#fsm.trace, {tcp, connect, tempus:diff(T)}),
-         pipe:a(Pipe, {tcp, self(), {established, Stream#stream.peer}}),
-         {next_state, 'ESTABLISHED', tcp_ioctl(State#fsm{stream=Stream, sock=Sock})};
+         create_acceptor(Uri, State),
+         #stream{addr = Addr, peer = Peer} = Stream1 = 
+            io_ttl(io_tth(io_connect(Sock, Stream0))),
+         ?access_tcp(#{req => {syn, sack}, peer => Peer, addr => Addr, time => tempus:diff(T)}),
+         pipe:a(Pipe, {tcp, self(), {established, Peer}}),
+         {next_state, 'ESTABLISHED', 
+            tcp_ioctl(State#fsm{stream=Stream1, sock=Sock})};
 
       %% listen socket is closed
       {error, closed} ->
@@ -160,18 +139,16 @@ ioctl(socket,   S) ->
 
       %% unable to accept connection  
       {error, Reason} ->
-         Sup = opts:val(acceptor,  State#fsm.so), 
-         {ok, _} = supervisor:start_child(Sup, [Uri, State#fsm.so]),
-         % @todo:
-         % {ok, _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri, State#fsm.so]),
+         create_acceptor(Uri, State),
          ?access_tcp(#{req => {syn, Reason}, addr => Uri}),
          pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),      
          {stop, Reason, State}
    end;
 
 %%
-'IDLE'(shutdown, _Pipe, S) ->
-   {stop, normal, S}.
+%%
+'IDLE'(shutdown, _Pipe, State) ->
+   {stop, normal, State}.
 
 
 %%%------------------------------------------------------------------
@@ -204,10 +181,9 @@ ioctl(socket,   S) ->
 'ESTABLISHED'({tcp, _, Pckt}, Pipe, State) ->
    %% What one can do is to combine {active, once} with gen_tcp:recv().
    %% Essentially, you will be served the first message, then read as many as you 
-   %% wish from the socket. When the socket is empty, you can again enable 
-   %% {active, once}. @todo: {active, n()}
+   %% wish from the socket. When the socket is empty, you can again enable {active, once}. 
+   %% Note: release 17.x and later supports {active, n()}
    {_, Stream} = io_recv(Pckt, Pipe, State#fsm.stream),
-   ?trace(State#fsm.trace, {tcp, packet, byte_size(Pckt)}),
    {next_state, 'ESTABLISHED', tcp_ioctl(State#fsm{stream=Stream})};
 
 'ESTABLISHED'(shutdown, _Pipe, State) ->
@@ -243,7 +219,7 @@ ioctl(socket,   S) ->
 %%%------------------------------------------------------------------   
 
 'HIBERNATE'(Msg, Pipe, State) ->
-   % ?DEBUG("knet [tcp]: resume ~p", [State#stream.peer]),
+   ?DEBUG("knet [tcp]: resume ~p",[(State#fsm.stream)#stream.peer]),
    'ESTABLISHED'(Msg, Pipe, State#fsm{stream=io_tth(State#fsm.stream)}).
 
 %%%------------------------------------------------------------------
@@ -318,3 +294,50 @@ tcp_ioctl(#fsm{active=once}=State) ->
    State;
 tcp_ioctl(#fsm{}=State) ->
    State.
+
+%%
+%% creates tcp listen socket
+%% note: socket opts for listener socket requires {active, false}
+tcp_listen(Uri, #fsm{so = SOpt0}) ->
+   Port = uri:port(Uri),
+   SOpt = opts:filter(?SO_TCP_ALLOWED, SOpt0),
+   gen_tcp:listen(Port, [
+      {active,   false}
+     ,{reuseaddr, true} 
+     |lists:keydelete(active, 1, SOpt)
+   ]).
+
+%%
+%%
+tcp_connect(Uri, #fsm{so = SOpt0}) ->
+   Host = scalar:c(uri:host(Uri)),
+   Port = uri:port(Uri),
+   SOpt = opts:filter(?SO_TCP_ALLOWED, SOpt0),
+   Tout = pair:lookup([timeout, ttc], ?SO_TIMEOUT, SOpt0),
+   gen_tcp:connect(Host, Port, SOpt, Tout).
+
+%%
+%%
+tcp_accept(_Uri, #fsm{so = SOpt0}) ->
+   LPipe = opts:val(listen, SOpt0),
+   LSock = pipe:ioctl(LPipe, socket),
+   gen_tcp:accept(LSock).
+
+
+%%
+%% create app acceptor pool
+create_acceptor_pool(Uri, #fsm{so = SOpt0, backlog = Backlog}) ->
+   Sup  = opts:val(acceptor,  SOpt0), 
+   SOpt = [{listen, self()} | SOpt0],
+   lists:foreach(
+      fun(_) ->
+         {ok, _} = supervisor:start_child(Sup, [Uri, SOpt])
+      end,
+      lists:seq(1, Backlog)
+   ).
+
+create_acceptor(Uri, #fsm{so = SOpt0}) ->
+   Sup = opts:val(acceptor,  SOpt0), 
+   {ok, _} = supervisor:start_child(Sup, [Uri, SOpt0]).
+
+

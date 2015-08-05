@@ -16,9 +16,9 @@
 %%   limitations under the License.
 %%
 %% @description
-%%   protocol common access log and helper macro
+%%   protocol common access log and helper macro, the log format is following:
 %%
-%%   peer user "request addr" response "user-agent" byte pack time
+%%      peer user "request addr" response "user-agent" byte pack time
 %%   
 %%   * peer - ip address of peer making request
 %%   * user - identifier of client / user
