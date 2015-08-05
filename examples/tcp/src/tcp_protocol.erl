@@ -28,14 +28,14 @@
 	handle/3
 ]).
 
+
 %%
 %%
 start_link(Uri, Opts) ->
 	pipe:start_link(?MODULE, [Uri, Opts], []).
 
 init([Uri, Opts]) ->
-	{ok, Sock} = knet:bind(Uri, Opts),
-	{ok, handle, Sock}.
+	{ok, handle, knet:bind(Uri, Opts)}.
 
 free(_, Sock) ->
 	knet:close(Sock).

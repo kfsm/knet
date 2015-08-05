@@ -21,7 +21,7 @@
 -behaviour(supervisor).
 
 -export([
-   start_link/2, 
+   start_link/1, 
    init/1
 ]).
 
@@ -32,12 +32,11 @@
 
 %%
 %%
-start_link(Uri, Acceptor) ->
-   supervisor:start_link(?MODULE, [Uri, Acceptor]).
+start_link(Acceptor) ->
+   supervisor:start_link(?MODULE, [Acceptor]).
 
 
-init([Uri, {Acceptor, Method, Args}]) ->
-   ok = knet:register(acceptor, Uri),
+init([{Acceptor, Method, Args}]) ->
    {ok,
       {
          {simple_one_for_one, 1000000, 1},
@@ -46,8 +45,7 @@ init([Uri, {Acceptor, Method, Args}]) ->
          ]
       }
    };
-init([Uri, {Acceptor, Args}]) -> 
-   ok = knet:register(acceptor, Uri),
+init([{Acceptor, Args}]) -> 
    {ok,
       {
          {simple_one_for_one, 1000000, 1}, 
@@ -56,8 +54,7 @@ init([Uri, {Acceptor, Args}]) ->
          ]
       }
    }; 
-init([Uri, Acceptor]) -> 
-   ok = knet:register(acceptor, Uri),
+init([Acceptor]) -> 
    {ok,
       {
          {simple_one_for_one, 1000000, 1},

@@ -151,7 +151,7 @@
   ,peer  = undefined :: any()      %% remote peer address
   ,addr  = undefined :: any()      %% local address
 
-  ,tss   = undefined :: tempus:t() %% time to start session
+  ,tss   = undefined :: tempus:t() %% session start time (time to start session metric)
   ,ts    = undefined :: temput:t() %% protocol time stamp
 
   ,ttl   = undefined :: any()      %% time to live, inactivity timeout

@@ -17,10 +17,13 @@
 %%
 %% @todo
 %%   huge leaked of processes - acceptor process is not terminated when socket is closed 
+%% @todo: 
+%%   * socket/ -> return empty (idle) socket
+%%   * monitor socket (link)
 -module(knet).
 -include("knet.hrl").
 
--export([start/0, config/0]).
+-export([start/0]).
 %% client interface
 -export([
    listen/2
@@ -38,7 +41,7 @@
   ,whereis/2
 
   ,which/1
-  ,acceptor/3
+  % ,acceptor/3
   ,trace/2
 ]).
 
@@ -79,43 +82,69 @@
 %%%
 %%%------------------------------------------------------------------   
 
-
-%% @todo: 
-%%   * socket/ -> return empty (idle) socket
-%%   * monitor socket (link)
-
 %%
 %% start application (RnD mode)
 start() -> 
-   applib:boot(?MODULE, config()).
+   applib:boot(?MODULE, code:where_is_file("knet.config")).
 
-config() ->
-   case code:priv_dir(knet) of
-      {error, bad_name} -> 
-         "./priv/knet.config";
-      Path ->
-         filename:join([Path, "knet.config"])
+%%
+%% create socket
+%%
+%%  Options common 
+%%     nopipe - 
+%%
+%%  Options tcp
+%%    backlog - defines length of acceptor pool (see also tcp backlog)
+-spec(socket/1 :: (any()) -> pid()).
+-spec(socket/2 :: (any(), any()) -> pid()).
+
+socket({uri, tcp,  _}, Opts) ->
+   {ok, A} = supervisor:start_child(knet_tcp_sup, [Opts]),
+   create([A], Opts);
+
+socket({uri, http, _}, Opts) ->
+   {ok, A} = supervisor:start_child(knet_tcp_sup,  [Opts]),
+   {ok, B} = supervisor:start_child(knet_http_sup, [Opts]),
+   create([B, A], Opts);
+
+socket(Url, Opts) ->
+   socket(uri:new(Url), Opts).
+
+socket(Url) ->
+   socket(uri:new(Url), []).
+
+create(Stack, Opts) ->
+   case opts:val(nopipe, false, Opts) of
+      nopipe ->
+         pipe:make(Stack);
+      _      ->
+         pipe:make([self()|Stack]),
+         hd(Stack)
    end.
 
 %%
 %% listen incoming connection
+%%
 %% Options:
 %%   {acceptor,      atom()} - acceptor implementation
 %%   {pool,       integer()} - acceptor pool size
 %%   {timeout,    [ttl(), tth()]} - socket i/o timeout
 %%   nopipe
 %%   {stats,          pid()} - statistic functor (destination pipe to handle knet i/o statistic)
--spec(listen/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
+-spec(listen/2 :: (any(), any()) -> pid()).
 
 listen({uri, _, _}=Uri, Opts)
  when is_list(Opts) ->
    SOpt = case lists:keytake(acceptor, 1, Opts) of
-      {value, {_, X}, Tail} when is_function(X, 1) ->
-         [{acceptor, {knet, acceptor, [X]}} | Tail];
+      {value, {_, Acceptor}, Tail} when not is_pid(Acceptor) ->
+         {ok, Sup} = supervisor:start_child(knet_app_sup, [Acceptor]),
+         [{acceptor, Sup} | Tail];
       _ ->
          Opts
    end,
-   knet_service_root_sup:init_service(Uri, [{owner, self()} | SOpt]);
+   Sock = socket(Uri, SOpt),
+   _    = pipe:send(Sock, {listen, Uri}),
+   Sock;
 
 listen({uri, _, _}=Uri, Fun)
  when is_function(Fun, 1) ->
@@ -134,71 +163,45 @@ listen(Uri, Opts)
 -spec(bind/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
 
 bind({uri, _, _}=Uri, Opts) ->
-   case knet:whereis(socket, Uri) of
-      %%
-      %% protocol do not have "socket factory" for accepted connections.
-      %% it is based on callback model, underlying subsystem instantiates
-      %% acceptor process, which needs to be bound with application stack.
-      undefined ->
-         case knet:whereis(service, Uri) of
-            undefined ->
-               {error, badarg};
-            Pid       ->
-               pipe:call(Pid, {enq, self()})
-         end;
-      Sup       ->
-         case supervisor:start_child(Sup, [Uri, [{owner, self()} | Opts] ]) of
-            {ok, Pid} -> 
-               {ok, Sock} = knet_sock:socket(Pid),
-               %% @todo: do we need to link bound process
-               _ = pipe:send(Sock, {accept, Uri}),
-               {ok, Sock};
-            Error     -> 
-               Error
-         end
-         % case knet_service_sup:init_socket(Sup, Uri, self(), Opts) of
-         %    {ok, Sock} ->
-         %       _ = pipe:send(Sock, {accept, Uri}),
-         %       {ok, Sock};
-         %    Error      ->
-         %       Error
-         % end
-   end;
+   Sock = socket(Uri, Opts),
+   _    = pipe:send(Sock, {accept, Uri}),
+   Sock;
+   % case knet:whereis(socket, Uri) of
+   %    %%
+   %    %% protocol do not have "socket factory" for accepted connections.
+   %    %% it is based on callback model, underlying subsystem instantiates
+   %    %% acceptor process, which needs to be bound with application stack.
+   %    undefined ->
+   %       case knet:whereis(service, Uri) of
+   %          undefined ->
+   %             {error, badarg};
+   %          Pid       ->
+   %             pipe:call(Pid, {enq, self()})
+   %       end;
+   %    Sup       ->
+   %       case supervisor:start_child(Sup, [Uri, [{owner, self()} | Opts] ]) of
+   %          {ok, Pid} -> 
+   %             {ok, Sock} = knet_sock:socket(Pid),
+   %             %% @todo: do we need to link bound process
+   %             _ = pipe:send(Sock, {accept, Uri}),
+   %             {ok, Sock};
+   %          Error     -> 
+   %             Error
+   %       end
+   %       % case knet_service_sup:init_socket(Sup, Uri, self(), Opts) of
+   %       %    {ok, Sock} ->
+   %       %       _ = pipe:send(Sock, {accept, Uri}),
+   %       %       {ok, Sock};
+   %       %    Error      ->
+   %       %       Error
+   %       % end
+   % end;
 
 bind(Url, Opts) ->
    bind(uri:new(Url), Opts).
 
 bind(Url) ->
    bind(uri:new(Url), []).
-
-%%
-%% @todo: lift up and make documentation
-%% create socket
-%%   Options
-%%     nopipe - 
-%%     ioctl  -
--spec(socket/1 :: (any()) -> {ok, pid()} | {error, any()}).
--spec(socket/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
-
-socket({uri, tcp, _}=Uri, Opts) ->
-   pipe:spawn(knet_tcp, Opts);
-
-socket({uri, http, _}=Uri, Opts) ->
-   pipe:spawn(knet_http, Opts);
-
-% socket({uri, _, _}=Uri, Opts) ->
-%    case supervisor:start_child(knet_sock_sup, [Uri, [{owner, self()}|Opts]]) of
-%       {ok, Pid} -> 
-%          knet_sock:socket(Pid);
-%       Error     -> 
-%          Error
-%    end; 
-
-socket(Url, Opts) ->
-   socket(uri:new(Url), Opts).
-
-socket(Url) ->
-   socket(uri:new(Url), []).
 
 
 %%
@@ -211,13 +214,17 @@ socket(Url) ->
 -spec(connect/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
 
 connect({uri, _, _}=Uri, Opts) ->
-   case socket(Uri, Opts) of
-      {ok, Sock} -> 
-         _  = pipe:send(Sock, {connect, Uri}),
-         {ok, Sock};
-      Error     -> 
-         Error
-   end;
+   Sock = socket(Uri, Opts),
+   _ = pipe:send(Sock, {connect, Uri}),
+   Sock;
+
+   % case  of
+   %    {ok, Sock} -> 
+   %       ,
+   %       {ok, Sock};
+   %    Error     -> 
+   %       Error
+   % end;
 
 connect(Url, Opts) ->
    connect(uri:new(Url), Opts).
@@ -277,19 +284,19 @@ which(tcp) ->
 which(_) ->
    [].
 
-%%
-%% spawn acceptor bridge process by wrapping a UDF into pipe loop
--spec(acceptor/3 :: (function(), uri:uri(), list()) -> {ok, pid()} | {error, any()}).
+% %%
+% %% spawn acceptor bridge process by wrapping a UDF into pipe loop
+% -spec(acceptor/3 :: (function(), uri:uri(), list()) -> {ok, pid()} | {error, any()}).
 
-acceptor(Fun, Uri, Opts) ->
-   {ok, 
-      erlang:spawn_link(
-         fun() -> 
-            bind(Uri, Opts),
-            pipe:loop(Fun) 
-         end
-      )
-   }.
+% acceptor(Fun, Uri, Opts) ->
+%    {ok, 
+%       erlang:spawn_link(
+%          fun() -> 
+%             bind(Uri, Opts),
+%             pipe:loop(Fun) 
+%          end
+%       )
+%    }.
 
 %%
 %% latency tracing message

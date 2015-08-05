@@ -28,6 +28,7 @@ EFLAGS = \
 	-name ${APP}@127.0.0.1 \
 	-setcookie nocookie \
 	-pa ./ebin \
+	-pa ./priv \
 	-pa deps/*/ebin \
 	-pa apps/*/ebin \
 	-pa examples/*/ebin \
