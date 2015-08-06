@@ -1,13 +1,14 @@
 {application, http,
    [
       {description, "konduit network library - http example"},
-      {vsn,         "0.0.0"},
+      {vsn,         "1.0.0"},
       {modules,     []},
       {registered,  []},
       {applications,[
          kernel, 
          stdlib,
-         knet
+         knet,
+         ssl
       ]},
       {mod, {http_app, []}},
       {env, []}

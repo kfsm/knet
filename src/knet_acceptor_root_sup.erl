@@ -15,42 +15,34 @@
 %%   See the License for the specific language governing permissions and
 %%   limitations under the License.
 %%
-%% @description
-%%    socket factory: creates socket pipelines
--module(knet_sock_sup).
+%% @doc
+%%   application stack's supervisor
+-module(knet_acceptor_root_sup).
 -behaviour(supervisor).
 
 -export([
-   start_link/1,
-   init/1
+   start_link/0
+  ,init/1
 ]).
 
 %%
--define(CHILD(Type, I),            {I,  {I, start_link,   []}, temporary, 5000, Type, dynamic}).
--define(CHILD(Type, I, Args),      {I,  {I, start_link, Args}, temporary, 5000, Type, dynamic}).
--define(CHILD(Type, ID, I, Args),  {ID, {I, start_link, Args}, temporary, 5000, Type, dynamic}).
+-define(CHILD(Type, I),            {I,  {I, start_link,   []}, temporary, 60000, Type, dynamic}).
+-define(CHILD(Type, I, Args),      {I,  {I, start_link, Args}, temporary, 60000, Type, dynamic}).
+-define(CHILD(Type, ID, I, Args),  {ID, {I, start_link, Args}, temporary, 60000, Type, dynamic}).
+
 
 %%
 %%
-start_link(Name)
- when is_atom(Name) ->
-   supervisor:start_link({local, Name}, ?MODULE, []);
-start_link(Uri) ->
-   supervisor:start_link(?MODULE, [Uri]).
-
+start_link() ->
+   supervisor:start_link({local, ?MODULE}, ?MODULE, []).
    
 init([]) -> 
    {ok,
       {
-         {simple_one_for_one, 1000000, 1},
+         {simple_one_for_one, 100000, 1},
          [
-            ?CHILD(worker, knet_sock, [])
+            ?CHILD(worker, knet_acceptor_sup)
          ]
       }
-   };
-
-init([Uri]) -> 
-   ok = knet:register(socket, Uri),
-   init([]).
-
+   }.
 

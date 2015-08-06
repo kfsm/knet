@@ -26,9 +26,8 @@
 ]).
 
 start(_Type, _Args) -> 
-   {ok,   _} = knet:listen("ssl://*:8888", [
+   knet:listen("ssl://*:8888", [
    	{acceptor, tls_protocol}
-     ,{pool,     256}
      ,{backlog,  256}
      ,{certfile, filename:join([code:priv_dir(tls), "server.crt"])}
      ,{keyfile,  filename:join([code:priv_dir(tls), "server.key"])}

@@ -14,10 +14,7 @@
 %%   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %%   See the License for the specific language governing permissions and
 %%   limitations under the License.
-%%
-%% @doc
-%%   application stack's supervisor
--module(knet_app_sup).
+-module(knet_ssl_sup).
 -behaviour(supervisor).
 
 -export([
@@ -41,7 +38,7 @@ init([]) ->
       {
          {simple_one_for_one, 100000, 1},
          [
-            ?CHILD(worker, knet_acceptor_sup)
+            ?CHILD(worker, knet_ssl)
          ]
       }
    }.

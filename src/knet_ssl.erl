@@ -40,8 +40,7 @@
   ,ciphers = undefined :: []         %% list of supported ciphers
   ,cert    = [] :: [any()]           %% list of certificates
   ,active  = true      :: once | true | false  %% socket activity (pipe internally uses active once)
-  ,pool    = 0         :: integer()  %% socket acceptor pool size
-  ,trace   = undefined :: pid()      %% trace functor
+  ,backlog = 0         :: integer()  %% length of acceptor pool
   ,so      = undefined :: [any()]    %% socket options
 }).
 
@@ -60,8 +59,7 @@ init(Opts) ->
       #fsm{
          stream  = io_new(Opts)
         ,ciphers = opts:val(ciphers, cipher_suites(), Opts) 
-        ,pool    = opts:val(pool, 0, Opts)
-        ,trace   = opts:val(trace, undefined, Opts)
+        ,backlog = opts:val(backlog, 5, Opts)
         ,active  = opts:val(active, Opts)
         ,so      = Opts
       }
@@ -81,8 +79,8 @@ free(Reason, #fsm{stream=Stream, sock=Sock}) ->
    ok. 
 
 %% 
-ioctl(socket,   S) -> 
-   S#fsm.sock.
+ioctl(socket,  #fsm{sock = Sock}) -> 
+   Sock.
 
 %%%------------------------------------------------------------------
 %%%
@@ -91,100 +89,83 @@ ioctl(socket,   S) ->
 %%%------------------------------------------------------------------   
 
 %%
-'IDLE'({listen, Uri}, Pipe, S) ->
-   Port = uri:port(Uri),
-   ok   = pns:register(knet, {ssl, {any, Port}}, self()),
-   % socket opts for listener socket requires {active, false}
-   SOpt = opts:filter(?SO_SSL_ALLOWED ++ ?SO_TCP_ALLOWED, S#fsm.so),
-   Opts = [{active, false}, {reuseaddr, true}, {ciphers, S#fsm.ciphers} | lists:keydelete(active, 1, SOpt)],
-   case ssl:listen(Port, Opts) of
-      {ok, Sock} -> 
+%%
+'IDLE'({listen, Uri}, Pipe, State) ->
+   case ssl_listen(Uri, State) of
+      {ok, Sock} ->
          ?access_ssl(#{req => listen, addr => Uri}),
-         _ = pipe:a(Pipe, {ssl, self(), listen}),
-         %% create acceptor pool
-         Sup = knet:whereis(acceptor, Uri),
-         ok  = lists:foreach(
-            fun(_) ->
-               {ok, _} = supervisor:start_child(Sup, [Uri, S#fsm.so])
-            end,
-            lists:seq(1, S#fsm.pool)
-         ),
-         {next_state, 'LISTEN', 
-            S#fsm{
-               sock     = Sock
-            }
-         };
+         create_acceptor_pool(Uri, State),
+         pipe:a(Pipe, {ssl, self(), {listen, Uri}}),
+         {next_state, 'LISTEN', State#fsm{sock = Sock}};
+
       {error, Reason} ->
          ?access_ssl(#{req => {listen, Reason}, addr => Uri}),
          pipe:a(Pipe, {ssl, self(), {terminated, Reason}}),
-         {stop, Reason, S}
+         {stop, Reason, State}
    end;
 
 %%
-'IDLE'({connect, Uri}, Pipe, S) ->
-   Host = scalar:c(uri:get(host, Uri)),
-   Port = uri:get(port, Uri),
-   TOpt = opts:filter(?SO_TCP_ALLOWED, S#fsm.so),
-   SOpt = opts:filter(?SO_SSL_ALLOWED, S#fsm.so),
-   Tout = pair:lookup([timeout, ttc], ?SO_TIMEOUT, S#fsm.so),
-   T1   = os:timestamp(),
-   case gen_tcp:connect(Host, Port, TOpt, Tout) of
+%%
+'IDLE'({connect, Uri}, Pipe, #fsm{stream = Stream0} = State) ->
+   T1 = os:timestamp(),
+   case tcp_connect(Uri, State) of
       {ok, Tcp} ->
-         ?trace(S#fsm.trace, {tcp, connect, tempus:diff(T1)}),
+         {ok, Peer} = inet:peername(Tcp),
+         {ok, Addr} = inet:sockname(Tcp),
+         ?access_ssl(#{req => {syn, sack}, peer => Peer, addr => Addr, time => tempus:diff(T1)}),
          T2 = os:timestamp(),
-         case ssl:connect(Tcp, [{verify_fun, {fun ssl_ca_hook/3, self()}}, {ciphers, S#fsm.ciphers} | SOpt], Tout) of
+         case ssl_connect(Tcp, State) of
             {ok, Sock} ->
-               Stream = io_ttl(io_tth(io_connect(T1, Sock, S#fsm.stream))),
-               ?access_ssl(#{req => {syn, sack}, peer => Stream#stream.peer, addr => Stream#stream.addr, time => tempus:diff(T1)}),
-               ?trace(State#fsm.trace, {ssl, handshake, tempus:diff(T2)}),
-               pipe:a(Pipe, {ssl, self(), {established, Stream#stream.peer}}),
-               {next_state, 'ESTABLISHED', ssl_ioctl(S#fsm{stream=Stream, sock=Sock})};
+               Stream1 = io_ttl(io_tth(io_connect(T1, Sock, Stream0))),
+               ?access_ssl(#{req => {ssl, hand}, peer => Peer, addr => Addr, time => tempus:diff(T2)}),
+               pipe:a(Pipe, {ssl, self(), {established, Peer}}),
+               {next_state, 'ESTABLISHED', ssl_ioctl(State#fsm{stream=Stream1, sock=Sock})};
+
             {error, Reason} ->
-               ?access_ssl(#{req => {syn, Reason}, addr => Uri}),
+               ?access_ssl(#{req => {ssl, Reason}, addr => Uri}),
                pipe:a(Pipe, {ssl, self(), {terminated, Reason}}),
-               {stop, Reason, S}
+               {stop, Reason, State}
          end;
+
       {error, Reason} ->
          ?access_ssl(#{req => {syn, Reason}, addr => Uri}),
          pipe:a(Pipe, {ssl, self(), {terminated, Reason}}),
-         {stop, Reason, S}
-   end;
-
-%% 
-'IDLE'({accept, Uri}, Pipe, S) ->
-   Port  = uri:get(port, Uri),
-   LSock = pipe:ioctl(pns:whereis(knet, {ssl, {any, Port}}), socket),
-   T1    = os:timestamp(),   
-   case ssl:transport_accept(LSock) of
-      {ok, Sock} ->
-         ?trace(S#fsm.trace, {tcp, connect, tempus:diff(T1)}),
-         T2      = os:timestamp(), 
-         {ok, _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri, S#fsm.so]),
-         case ssl:ssl_accept(Sock) of
-            ok ->
-               Stream = io_ttl(io_tth(io_connect(T1, Sock, S#fsm.stream))),
-               ?access_ssl(#{req => {syn, sack}, peer => Stream#stream.peer, addr => Stream#stream.addr, time => tempus:diff(T1)}),
-               ?trace(State#fsm.trace, {ssl, handshake, tempus:diff(T2)}),
-               pipe:a(Pipe, {ssl, self(), {established, Stream#stream.peer}}),
-               {next_state, 'ESTABLISHED', ssl_ioctl(S#fsm{stream=Stream, sock=Sock})};
-            {error, Reason} ->
-               ?access_ssl(#{req => {syn, Reason}, addr => Uri}),
-               pipe:a(Pipe, {ssl, self(), {terminated, Reason}}),      
-               {stop, Reason, S}
-         end;
-      %% listen socket is closed
-      {error, closed} ->
-         {stop, normal, S};
-      {error, Reason} ->
-         {ok,    _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri, S#fsm.so]),
-         ?access_ssl(#{req => {syn, Reason}, addr => Uri}),
-         pipe:a(Pipe, {ssl, self(), {terminated, Reason}}),      
-         {stop, Reason, S}
+         {stop, Reason, State}
    end;
 
 %%
-'IDLE'(shutdown, _Pipe, S) ->
-   {stop, normal, S}.
+%% 
+'IDLE'({accept, Uri}, Pipe, #fsm{stream = Stream0} = State) ->
+   T1 = os:timestamp(),
+   case tcp_accept(Uri, State) of
+      {ok, Sock} ->
+         create_acceptor(Uri, State),
+         {ok, Peer} = ssl:peername(Sock),
+         {ok, Addr} = ssl:sockname(Sock),
+         ?access_ssl(#{req => {syn, sack}, peer => Peer, addr => Addr, time => tempus:diff(T1)}),
+         T2 = os:timestamp(),
+         case ssl:ssl_accept(Sock) of
+            ok ->
+               Stream1 = io_ttl(io_tth(io_connect(T1, Sock, Stream0))),
+               ?access_ssl(#{req => {ssl, hand}, peer => Peer, addr => Addr, time => tempus:diff(T2)}),
+               pipe:a(Pipe, {ssl, self(), {established, Peer}}),
+               {next_state, 'ESTABLISHED', ssl_ioctl(State#fsm{stream=Stream1, sock=Sock})};
+            {error, Reason} ->
+               ?access_ssl(#{req => {ssl, Reason}, addr => Uri}),
+               pipe:a(Pipe, {ssl, self(), {terminated, Reason}}),      
+               {stop, Reason, State}
+         end;
+
+      %% listen socket is closed
+      {error, closed} ->
+         {stop, normal, State};
+
+      {error, Reason} ->
+         create_acceptor(Uri, State),
+         ?access_ssl(#{req => {syn, Reason}, addr => Uri}),
+         pipe:a(Pipe, {ssl, self(), {terminated, Reason}}),      
+         {stop, Reason, State}
+   end.
 
 %%%------------------------------------------------------------------
 %%%
@@ -192,12 +173,8 @@ ioctl(socket,   S) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'LISTEN'(shutdown, _Pipe, S) ->
-   {stop, normal, S};
-
-'LISTEN'(_Msg, _Pipe, S) ->
-   {next_state, 'LISTEN', S}.
-
+'LISTEN'(_Msg, _Pipe, State) ->
+   {next_state, 'LISTEN', State}.
 
 %%%------------------------------------------------------------------
 %%%
@@ -206,61 +183,55 @@ ioctl(socket,   S) ->
 %%%------------------------------------------------------------------   
 
 'ESTABLISHED'({ssl_error, _, Reason}, Pipe, State) ->
-   pipe:b(Pipe, {ssl, self(), {terminated, Reason}}),   
+   pipe:a(Pipe, {ssl, self(), {terminated, Reason}}),   
    {stop, Reason, State};
 
 'ESTABLISHED'({ssl_closed, _}, Pipe, State) ->
-   pipe:b(Pipe, {ssl, self(), {terminated, normal}}),
+   pipe:a(Pipe, {ssl, self(), {terminated, normal}}),
    {stop, normal, State};
 
-'ESTABLISHED'({ssl, _, Pckt}, Pipe, State) ->
+'ESTABLISHED'({ssl, _, Pckt}, Pipe, #fsm{stream = Stream0} = State) ->
    %% What one can do is to combine {active, once} with gen_tcp:recv().
    %% Essentially, you will be served the first message, then read as many as you 
    %% wish from the socket. When the socket is empty, you can again enable 
    %% {active, once}. @todo: {active, n()}
-   {_, Stream} = io_recv(Pckt, Pipe, State#fsm.stream),
-   ?trace(State#fsm.trace, {ssl, packet, byte_size(Pckt)}),
-   {next_state, 'ESTABLISHED', ssl_ioctl(State#fsm{stream=Stream})};
-
-'ESTABLISHED'(shutdown, _Pipe, State) ->
-   {stop, normal, State};
+   {_, Stream1} = io_recv(Pckt, Pipe, Stream0),
+   {next_state, 'ESTABLISHED', ssl_ioctl(State#fsm{stream=Stream1})};
 
 'ESTABLISHED'({ttl, Pack}, Pipe, State) ->
    case io_ttl(Pack, State#fsm.stream) of
       {eof, Stream} ->
-         pipe:b(Pipe, {ssl, self(), {terminated, timeout}}),
+         pipe:a(Pipe, {ssl, self(), {terminated, timeout}}),
          {stop, normal, State#fsm{stream=Stream}};
       {_,   Stream} ->
          {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
    end;
 
-'ESTABLISHED'(hibernate, _, #fsm{stream=Sock}=State) ->
-   ?DEBUG("knet [ssl]: suspend ~p", [Sock#stream.peer]),
+'ESTABLISHED'(hibernate, _, State) ->
+   ?DEBUG("knet [ssl]: suspend ~p", [(State#fsm.stream)#stream.peer]),
    {next_state, 'HIBERNATE', State, hibernate};
 
-'ESTABLISHED'({ssl_cert, ca, Cert}, _Pipe, S) ->
+'ESTABLISHED'({ssl_cert, ca, Cert}, _Pipe, #fsm{cert = Certs} = State) ->
    {next_state, 'ESTABLISHED', 
-      S#fsm{
-         cert = [Cert | S#fsm.cert]
+      State#fsm{
+         cert = [Cert | Certs]
       }
    };
 
-'ESTABLISHED'({ssl_cert, peer, Cert}, _Pipe, S) ->
-   Pckt = [public_key:pkix_encode('OTPCertificate', X, otp) || X <- [Cert | S#fsm.cert]],
-   ?trace(S#fsm.trace, {ssl, packet, erlang:iolist_size(Pckt)}), 
+'ESTABLISHED'({ssl_cert, peer, Cert}, _Pipe, #fsm{cert = Certs} = State) ->
    {next_state, 'ESTABLISHED', 
-      S#fsm{
-         cert = [Cert | S#fsm.cert]
+      State#fsm{
+         cert = [Cert | Certs]
       }
    };
 
-'ESTABLISHED'(Msg, Pipe, State)
+'ESTABLISHED'(Msg, Pipe, #fsm{sock = Sock, stream = Stream0} = State)
  when ?is_iolist(Msg) ->
    try
-      {_, Stream} = io_send(Msg, State#fsm.sock, State#fsm.stream),
-      {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
+      {_, Stream1} = io_send(Msg, Sock, Stream0),
+      {next_state, 'ESTABLISHED', State#fsm{stream = Stream1}}
    catch _:{badmatch, {error, Reason}} ->
-      pipe:b(Pipe, {ssl, self(), {terminated, Reason}}),
+      pipe:a(Pipe, {ssl, self(), {terminated, Reason}}),
       {stop, Reason, State}
    end.
 
@@ -270,9 +241,9 @@ ioctl(socket,   S) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'HIBERNATE'(Msg, Pipe, State) ->
-   ?DEBUG("knet [ssl]: resume ~p", [State#stream.peer]),
-   'ESTABLISHED'(Msg, Pipe, State#fsm{stream=io_tth(State#fsm.stream)}).
+'HIBERNATE'(Msg, Pipe, #fsm{stream = Stream} = State) ->
+   ?DEBUG("knet [ssl]: resume ~p", [Stream#stream.peer]),
+   'ESTABLISHED'(Msg, Pipe, State#fsm{stream=io_tth(Stream)}).
 
 
 %%%------------------------------------------------------------------
@@ -294,7 +265,7 @@ io_new(SOpt) ->
 
 %%
 %% set stream address(es)
-io_connect(T, Port, #stream{}=Sock) ->
+io_connect(_T, Port, #stream{}=Sock) ->
    {ok, Peer} = ssl:peername(Port),
    {ok, Addr} = ssl:sockname(Port),
    Sock#stream{peer = Peer, addr = Addr, tss = os:timestamp(), ts = os:timestamp()}.
@@ -326,7 +297,7 @@ io_ttl(N, #stream{}=Sock) ->
 io_recv(Pckt, Pipe, #stream{}=Sock) ->
    ?DEBUG("knet [ssl] ~p: recv ~p~n~p", [self(), Sock#stream.peer, Pckt]),
    {Msg, Recv} = pstream:decode(Pckt, Sock#stream.recv),
-   lists:foreach(fun(X) -> pipe:b(Pipe, {ssl, self(), X}) end, Msg),
+   lists:foreach(fun(X) -> pipe:a(Pipe, {ssl, self(), X}) end, Msg),
    {active, Sock#stream{recv=Recv}}.
 
 %%
@@ -348,6 +319,61 @@ ssl_ioctl(#fsm{active=once}=State) ->
 ssl_ioctl(#fsm{}=State) ->
    State.
 
+%%
+%% create ssl_listen sock
+%% socket opts for listener socket requires {active, false}
+ssl_listen(Uri, #fsm{so = SOpt0, ciphers = Ciphers}) ->
+   Port = uri:port(Uri),
+   SOpt = opts:filter(?SO_SSL_ALLOWED ++ ?SO_TCP_ALLOWED, SOpt0),
+   ssl:listen(Port, [
+      {active,    false}
+     ,{reuseaddr, true}
+     ,{ciphers,   Ciphers}
+     |lists:keydelete(active, 1, SOpt)
+   ]).
+
+%%
+%%
+tcp_connect(Uri, #fsm{so = SOpt0}) ->
+   Host = scalar:c(uri:host(Uri)),
+   Port = uri:port(Uri),
+   SOpt = opts:filter(?SO_TCP_ALLOWED, SOpt0),
+   Tout = pair:lookup([timeout, ttc], ?SO_TIMEOUT, SOpt0),
+   gen_tcp:connect(Host, Port, SOpt, Tout).
+
+%%
+%%
+ssl_connect(Sock, #fsm{so = SOpt0, ciphers = Ciphers}) ->
+   Tout = pair:lookup([timeout, ttc], ?SO_TIMEOUT, SOpt0),
+   SOpt = [
+      {verify_fun, {fun ssl_ca_hook/3, self()}}
+     ,{ciphers,    Ciphers}
+     |opts:filter(?SO_SSL_ALLOWED, SOpt0)
+   ],
+   ssl:connect(Sock, SOpt, Tout).
+
+%%
+%%
+tcp_accept(_Uri, #fsm{so = SOpt0}) ->
+   LPipe = opts:val(listen, SOpt0),
+   LSock = pipe:ioctl(LPipe, socket),
+   ssl:transport_accept(LSock).
+
+%%
+%% create app acceptor pool
+create_acceptor_pool(Uri, #fsm{so = SOpt0, backlog = Backlog}) ->
+   Sup  = opts:val(acceptor,  SOpt0), 
+   SOpt = [{listen, self()} | SOpt0],
+   lists:foreach(
+      fun(_) ->
+         {ok, _} = supervisor:start_child(Sup, [Uri, SOpt])
+      end,
+      lists:seq(1, Backlog)
+   ).
+
+create_acceptor(Uri, #fsm{so = SOpt0}) ->
+   Sup = opts:val(acceptor,  SOpt0), 
+   {ok, _} = supervisor:start_child(Sup, [Uri, SOpt0]).
 
 %%
 %%
@@ -366,6 +392,7 @@ ssl_ca_hook(_, _, Pid) ->
 
 %%
 %% list of valid cipher suites 
+-ifdef(CONFIG_NO_ECDH).
 cipher_suites() ->
    lists:filter(
       fun(Suite) ->
@@ -373,3 +400,7 @@ cipher_suites() ->
       end, 
       ssl:cipher_suites()
    ).
+-else.
+cipher_suites() ->
+      ssl:cipher_suites().
+-endif.

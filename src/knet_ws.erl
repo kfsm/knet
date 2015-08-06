@@ -52,18 +52,19 @@
 %%%------------------------------------------------------------------   
 
 %%
-start_link(SOpt) ->
-   pipe:start_link(?MODULE, SOpt ++ ?SO_HTTP, []).
+%%
+start_link(Opts) ->
+   pipe:start_link(?MODULE, Opts ++ ?SO_HTTP, []).
 
-start_link(Req, SOpt) ->
-   pipe:start_link(?MODULE, [Req, SOpt], []).
+start_link(Req, Opts) ->
+   pipe:start_link(?MODULE, [Req, Opts], []).
 
 %%
-init([{_Mthd, Url, Head, Env}, SOpt]) ->
+init([{_Mthd, Url, Head, Env}, Opts]) ->
    %% protocol fsm is created by protocol upgrade
    {ok, 'ESTABLISHED',
       #fsm{
-         stream  = ws_log('GET', 200, ws_new(server, opts:val(peer, Env), uri:schema(ws, Url), SOpt))
+         stream  = ws_new(server, Url, Env, Opts)
       }
    };
 
@@ -109,9 +110,6 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'IDLE'(shutdown, _Pipe, S) ->
-   {stop, normal, S};
-
 'IDLE'({listen,  Uri}, Pipe, State) ->
    pipe:b(Pipe, {listen, Uri}),
    {next_state, 'LISTEN', State};
@@ -136,7 +134,7 @@ ioctl(_, _) ->
      ,{<<"Sec-WebSocket-Key">>,   Hash}
      ,{<<"Sec-WebSocket-Version">>, 13}
    ]},
-  'CLIENT'(Req, Pipe, State).
+  'CLIENT'(Req, Pipe, State#fsm{stream = ws_new(server, Uri, [])}).
 
 
 %%%------------------------------------------------------------------
@@ -144,9 +142,6 @@ ioctl(_, _) ->
 %%% LISTEN
 %%%
 %%%------------------------------------------------------------------   
-
-'LISTEN'(shutdown, _Pipe, S) ->
-   {stop, normal, S};
 
 'LISTEN'(_Msg, _Pipe, S) ->
    {next_state, 'LISTEN', S}.
@@ -157,9 +152,6 @@ ioctl(_, _) ->
 %%% SERVER
 %%%
 %%%------------------------------------------------------------------   
-
-'SERVER'(shutdown, _Pipe, S) ->
-   {stop, normal, S};
 
 'SERVER'({Prot, Peer,  established}, _Pipe, State)
  when ?is_transport(Prot) ->
@@ -195,25 +187,23 @@ ioctl(_, _) ->
 
 %%
 %% protocol signaling
-'CLIENT'(shutdown, _Pipe, S) ->
-   {stop, normal, S};
-
 'CLIENT'({Prot, _, {established, Peer}}, _, State)
  when ?is_transport(Prot) ->
    {next_state, 'CLIENT', State};
 
 'CLIENT'({Prot, _, {terminated, Reason}}, Pipe, State)
  when ?is_transport(Prot) ->
-   pipe:b(Pipe, {ws, self(), {terminated, Reason}}),
+   pipe:a(Pipe, {ws, self(), {terminated, Reason}}),
    {stop, normal, State};
 
 %%
 %% remote acceptor response
-'CLIENT'({Prot, Peer, Pckt}, Pipe, State)
+'CLIENT'({Prot, Peer, Pckt}, Pipe, #fsm{stream = Stream} = State)
  when ?is_transport(Prot), is_binary(Pckt) ->
    try
       {Msg, Http} = htstream:decode(Pckt, htstream:new()),
-      {next_state, 'ESTABLISHED', State#fsm{stream=ws_new(server, [])}}
+      pipe:b(Pipe, {ws, self(), {established, Stream#stream.peer}}),
+      {next_state, 'ESTABLISHED', State}
    catch _:Reason ->
       ?NOTICE("knet [http]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
       {stop, Reason, State}
@@ -241,14 +231,9 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'ESTABLISHED'(shutdown, _Pipe, State) ->
-   % local client request to shutdown connection
-   {stop, normal, State};
-
 'ESTABLISHED'({Prot, _, {terminated, Reason}}, Pipe, State)
  when ?is_transport(Prot) ->
    pipe:b(Pipe, {ws, self(), {terminated, Reason}}),
-   ws_log(fin, Reason, State#fsm.stream),
    {stop, normal, State};
 
 %%
@@ -258,7 +243,7 @@ ioctl(_, _) ->
    case ws_recv(Pckt, Pipe, State#fsm.stream) of
       {eof, Stream} ->
          pipe:b(Pipe, {ws, self(), {terminated, normal}}),
-         {stop, normal, State#fsm{stream=ws_log(fin, normal, Stream)}};
+         {stop, normal, State#fsm{stream=Stream}};
       {_,   Stream} ->
          {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
    end;
@@ -269,7 +254,7 @@ ioctl(_, _) ->
  when ?is_iolist(Msg) ->
    case ws_send(Msg, Pipe, State#fsm.stream) of
       {eof, Stream} ->
-         {stop, normal, State#fsm{stream=ws_log(fin, normal, Stream)}};
+         {stop, normal, State#fsm{stream=Stream}};
       {_,   Stream} ->
          {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
    end.
@@ -282,29 +267,22 @@ ioctl(_, _) ->
 
 %%
 %% create new #stream{} 
-ws_new(Type, SOpt) ->
+ws_new(Type, Url, SOpt) ->
    #stream{
       send = wsstream:new(Type)
      ,recv = wsstream:new(Type)
+     ,peer = Url
    }.
 
-ws_new(Type, Peer, Addr, SOpt) ->
+ws_new(Type, Url, Env, SOpt) ->
    #stream{
       send = wsstream:new(Type)
      ,recv = wsstream:new(Type)
-     ,peer = Peer
-     ,addr = Addr
+     ,peer = Url
+     % ,peer = opts:val(peer, Env)
+     % ,addr = uri:schema(ws, Url) %% (?)
      ,tss  = os:timestamp() 
    }.
-
-%%
-%% log web socket event
-ws_log(Req, Reason, #stream{}=Ws) ->
-   Pack = wsstream:packets(Ws#stream.recv) + wsstream:packets(Ws#stream.send),
-   Byte = wsstream:octets(Ws#stream.recv)  + wsstream:octets(Ws#stream.send),
-   % ?access_log(#log{prot=ws, src=uri:host(Ws#stream.peer), dst=Ws#stream.addr, req=Req, rsp=Reason, 
-   %                  byte=Byte, pack=Pack, time=tempus:diff(Ws#stream.tss)}),
-   Ws.
 
 %%
 %% web socket recv message
@@ -349,13 +327,11 @@ ht_recv(Pckt, Pipe, #stream{}=Ht) ->
          ),
          pipe:a(Pipe, Msg),
          pipe:b(Pipe, {ws, self(), {'GET', Url, Head, []}}), %% @todo req
-         {upgrade, ws_new(server, [])};
+         {upgrade, ws_new(server, Url, [])};
 
       %% ANY Request
       {_, Recv} ->
          {eof, Ht#stream{recv=Recv}}       
    end.
-
-
 
 

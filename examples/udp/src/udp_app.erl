@@ -25,13 +25,10 @@
    stop/1
 ]).
 
-% knet:listen("udp://*:6001", [{acceptor, udp_protocol}, {pool,     256}, {backlog,  256}])
-
-
 start(_Type, _Args) -> 
-   {ok,   _} = knet:listen("udp://*:6001", [
+   knet:listen("udp://*:6001", [
       {acceptor, udp_protocol}
-     ,{pool,     256}
+     ,{backlog,       10240}
      ,{sndbuf,   256 * 1024}
      ,{recbuf,   256 * 1024}
    ]),

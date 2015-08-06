@@ -76,8 +76,8 @@ free(Reason, #fsm{stream=Stream, sock=Sock}) ->
    ok. 
 
 %% 
-ioctl(socket,   S) -> 
-   S#fsm.sock.
+ioctl(socket,  #fsm{sock = Sock}) -> 
+   Sock.
 
 %%%------------------------------------------------------------------
 %%%
@@ -94,6 +94,7 @@ ioctl(socket,   S) ->
          create_acceptor_pool(Uri, State),
          pipe:a(Pipe, {tcp, self(), {listen, Uri}}),
          {next_state, 'LISTEN', State#fsm{sock = Sock}};
+
       {error, Reason} ->
          ?access_tcp(#{req => {listen, Reason}, addr => Uri}),
          pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),
@@ -143,13 +144,7 @@ ioctl(socket,   S) ->
          ?access_tcp(#{req => {syn, Reason}, addr => Uri}),
          pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),      
          {stop, Reason, State}
-   end;
-
-%%
-%%
-'IDLE'(shutdown, _Pipe, State) ->
-   {stop, normal, State}.
-
+   end.
 
 %%%------------------------------------------------------------------
 %%%
@@ -157,11 +152,8 @@ ioctl(socket,   S) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'LISTEN'(shutdown, _Pipe, S) ->
-   {stop, normal, S};
-
-'LISTEN'(_Msg, _Pipe, S) ->
-   {next_state, 'LISTEN', S}.
+'LISTEN'(_Msg, _Pipe, State) ->
+   {next_state, 'LISTEN', State}.
 
 
 %%%------------------------------------------------------------------
@@ -178,16 +170,13 @@ ioctl(socket,   S) ->
    pipe:a(Pipe, {tcp, self(), {terminated, normal}}),
    {stop, normal, State};
 
-'ESTABLISHED'({tcp, _, Pckt}, Pipe, State) ->
+'ESTABLISHED'({tcp, _, Pckt}, Pipe, #fsm{stream = Stream0} = State) ->
    %% What one can do is to combine {active, once} with gen_tcp:recv().
    %% Essentially, you will be served the first message, then read as many as you 
    %% wish from the socket. When the socket is empty, you can again enable {active, once}. 
    %% Note: release 17.x and later supports {active, n()}
-   {_, Stream} = io_recv(Pckt, Pipe, State#fsm.stream),
-   {next_state, 'ESTABLISHED', tcp_ioctl(State#fsm{stream=Stream})};
-
-'ESTABLISHED'(shutdown, _Pipe, State) ->
-   {stop, normal, State};
+   {_, Stream1} = io_recv(Pckt, Pipe, Stream0),
+   {next_state, 'ESTABLISHED', tcp_ioctl(State#fsm{stream = Stream1})};
 
 'ESTABLISHED'({ttl, Pack}, Pipe, State) ->
    case io_ttl(Pack, State#fsm.stream) of
@@ -202,11 +191,11 @@ ioctl(socket,   S) ->
    ?DEBUG("knet [tcp]: suspend ~p", [(State#fsm.stream)#stream.peer]),
    {next_state, 'HIBERNATE', State, hibernate};
 
-'ESTABLISHED'(Msg, Pipe, State)
+'ESTABLISHED'(Msg, Pipe, #fsm{sock = Sock, stream = Stream0} = State)
  when ?is_iolist(Msg) ->
    try
-      {_, Stream} = io_send(Msg, State#fsm.sock, State#fsm.stream),
-      {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
+      {_, Stream1} = io_send(Msg, Sock, Stream0),
+      {next_state, 'ESTABLISHED', State#fsm{stream = Stream1}}
    catch _:{badmatch, {error, Reason}} ->
       pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),
       {stop, Reason, State}
@@ -218,9 +207,9 @@ ioctl(socket,   S) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'HIBERNATE'(Msg, Pipe, State) ->
-   ?DEBUG("knet [tcp]: resume ~p",[(State#fsm.stream)#stream.peer]),
-   'ESTABLISHED'(Msg, Pipe, State#fsm{stream=io_tth(State#fsm.stream)}).
+'HIBERNATE'(Msg, Pipe, #fsm{stream = Stream} = State) ->
+   ?DEBUG("knet [tcp]: resume ~p",[Stream#stream.peer]),
+   'ESTABLISHED'(Msg, Pipe, State#fsm{stream=io_tth(Stream)}).
 
 %%%------------------------------------------------------------------
 %%%

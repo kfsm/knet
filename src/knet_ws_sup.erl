@@ -14,40 +14,32 @@
 %%   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 %%   See the License for the specific language governing permissions and
 %%   limitations under the License.
-%%
-%% @description
-%%   example udp application
--module(udp_protocol).
--behaviour(pipe).
+-module(knet_ws_sup).
+-behaviour(supervisor).
 
 -export([
-	start_link/2,
-	init/1,
-	free/2,
-	ioctl/2,
-	handle/3
+   start_link/0
+  ,init/1
 ]).
 
 %%
-%%
-start_link(Uri, Opts) ->
-	pipe:start_link(?MODULE, [Uri, Opts], []).
+-define(CHILD(Type, I),            {I,  {I, start_link,   []}, temporary, 60000, Type, dynamic}).
+-define(CHILD(Type, I, Args),      {I,  {I, start_link, Args}, temporary, 60000, Type, dynamic}).
+-define(CHILD(Type, ID, I, Args),  {ID, {I, start_link, Args}, temporary, 60000, Type, dynamic}).
 
-init([Uri, Opts]) ->
-	{ok, handle, knet:bind(Uri, Opts)}.
-
-free(_, Sock) ->
-	knet:close(Sock).
-
-%%
-ioctl(_, _) ->
-	throw(not_implemented).
 
 %%
 %%
-handle({udp, _, Msg}, Pipe, Sock) ->
-	pipe:a(Pipe, Msg),
-	{next_state, handle, Sock}.
-
-
+start_link() ->
+   supervisor:start_link({local, ?MODULE}, ?MODULE, []).
+   
+init([]) -> 
+   {ok,
+      {
+         {simple_one_for_one, 100000, 1},
+         [
+            ?CHILD(worker, knet_ws)
+         ]
+      }
+   }.
 

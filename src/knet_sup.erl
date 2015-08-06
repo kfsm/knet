@@ -39,9 +39,12 @@ init([]) ->
       {
          {one_for_one, 4, 1800},
          [
-            ?CHILD(supervisor, knet_app_sup)
+            ?CHILD(supervisor, knet_acceptor_root_sup)
+           ,?CHILD(supervisor, knet_udp_sup)
            ,?CHILD(supervisor, knet_tcp_sup)
+           ,?CHILD(supervisor, knet_ssl_sup)
            ,?CHILD(supervisor, knet_http_sup)
+           ,?CHILD(supervisor, knet_ws_sup)
          ]
       }
    }.

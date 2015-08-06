@@ -57,10 +57,11 @@
 %%%
 %%%---------------------------------------------------------------------------   
 
+%%
+%%
 start_link(Opts) ->
    pipe:start_link(?MODULE, Opts ++ ?SO_HTTP, []).
 
-%% @todo: http headers from options
 init(Opts) ->
    {ok, 'IDLE', 
       #fsm{
@@ -72,9 +73,11 @@ init(Opts) ->
    }.
 
 %%
+%%
 free(_, _) ->
    ok.
 
+%%
 %%
 ioctl(_, _) ->
    throw(not_implemented).
@@ -84,9 +87,6 @@ ioctl(_, _) ->
 %%% IDLE
 %%%
 %%%------------------------------------------------------------------   
-
-'IDLE'(shutdown, _Pipe, State) ->
-   {stop, normal, State};
 
 'IDLE'({listen,  Uri}, Pipe, State) ->
    pipe:b(Pipe, {listen, Uri}),
@@ -115,9 +115,6 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'LISTEN'(shutdown, _Pipe, S) ->
-   {stop, normal, S};
-
 'LISTEN'(_Msg, _Pipe, S) ->
    {next_state, 'LISTEN', S}.
 
@@ -130,9 +127,6 @@ ioctl(_, _) ->
 %%
 %%
 'ACCEPT'(timeout, _Pipe,  State) ->
-   {stop, normal, State};
-
-'ACCEPT'(shutdown, _Pipe, State) ->
    {stop, normal, State};
 
 %%
@@ -230,9 +224,6 @@ ioctl(_, _) ->
 'STREAM'(timeout, _Pipe,  State) ->
    {stop, normal, State};
 
-'STREAM'(shutdown, _Pipe, State) ->
-   {stop, normal, State};
-
 %%
 %% peer connection
 'STREAM'({Prot, _, {established, Peer}}, _Pipe, #fsm{stream=Stream}=State)
@@ -244,8 +235,7 @@ ioctl(_, _) ->
    case htstream:state(Stream#stream.recv) of
       payload -> 
          % time to meaningful response
-         % _ = knet:trace(State#fsm.trace, {http, ttmr, tempus:diff(State#fsm.ts)}),    
-         _ = pipe:b(Pipe, {http, self(), eof});
+         pipe:b(Pipe, {http, self(), eof});
       _       -> 
          ok
    end,
@@ -259,12 +249,10 @@ ioctl(_, _) ->
       case io_recv(Pckt, Pipe, State#fsm.stream) of
          %% time to first byte
          {eoh, Stream} ->
-            % knet:trace(State#fsm.trace, {http, ttfb, tempus:diff(State#fsm.ts)}),
             'STREAM'({Prot, Peer, <<>>}, Pipe, State#fsm{stream=Stream});
 
          %% time to meaningful request
          {eof, #stream{ts=T, recv=Http}=Stream} ->
-            % knet:trace(State#fsm.trace, {http, ttmr, tempus:diff(State#fsm.ts)}),
             pipe:b(Pipe, {http, self(), eof}),
             {next_state, 'STREAM', 
                State#fsm{
@@ -440,10 +428,10 @@ server_upgrade(Pipe, #fsm{stream=#stream{recv=Http}=Stream, so=SOpt}=State) ->
          %%  - new protocol needs to run state-less init code
          %%  - it shall emit message
          %%  - it shall return pipe compatible upgrade signature
+         access_log(websocket, State),
          {Msg, Upgrade} = knet_ws:ioctl({upgrade, Req, SOpt}, undefined),
          pipe:a(Pipe, Msg),
          Upgrade;
-
       _ ->
          throw(not_implemented)
    end.
@@ -466,8 +454,22 @@ make_head() ->
 
 %%
 %% process access log
+access_log(Upgrade, #fsm{stream = #stream{ts = T, recv = Recv, peer = Peer}})
+ when is_atom(Upgrade) ->
+   {_, {_Mthd,  Url,  Head}} = htstream:http(Recv),
+   ?access_http(#{
+      req  => {upgrade, Upgrade}
+     ,peer => uri:host(Peer)
+     ,addr => request_url(Url, Head)
+     ,ua   => opts:val('User-Agent', undefined, Head)
+     ,byte => htstream:octets(Recv)
+     ,pack => htstream:packets(Recv)
+     ,time => tempus:diff(T)
+   });
+
 access_log(_, #fsm{req={}}) ->
    {};
+
 access_log(Send, State) ->
    {T, Recv} = q:head(State#fsm.req),
    {_, {Mthd,  Url,  Head}} = htstream:http(Recv),

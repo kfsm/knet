@@ -34,46 +34,6 @@
   ,connect/2 
   ,close/1
 ]).
-% %% konduit interface
-% -export([
-%    register/2
-%   ,whereis/2
-
-%   ,which/1
-%   % ,acceptor/3
-%   ,trace/2
-% ]).
-
-% %%%------------------------------------------------------------------
-% %%%
-% %%% data type(s)
-% %%%
-% %%%------------------------------------------------------------------   
-
-% %% time to live timeout in milliseconds
-% -type(so_ttl()  :: {ttl, timeout()}).
-% -type(ht_keepalive() :: {'keep-alive', timeout()}).
-
-% %% time to hibernate in milliseconds
-% -type(so_tth()  :: {tth, timeout()}).
-
-% %% time to connect
-% -type(so_ttc()  :: {ttc, timeout()}).
-
-% %% socket packet framing
-% -type(so_pack() :: {pack, raw | line}).
-
-% %% socket acceptor dispatch algorithm
-% -type(so_dispatch() :: {dispatch, 'round-robin' | peer}).
-
-% %% bind socket to local address
-% -type(so_addr() :: {addr, {any(), integer()}}).
-
-% %% socket acceptor
-% %% the acceptor is either 1-ary UDF or module name that implements pipe protocol 
-% %% {acceptor, fun(_) -> <<>> end}
-% %% {acceptor, tcp_echo}
-% -type(so_acceptor() :: {acceptor, function() | atom()}).
 
 %%%------------------------------------------------------------------
 %%%
@@ -99,15 +59,31 @@ start() ->
 -spec(socket/1 :: (any()) -> pid()).
 -spec(socket/2 :: (any(), any()) -> pid()).
 
-socket({uri, tcp,  _}, Opts) ->
-   {ok, A} = supervisor:start_child(knet_tcp_sup, [Opts]),
+socket({uri, udp,  _}, Opts) ->
+   {ok, A} = supervisor:start_child(knet_udp_sup,  [Opts]),
    create([A], Opts);
-
+socket({uri, tcp,  _}, Opts) ->
+   {ok, A} = supervisor:start_child(knet_tcp_sup,  [Opts]),
+   create([A], Opts);
+socket({uri, ssl,  _}, Opts) ->
+   {ok, A} = supervisor:start_child(knet_ssl_sup,  [Opts]),
+   create([A], Opts);
 socket({uri, http, _}, Opts) ->
    {ok, A} = supervisor:start_child(knet_tcp_sup,  [Opts]),
    {ok, B} = supervisor:start_child(knet_http_sup, [Opts]),
    create([B, A], Opts);
-
+socket({uri, https,_}, Opts) ->
+   {ok, A} = supervisor:start_child(knet_ssl_sup,  [Opts]),
+   {ok, B} = supervisor:start_child(knet_http_sup, [Opts]),
+   create([B, A], Opts);
+socket({uri, ws, _}, Opts) ->
+   {ok, A} = supervisor:start_child(knet_tcp_sup,  [Opts]),
+   {ok, B} = supervisor:start_child(knet_ws_sup,   [Opts]),
+   create([B, A], Opts);
+socket({uri, wss,_}, Opts) ->
+   {ok, A} = supervisor:start_child(knet_ssl_sup,  [Opts]),
+   {ok, B} = supervisor:start_child(knet_ws_sup,   [Opts]),
+   create([B, A], Opts);
 socket(Url, Opts) ->
    socket(uri:new(Url), Opts).
 
@@ -134,7 +110,7 @@ listen({uri, _, _}=Uri, Opts)
  when is_list(Opts) ->
    SOpt = case lists:keytake(acceptor, 1, Opts) of
       {value, {_, Acceptor}, Tail} when not is_pid(Acceptor) ->
-         {ok, Sup} = supervisor:start_child(knet_app_sup, [Acceptor]),
+         {ok, Sup} = supervisor:start_child(knet_acceptor_root_sup, [Acceptor]),
          [{acceptor, Sup} | Tail];
       _ ->
          Opts
@@ -195,81 +171,4 @@ connect(Url) ->
 
 close(Sock) ->
    pipe:free(Sock).
-
- % when is_pid(Sock) orelse is_atom(Sock) ->
- %   _ = pipe:send(Sock, shutdown),
- %   ok;
-
-% close({uri, _, _}=Uri) ->
-%    knet_service_root_sup:free_service(Uri);
-
-% close(Uri) ->
-%    close(uri:new(Uri)).
-
-% %%%------------------------------------------------------------------
-% %%%
-% %%% knet konduit interface
-% %%%
-% %%%------------------------------------------------------------------   
-
-% %%
-% %% register knet component
-% -spec(register/2 :: (atom(), {uri, _, _} | any()) -> ok).
-
-% register(Name, {uri, _, _} = Uri) ->
-%    pns:register(knet, {Name, uri:s(Uri)}, self());
-
-% register(Name, Uid) ->
-%    pns:register(knet, {Name, Uid}, self()).
-
-% %%
-% %% lookup knet component
-% -spec(whereis/2 :: (atom(), {uri, _, _}) -> pid() | undefined).
-
-% whereis(Name, {uri, _, _} = Uri) ->
-%    pns:whereis(knet, {Name, uri:s(Uri)});
-
-% whereis(Name, Uid) ->
-%    pns:whereis(knet, {Name, Uid}).
-
-% %%
-% %% list active sockets
-% -spec(which/1 :: (atom()) -> [{binary(), pid()}]).
-
-% which(tcp) ->
-%    [{uri:authority(X, uri:new(tcp)), Y} || {{tcp, X}, Y} <- pns:lookup(knet, {tcp, '_'})];
-
-% which(_) ->
-%    [].
-
-% % %%
-% % %% spawn acceptor bridge process by wrapping a UDF into pipe loop
-% % -spec(acceptor/3 :: (function(), uri:uri(), list()) -> {ok, pid()} | {error, any()}).
-
-% % acceptor(Fun, Uri, Opts) ->
-% %    {ok, 
-% %       erlang:spawn_link(
-% %          fun() -> 
-% %             bind(Uri, Opts),
-% %             pipe:loop(Fun) 
-% %          end
-% %       )
-% %    }.
-
-% %%
-% %% latency tracing message
-% -spec(trace/2 :: (pid(), any()) -> ok).
-
-% trace(undefined, _Msg) ->
-%    ok;
-% trace(Pid, Msg) ->
-%    _ = pipe:send(Pid, {trace, self(), os:timestamp(), Msg}),
-%    ok.
-
-
-%%%------------------------------------------------------------------
-%%%
-%%% private
-%%%
-%%%------------------------------------------------------------------   
 

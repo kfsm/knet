@@ -44,8 +44,7 @@
   ,acceptor = undefined :: datum:q()  %% acceptor queue (worker process handling udp message) 
   ,sock     = undefined :: port()     %% udp socket
   ,active   = true      :: once | true | false  %% socket activity (pipe internally uses active once)  
-  ,pool     = 0         :: integer()  %% socket acceptor pool size
-  ,trace    = undefined :: pid()      %% trace / debug / stats functor 
+  ,backlog  = 0         :: integer()  %% socket acceptor pool size
   ,so       = undefined :: any()      %% socket options
 }).
 
@@ -63,10 +62,9 @@ start_link(Opts) ->
 init(Opts) ->
    {ok, 'IDLE', 
       #fsm{      
-         stream  = io_new(Opts)
-        ,dispatch= opts:val(dispatch, 'round-robin', Opts)
-        ,pool    = opts:val(pool, 0, Opts)
-        ,trace   = opts:val(trace, undefined, Opts)
+         stream   = io_new(Opts)
+        ,dispatch = opts:val(dispatch, 'round-robin', Opts)
+        ,backlog  = opts:val(backlog,  5, Opts)
         ,active  = opts:val(active, Opts)
         ,so      = Opts      
       }
@@ -96,23 +94,16 @@ ioctl(socket, State) ->
 %%%------------------------------------------------------------------   
 
 %%
+%%
 'IDLE'({listen, Uri}, Pipe, State) ->
-   Port = uri:port(Uri),
-   ok   = knet:register(udp, {any, Port}),
-   SOpt = opts:filter(?SO_UDP_ALLOWED, State#fsm.so),
-   case gen_udp:open(Port, SOpt) of
-      {ok, Sock} -> 
+   case udp_listen(Uri, State) of
+      {ok, Sock} ->
          ?access_udp(#{req => listen, addr => Uri}),
+         create_acceptor_pool(Uri, State),
          _ = pipe:a(Pipe, {udp, self(), {listen, Uri}}),
-         %% create acceptor pool
-         Sup = knet:whereis(acceptor, Uri),
-         ok  = lists:foreach(
-            fun(_) ->
-               {ok, _} = supervisor:start_child(Sup, [Uri, State#fsm.so])
-            end,
-            lists:seq(1, State#fsm.pool)
-         ),
-         {next_state, 'LISTEN', udp_ioctl(State#fsm{sock=Sock, acceptor=q:new()})};
+         {next_state, 'LISTEN', 
+            udp_ioctl(State#fsm{sock=Sock, acceptor=q:new()})
+         };
 
       {error, Reason} ->
          ?access_tcp(#{req => {listen, Reason}, addr => Uri}),
@@ -121,27 +112,26 @@ ioctl(socket, State) ->
    end;
 
 %%
-'IDLE'({connect, Uri}, Pipe, State) ->
-   {_Host, Port} = opts:val(addr, {any, 0}, State#fsm.so),
-   SOpt = opts:filter(?SO_UDP_ALLOWED, State#fsm.so),
-	case gen_udp:open(Port, SOpt) of
-		{ok, Sock} ->
-         Stream = io_ttl(io_tth(io_connect(Sock, Uri, State#fsm.stream))),
+%%
+'IDLE'({connect, Uri}, Pipe, #fsm{stream = Stream0} = State) ->
+   case udp_connect(Uri, State) of
+      {ok, Sock} ->
          ?access_udp(#{req => listen, addr => Uri}),
-         _ = pipe:a(Pipe, {udp, self(), {listen, uri:authority(Stream#stream.addr, uri:new(udp))}}),
-         {next_state, 'ESTABLISHED', udp_ioctl(State#fsm{stream=Stream, sock=Sock})};
+         #stream{addr = Addr} = Stream1 = 
+            io_ttl(io_tth(io_connect(Sock, Uri, Stream0))),
+         pipe:a(Pipe, {udp, self(), {listen, uri:authority(Addr, uri:new(udp))}}),
+         {next_state, 'ESTABLISHED', udp_ioctl(State#fsm{stream=Stream1, sock=Sock})};
 
-		{error, Reason} ->
+      {error, Reason} ->
          ?access_udp(#{req => {listen, Reason}, addr => Uri}),
          pipe:a(Pipe, {udp, self(), {terminated, Reason}}),
          {stop, Reason, State}
-	end;
-
+   end;
 
 %%
-'IDLE'({accept, Uri}, _Pipe, #fsm{stream=Stream}=State) ->
-   Port = uri:get(port, Uri),
-   Pid  = knet:whereis(udp, {any, Port}), 
+%%
+'IDLE'({accept, Uri}, _Pipe, #fsm{stream=Stream, so = SOpt}=State) ->
+   Pid  = opts:val(listen, SOpt), 
    case pipe:call(Pid, accept, infinity) of
       % each acceptor handles udp packet
       {'round-robin', Sock} ->
@@ -149,15 +139,9 @@ ioctl(socket, State) ->
 
       % each acceptor handles dedicate peer, spawn new acceptor    
       {peer, Peer, Sock} ->
-         {ok, _} = supervisor:start_child(knet:whereis(acceptor, Uri), [Uri, State#fsm.so]),
+         create_acceptor(Uri, State),
          {next_state, 'ESTABLISHED', State#fsm{stream = Stream#stream{peer = Peer}, sock = Sock}}
-   end;
-
-%%
-'IDLE'(shutdown, _Pipe, S) ->
-   ?DEBUG("knet ucp ~p: terminated (reason normal)", [self()]),
-   {stop, normal, S}.
-
+   end.
 
 %%%------------------------------------------------------------------
 %%%
@@ -165,17 +149,18 @@ ioctl(socket, State) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'LISTEN'(accept, Pipe, #fsm{dispatch='round-robin'}=State) ->
+'LISTEN'(accept, Pipe, #fsm{dispatch='round-robin', sock = Sock, acceptor = Acceptor}=State) ->
    Pid = pipe:a(Pipe),
-   pipe:ack(Pipe, {'round-robin', State#fsm.sock}),
-	{next_state, 'LISTEN', State#fsm{acceptor=q:enq(Pid, State#fsm.acceptor)}};
+   pipe:ack(Pipe, {'round-robin', Sock}),
+	{next_state, 'LISTEN', 
+      State#fsm{acceptor = q:enq(Pid, Acceptor)}
+   };
 
-'LISTEN'(accept, Pipe, #fsm{dispatch=peer}=State) ->
-   {next_state, 'LISTEN', State#fsm{acceptor=q:enq(Pipe, State#fsm.acceptor)}};
+'LISTEN'(accept, Pipe, #fsm{dispatch=peer, acceptor = Acceptor}=State) ->
+   {next_state, 'LISTEN', 
+      State#fsm{acceptor = q:enq(Pipe, Acceptor)}
+   };
 
-
-'LISTEN'(shutdown, _Pipe, State) ->
-   {stop, normal, State};
 
 'LISTEN'({udp, _, Host, Port, Pckt}, _Pipe, #fsm{dispatch='round-robin'}=State) ->
    ?DEBUG("knet udp ~p: recv ~p~n~p", [self(), {Host, Port}, Pckt]),
@@ -213,21 +198,16 @@ ioctl(socket, State) ->
 
 'ESTABLISHED'({udp, _, Host, Port, Pckt}, Pipe, State) ->
    {_, Stream} = io_recv({{Host, Port}, Pckt}, Pipe, State#fsm.stream),
-   ?trace(State#fsm.trace, {udp, packet, byte_size(Pckt)}),
    {next_state, 'ESTABLISHED', udp_ioctl(State#fsm{stream=Stream})};
 
 'ESTABLISHED'({udp, _, Msg}, Pipe, State) ->
    {_, Stream} = io_recv(Msg, Pipe, State#fsm.stream),
-   ?trace(State#fsm.trace, {udp, packet, byte_size(Pckt)}),
    {next_state, 'ESTABLISHED', State#fsm{stream=Stream}};
-
-'ESTABLISHED'(shutdown, _Pipe, State) ->
-   {stop, normal, State};
 
 'ESTABLISHED'({ttl, Pack}, Pipe, State) ->
    case io_ttl(Pack, State#fsm.stream) of
       {eof, Stream} ->
-         pipe:b(Pipe, {tcp, self(), {terminated, timeout}}),
+         pipe:a(Pipe, {tcp, self(), {terminated, timeout}}),
          {stop, normal, State#fsm{stream=Stream}};
       {_,   Stream} ->
          {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
@@ -243,7 +223,7 @@ ioctl(socket, State) ->
       {_, Stream} = io_send(Msg, State#fsm.sock, State#fsm.stream),
       {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
    catch _:{badmatch, {error, Reason}} ->
-      pipe:b(Pipe, {udp, self(), {terminated, Reason}}),
+      pipe:a(Pipe, {udp, self(), {terminated, Reason}}),
       {stop, Reason, State}
    end;
 
@@ -257,9 +237,9 @@ ioctl(socket, State) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'HIBERNATE'(Msg, Pipe, State) ->
-   ?DEBUG("knet [tcp]: resume ~p", [State#stream.peer]),
-   'ESTABLISHED'(Msg, Pipe, State#fsm{stream=io_tth(State#fsm.stream)}).
+'HIBERNATE'(Msg, Pipe, #fsm{stream = Stream} = State) ->
+   ?DEBUG("knet [tcp]: resume ~p", [Stream#stream.peer]),
+   'ESTABLISHED'(Msg, Pipe, State#fsm{stream=io_tth(Stream)}).
 
 
 %%%------------------------------------------------------------------
@@ -323,7 +303,7 @@ io_ttl(N, #stream{}=Sock) ->
 io_recv({{_Host, _Port}=Peer, Pckt}, Pipe, #stream{}=Sock) ->
    ?DEBUG("knet [udp] ~p: recv ~p~n~p", [self(), Peer, Pckt]),
    {Msg, Recv} = pstream:decode(Pckt, Sock#stream.recv),
-   lists:foreach(fun(X) -> pipe:b(Pipe, {udp, self(), {Peer, X}}) end, Msg),
+   lists:foreach(fun(X) -> pipe:a(Pipe, {udp, self(), {Peer, X}}) end, Msg),
    {active, Sock#stream{recv=Recv}}.
 
 %%
@@ -344,3 +324,37 @@ udp_ioctl(#fsm{active=once}=State) ->
    State;
 udp_ioctl(#fsm{}=State) ->
    State.
+
+%%
+%%
+udp_listen(Uri, #fsm{so = SOpt0}) ->
+   Port = uri:port(Uri),
+   SOpt = opts:filter(?SO_UDP_ALLOWED, SOpt0),
+   gen_udp:open(Port, SOpt).
+
+%%
+%%
+udp_connect(_Uri, #fsm{so = SOpt0}) ->
+   {_Host, Port} = opts:val(addr, {any, 0}, SOpt0),
+   SOpt = opts:filter(?SO_UDP_ALLOWED, SOpt0),
+   gen_udp:open(Port, SOpt).
+
+
+%%
+%% create app acceptor pool
+create_acceptor_pool(Uri, #fsm{so = SOpt0, backlog = Backlog}) ->
+   Sup  = opts:val(acceptor,  SOpt0), 
+   SOpt = [{listen, self()} | SOpt0],
+   lists:foreach(
+      fun(_) ->
+         {ok, _} = supervisor:start_child(Sup, [Uri, SOpt])
+      end,
+      lists:seq(1, Backlog)
+   ).
+
+create_acceptor(Uri, #fsm{so = SOpt0}) ->
+   Sup = opts:val(acceptor,  SOpt0), 
+   {ok, _} = supervisor:start_child(Sup, [Uri, SOpt0]).
+
+
+

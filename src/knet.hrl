@@ -4,10 +4,7 @@
 %%
 %%-----------------------------------------------------------------------------
 
-%% default access log configuration
--define(CONFIG_ACCESS_LOG,       [tcp, ssl, http, ssh]).
--define(CONFIG_ACCESS_LOG_FILE,  "log/access.log").
--define(CONFIG_ACCESS_LOG_LEVEL, notice).
+
 
 %%-----------------------------------------------------------------------------
 %%
@@ -246,12 +243,8 @@
 -define(access_http(X), lager:notice(knet_log:common(http, X))). 
 -endif.
 
-
-%%
-%% latency tracing macro
--ifndef(CONFIG_TRACE).
--define(trace(Pid, Msg),      ok).
+-ifndef(CONFIG_LOG_WS).
+-define(access_ws(X), ok).
 -else.
--define(trace(Pid, Msg),      knet:trace(Pid, Msg)).
+-define(access_ws(X), lager:notice(knet_log:common(ws, X))). 
 -endif.
-
