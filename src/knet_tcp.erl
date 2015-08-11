@@ -328,5 +328,3 @@ create_acceptor_pool(Uri, #fsm{so = SOpt0, backlog = Backlog}) ->
 create_acceptor(Uri, #fsm{so = SOpt0}) ->
    Sup = opts:val(acceptor,  SOpt0), 
    {ok, _} = supervisor:start_child(Sup, [Uri, SOpt0]).
-
-

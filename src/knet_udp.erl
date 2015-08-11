@@ -65,8 +65,8 @@ init(Opts) ->
          stream   = io_new(Opts)
         ,dispatch = opts:val(dispatch, 'round-robin', Opts)
         ,backlog  = opts:val(backlog,  5, Opts)
-        ,active  = opts:val(active, Opts)
-        ,so      = Opts      
+        ,active   = opts:val(active, Opts)
+        ,so       = Opts      
       }
    }.
 
@@ -168,7 +168,7 @@ ioctl(socket, State) ->
    pipe:send(Pid, {udp, self(), {{Host, Port}, Pckt}}),
    {next_state, 'LISTEN', udp_ioctl(State#fsm{acceptor = q:enq(Pid, Queue)})};
 
-'LISTEN'({udp, _, Host, Port, Pckt}, _Pipe, #fsm{dispatch=peer}=State) ->
+'LISTEN'({udp, _, Host, Port, Pckt}, _Pipe, #fsm{dispatch=p2p}=State) ->
    ?DEBUG("knet udp ~p: recv ~p~n~p", [self(), {Host, Port}, Pckt]),
    case pns:whereis(knet, {udp, {Host, Port}}) of
       %% peer handler unknown, allocate new one
@@ -207,7 +207,7 @@ ioctl(socket, State) ->
 'ESTABLISHED'({ttl, Pack}, Pipe, State) ->
    case io_ttl(Pack, State#fsm.stream) of
       {eof, Stream} ->
-         pipe:a(Pipe, {tcp, self(), {terminated, timeout}}),
+         pipe:a(Pipe, {udp, self(), {terminated, timeout}}),
          {stop, normal, State#fsm{stream=Stream}};
       {_,   Stream} ->
          {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
@@ -308,8 +308,8 @@ io_recv({{_Host, _Port}=Peer, Pckt}, Pipe, #stream{}=Sock) ->
 
 %%
 %% send packet
-io_send({{Host, Port} = Peer, Msg}, Pipe, #stream{}=Sock) ->
-   ?DEBUG("knet [udp] ~p: send ~p~n~p", [self(), Peer, Msg]),
+io_send({{Host, Port} = _Peer, Msg}, Pipe, #stream{}=Sock) ->
+   ?DEBUG("knet [udp] ~p: send ~p~n~p", [self(), _Peer, Msg]),
    {Pckt, Send} = pstream:encode(Msg, Sock#stream.send),
    lists:foreach(fun(X) -> ok = gen_udp:send(Pipe, Host, Port, X) end, Pckt),
    {active, Sock#stream{send=Send}}.
@@ -345,7 +345,7 @@ udp_connect(_Uri, #fsm{so = SOpt0}) ->
 create_acceptor_pool(Uri, #fsm{so = SOpt0, backlog = Backlog}) ->
    Sup  = opts:val(acceptor,  SOpt0), 
    SOpt = [{listen, self()} | SOpt0],
-   lists:foreach(
+   lists:map(
       fun(_) ->
          {ok, _} = supervisor:start_child(Sup, [Uri, SOpt])
       end,

@@ -26,6 +26,7 @@
 -export([start/0]).
 -export([
    listen/2
+  ,acceptor/3
   ,bind/1
   ,bind/2
   ,socket/1
@@ -33,6 +34,9 @@
   ,connect/1 
   ,connect/2 
   ,close/1
+  ,recv/1
+  ,recv/2
+  ,send/2
 ]).
 
 %%%------------------------------------------------------------------
@@ -44,13 +48,13 @@
 %%
 %% start application (RnD mode)
 start() -> 
-   applib:boot(?MODULE, code:where_is_file("knet.config")).
+   applib:boot(?MODULE, code:where_is_file("app.config")).
 
 %%
 %% create socket
 %%
 %%  Options common 
-%%     nopipe - 
+%%    nopipe - 
 %%    {timeout, [ttl(), tth()]} - socket i/o timeouts
 %%
 %%  Options tcp
@@ -109,9 +113,14 @@ create(Stack, Opts) ->
 listen({uri, _, _}=Uri, Opts)
  when is_list(Opts) ->
    SOpt = case lists:keytake(acceptor, 1, Opts) of
+      {value, {_, Acceptor}, Tail} when is_function(Acceptor, 1) ->
+         {ok, Sup} = supervisor:start_child(knet_acceptor_root_sup, [{knet, acceptor, [Acceptor]}]),
+         [{acceptor, Sup} | Tail];
+
       {value, {_, Acceptor}, Tail} when not is_pid(Acceptor) ->
          {ok, Sup} = supervisor:start_child(knet_acceptor_root_sup, [Acceptor]),
          [{acceptor, Sup} | Tail];
+
       _ ->
          Opts
    end,
@@ -126,6 +135,16 @@ listen({uri, _, _}=Uri, Fun)
 listen(Uri, Opts)
  when is_binary(Uri) orelse is_list(Uri) ->
    listen(uri:new(Uri), Opts).
+
+%%
+%% spawn acceptor bridge process by wrapping a UDF into pipe process
+-spec(acceptor/3 :: (function(), uri:uri(), list()) -> {ok, pid()} | {error, any()}).
+
+acceptor(Fun, Uri, Opts) ->
+   Init = fun() -> io:format("==> aaa ~p~n", [self()]), bind(Uri, Opts) end,
+   {ok, 
+      pipe:spawn_link(Fun, [{init, Init}])
+   }.
 
 %%
 %% bind process to listening socket. 
@@ -172,3 +191,20 @@ connect(Url) ->
 close(Sock) ->
    pipe:free(Sock).
 
+%%
+%% receive data from socket
+-spec(recv/1 :: (pid()) -> {atom(), pid(), any()}).
+-spec(recv/2 :: (pid(), timeout()) -> {atom(), pid(), any()}).
+
+recv(Sock) ->
+   recv(Sock, 5000).
+
+recv(Sock, Timeout) ->
+   pipe:recv(Sock, Timeout, []).
+
+%%
+%% send data to socket
+-spec(send/2 :: (pid(), binary()) -> ok).
+
+send(Sock, Pckt) ->
+   pipe:send(Sock, Pckt).
