@@ -15,7 +15,7 @@
 %%   See the License for the specific language governing permissions and
 %%   limitations under the License.
 %%
--module(knet_tcp_SUITE).
+-module(knet_ssl_SUITE).
 -include_lib("common_test/include/ct.hrl").
 
 %% common test
@@ -53,7 +53,7 @@ all() ->
    [
       {group, client}
      ,{group, server}
-     ,{group, knet}
+     % ,{group, knet}
    ].
 
 groups() ->
@@ -83,6 +83,7 @@ groups() ->
 
 %%
 init_per_suite(Config) ->
+   ssl:start(),
    knet:start(),
    Config.
 
@@ -92,15 +93,15 @@ end_per_suite(_Config) ->
 %%   
 %%
 init_per_group(client, Config) ->
-   Uri = uri:port(?PORT, uri:host(?HOST, uri:new(tcp))),
-   [{server, tcp_echo_listen()}, {uri, Uri} | Config];
+   Uri = uri:port(?PORT, uri:host(?HOST, uri:new(ssl))),
+   [{server, ssl_echo_listen()}, {uri, Uri} | Config];
 
 init_per_group(server, Config) ->
-   Uri = uri:port(?PORT, uri:host(?HOST, uri:new(tcp))),
+   Uri = uri:port(?PORT, uri:host(?HOST, uri:new(ssl))),
    [{uri, Uri} | Config];
 
 init_per_group(knet,   Config) ->
-   Uri = uri:port(?PORT, uri:host(?HOST, uri:new(tcp))),
+   Uri = uri:port(?PORT, uri:host(?HOST, uri:new(ssl))),
    [{server, knet_echo_listen()}, {uri, Uri} | Config];
 
 init_per_group(_, Config) ->
@@ -120,6 +121,7 @@ end_per_group(knet,   Config) ->
 end_per_group(_, _Config) ->
    ok.
 
+
 %%%----------------------------------------------------------------------------   
 %%%
 %%% unit test
@@ -130,7 +132,7 @@ end_per_group(_, _Config) ->
 %%
 knet_cli_refused(Opts) ->
    {error, econnrefused} = knet_connect(
-      uri:port(1234, uri:host(?HOST, uri:new(tcp)))
+      uri:port(1234, uri:host(?HOST, uri:new(ssl)))
    ).
 
 %%
@@ -145,7 +147,7 @@ knet_cli_connect(Opts) ->
 knet_cli_io(Opts) ->
    {ok, Sock} = knet_connect(?config(uri, Opts)),
    <<">123456">> = knet:send(Sock, <<">123456">>),
-   {tcp, Sock, <<"<123456">>} = knet:recv(Sock), 
+   {ssl, Sock, <<"<123456">>} = knet:recv(Sock), 
    ok      = knet:close(Sock),
    '$free' = knet:recv(Sock).
    
@@ -156,9 +158,9 @@ knet_cli_timeout(Opts) ->
       {timeout, [{ttl, 500}, {tth, 100}]}
    ]),
    <<">123456">> = knet:send(Sock, <<">123456">>),
-   {tcp, Sock, <<"<123456">>} = knet:recv(Sock),
+   {ssl, Sock, <<"<123456">>} = knet:recv(Sock),
    timer:sleep(1100),
-   {tcp, Sock, {terminated, timeout}} = knet:recv(Sock),
+   {ssl, Sock, {terminated, timeout}} = knet:recv(Sock),
    '$free' = knet:recv(Sock).
 
 
@@ -166,32 +168,31 @@ knet_cli_timeout(Opts) ->
 %%
 knet_srv_listen(Opts) ->
    {ok, LSock} = knet_listen(?config(uri, Opts)),
-   {ok,  Sock} = gen_tcp:connect(?HOST, 8888, [binary, {active, false}]),
+   {ok,  Sock} = ssl:connect(?HOST, 8888, [binary, {active, false}]),
    knet:close(LSock).
 
 
 knet_srv_io(Opts) ->
    {ok, LSock} = knet_listen(?config(uri, Opts)),
-   {ok,  Sock} = gen_tcp:connect(?HOST, 8888, [binary, {active, false}]),
-   {ok, <<"hello">>} = gen_tcp:recv(Sock, 0),
-   ok = gen_tcp:send(Sock, "-123456"),
-   {ok, <<"+123456">>} = gen_tcp:recv(Sock, 0),
-   gen_tcp:close(Sock),
+   {ok,  Sock} = ssl:connect(?HOST, 8888, [binary, {active, false}]),
+   {ok, <<"hello">>} = ssl:recv(Sock, 0),
+   ok = ssl:send(Sock, "-123456"),
+   {ok, <<"+123456">>} = ssl:recv(Sock, 0),
+   ssl:close(Sock),
    knet:close(LSock).
 
 knet_srv_timeout(Opts) ->
    {ok, LSock} = knet_listen(?config(uri, Opts), [
       {timeout,  [{ttl, 500}, {tth, 100}]}
    ]),
-   {ok, Sock} = gen_tcp:connect(?HOST, ?PORT, [binary, {active, false}]),
-   {ok, <<"hello">>} = gen_tcp:recv(Sock, 0),
-   ok = gen_tcp:send(Sock, "-123456"),
-   {ok, <<"+123456">>} = gen_tcp:recv(Sock, 0),
+   {ok, Sock} = ssl:connect(?HOST, ?PORT, [binary, {active, false}]),
+   {ok, <<"hello">>} = ssl:recv(Sock, 0),
+   ok = ssl:send(Sock, "-123456"),
+   {ok, <<"+123456">>} = ssl:recv(Sock, 0),
    timer:sleep(1100),
-   {error,closed} = gen_tcp:recv(Sock, 0),
-   gen_tcp:close(Sock),
+   {error,closed} = ssl:recv(Sock, 0),
+   ssl:close(Sock),
    knet:close(LSock).
-
 
 knet_io(Opts) ->
    {ok, Sock} = knet_connect(?config(uri, Opts)),
@@ -199,6 +200,7 @@ knet_io(Opts) ->
    <<"-123456">> = knet:send(Sock, <<"-123456">>),
    {tcp, Sock, <<"+123456">>} = knet:recv(Sock),
    knet:close(Sock).
+
 
 %%
 %%
@@ -209,10 +211,10 @@ knet_connect(Uri, Opts) ->
    Sock = knet:connect(Uri, Opts),
    {ioctl, b, Sock} = knet:recv(Sock),
    case knet:recv(Sock) of
-      {tcp, Sock, {established, _}} ->
+      {ssl, Sock, {established, _}} ->
          {ok, Sock};
 
-      {tcp, Sock, {terminated, Reason}} ->
+      {ssl, Sock, {terminated, Reason}} ->
          {error, Reason}
    end.
 
@@ -225,16 +227,19 @@ knet_listen(Uri, Opts) ->
    Sock = knet:listen(Uri, [
       {backlog,  2}
      ,{acceptor, fun knet_echo/1}
+     ,{certfile,   filename:join([code:priv_dir(knet), "server.crt"])}
+     ,{keyfile,    filename:join([code:priv_dir(knet), "server.key"])}
      |Opts
    ]),
    {ioctl, b, Sock} = knet:recv(Sock),
    case knet:recv(Sock) of
-      {tcp, Sock, {listen, _}} ->
+      {ssl, Sock, {listen, _}} ->
          {ok, Sock};
 
-      {tcp, Sock, {terminated, Reason}} ->
+      {ssl, Sock, {terminated, Reason}} ->
          {error, Reason}
    end.
+
 
 %%%----------------------------------------------------------------------------   
 %%%
@@ -243,14 +248,20 @@ knet_listen(Uri, Opts) ->
 %%%----------------------------------------------------------------------------   
 
 %%
-%% tcp echo
-tcp_echo_listen() ->
+%% ssl echo
+ssl_echo_listen() ->
    spawn(
       fun() ->
-         {ok, LSock} = gen_tcp:listen(?PORT, [binary, {active, false}, {reuseaddr, true}]),
+         {ok, LSock} = ssl:listen(?PORT, [
+            binary
+           ,{active,     false}
+           ,{reuseaddr,  true}
+           ,{certfile,   filename:join([code:priv_dir(knet), "server.crt"])}
+           ,{keyfile,    filename:join([code:priv_dir(knet), "server.key"])}
+         ]),
          ok = lists:foreach(
             fun(_) ->
-               tcp_echo_accept(LSock)
+               ssl_echo_accept(LSock)
             end,
             lists:seq(1, 100)
          ),
@@ -258,21 +269,22 @@ tcp_echo_listen() ->
       end
    ).
 
-tcp_echo_accept(LSock) ->
-   {ok, Sock} = gen_tcp:accept(LSock),
-   tcp_echo_loop(Sock).
+ssl_echo_accept(LSock) ->
+   {ok, Sock} = ssl:transport_accept(LSock),
+   ok         = ssl:ssl_accept(Sock),
+   ssl_echo_loop(Sock).
 
-tcp_echo_loop(Sock) ->
-   case gen_tcp:recv(Sock, 0) of
+ssl_echo_loop(Sock) ->
+   case ssl:recv(Sock, 0) of
       {ok, <<$>, Pckt/binary>>} ->
-         ok = gen_tcp:send(Sock, <<$<, Pckt/binary>>),
-         tcp_echo_loop(Sock);
+         ok = ssl:send(Sock, <<$<, Pckt/binary>>),
+         ssl_echo_loop(Sock);
 
       {ok, _} ->
-         tcp_echo_loop(Sock);
+         ssl_echo_loop(Sock);
 
       {error, _} ->
-         gen_tcp:close(Sock)
+         ssl:close(Sock)
    end.
 
 %%
@@ -280,20 +292,21 @@ tcp_echo_loop(Sock) ->
 knet_echo_listen() ->
    spawn(
       fun() ->
-         knet:listen(uri:port(?PORT, uri:new("tcp://*")), [
-            {backlog,  2},
-            {acceptor, fun knet_echo/1}
+         knet:listen(uri:port(?PORT, uri:new("ssl://*")), [
+            {backlog,  2}
+           ,{acceptor, fun knet_echo/1}
+           ,{certfile,   filename:join([code:priv_dir(knet), "server.crt"])}
+           ,{keyfile,    filename:join([code:priv_dir(knet), "server.key"])}
          ])
       end
    ).
 
-knet_echo({tcp, _Sock, {established, _}}) ->
+knet_echo({ssl, _Sock, {established, _}}) ->
    {a, <<"hello">>};
 
-knet_echo({tcp, _Sock,  <<$-, Pckt/binary>>}) ->
+knet_echo({ssl, _Sock,  <<$-, Pckt/binary>>}) ->
    {a, <<$+, Pckt/binary>>};
 
-knet_echo({tcp, _Sock, _}) ->
+knet_echo({ssl, _Sock, _}) ->
    ok.
-
 

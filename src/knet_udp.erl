@@ -156,7 +156,7 @@ ioctl(socket, State) ->
       State#fsm{acceptor = q:enq(Pid, Acceptor)}
    };
 
-'LISTEN'(accept, Pipe, #fsm{dispatch=peer, acceptor = Acceptor}=State) ->
+'LISTEN'(accept, Pipe, #fsm{dispatch=p2p, acceptor = Acceptor}=State) ->
    {next_state, 'LISTEN', 
       State#fsm{acceptor = q:enq(Pipe, Acceptor)}
    };
@@ -201,13 +201,15 @@ ioctl(socket, State) ->
    {next_state, 'ESTABLISHED', udp_ioctl(State#fsm{stream=Stream})};
 
 'ESTABLISHED'({udp, _, Msg}, Pipe, State) ->
+   %% Note: ingress packet is routed by "listen" socket to acceptor process
+   %%       destination client is attached to b
    {_, Stream} = io_recv(Msg, Pipe, State#fsm.stream),
    {next_state, 'ESTABLISHED', State#fsm{stream=Stream}};
 
 'ESTABLISHED'({ttl, Pack}, Pipe, State) ->
    case io_ttl(Pack, State#fsm.stream) of
       {eof, Stream} ->
-         pipe:a(Pipe, {udp, self(), {terminated, timeout}}),
+         pipe:b(Pipe, {udp, self(), {terminated, timeout}}),
          {stop, normal, State#fsm{stream=Stream}};
       {_,   Stream} ->
          {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
@@ -303,7 +305,7 @@ io_ttl(N, #stream{}=Sock) ->
 io_recv({{_Host, _Port}=Peer, Pckt}, Pipe, #stream{}=Sock) ->
    ?DEBUG("knet [udp] ~p: recv ~p~n~p", [self(), Peer, Pckt]),
    {Msg, Recv} = pstream:decode(Pckt, Sock#stream.recv),
-   lists:foreach(fun(X) -> pipe:a(Pipe, {udp, self(), {Peer, X}}) end, Msg),
+   lists:foreach(fun(X) -> pipe:b(Pipe, {udp, self(), {Peer, X}}) end, Msg),
    {active, Sock#stream{recv=Recv}}.
 
 %%

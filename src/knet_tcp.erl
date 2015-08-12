@@ -163,11 +163,11 @@ ioctl(socket,  #fsm{sock = Sock}) ->
 %%%------------------------------------------------------------------   
 
 'ESTABLISHED'({tcp_error, _, Reason}, Pipe, State) ->
-   pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),   
+   pipe:b(Pipe, {tcp, self(), {terminated, Reason}}),   
    {stop, Reason, State};
    
 'ESTABLISHED'({tcp_closed, _}, Pipe, State) ->
-   pipe:a(Pipe, {tcp, self(), {terminated, normal}}),
+   pipe:b(Pipe, {tcp, self(), {terminated, normal}}),
    {stop, normal, State};
 
 'ESTABLISHED'({tcp, _, Pckt}, Pipe, #fsm{stream = Stream0} = State) ->
@@ -181,7 +181,7 @@ ioctl(socket,  #fsm{sock = Sock}) ->
 'ESTABLISHED'({ttl, Pack}, Pipe, State) ->
    case io_ttl(Pack, State#fsm.stream) of
       {eof, Stream} ->
-         pipe:a(Pipe, {tcp, self(), {terminated, timeout}}),
+         pipe:b(Pipe, {tcp, self(), {terminated, timeout}}),
          {stop, normal, State#fsm{stream=Stream}};
       {_,   Stream} ->
          {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
@@ -197,7 +197,7 @@ ioctl(socket,  #fsm{sock = Sock}) ->
       {_, Stream1} = io_send(Msg, Sock, Stream0),
       {next_state, 'ESTABLISHED', State#fsm{stream = Stream1}}
    catch _:{badmatch, {error, Reason}} ->
-      pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),
+      pipe:b(Pipe, {tcp, self(), {terminated, Reason}}),
       {stop, Reason, State}
    end.
 
@@ -262,7 +262,7 @@ io_ttl(N, #stream{}=Sock) ->
 io_recv(Pckt, Pipe, #stream{}=Sock) ->
    ?DEBUG("knet [tcp] ~p: recv ~p~n~p", [self(), Sock#stream.peer, Pckt]),
    {Msg, Recv} = pstream:decode(Pckt, Sock#stream.recv),
-   lists:foreach(fun(X) -> pipe:a(Pipe, {tcp, self(), X}) end, Msg),
+   lists:foreach(fun(X) -> pipe:b(Pipe, {tcp, self(), X}) end, Msg),
    {active, Sock#stream{recv=Recv}}.
 
 %%

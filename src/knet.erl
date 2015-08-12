@@ -141,7 +141,7 @@ listen(Uri, Opts)
 -spec(acceptor/3 :: (function(), uri:uri(), list()) -> {ok, pid()} | {error, any()}).
 
 acceptor(Fun, Uri, Opts) ->
-   Init = fun() -> io:format("==> aaa ~p~n", [self()]), bind(Uri, Opts) end,
+   Init = fun() -> bind(Uri, Opts) end,
    {ok, 
       pipe:spawn_link(Fun, [{init, Init}])
    }.
@@ -208,3 +208,4 @@ recv(Sock, Timeout) ->
 
 send(Sock, Pckt) ->
    pipe:send(Sock, Pckt).
+

@@ -183,11 +183,11 @@ ioctl(socket,  #fsm{sock = Sock}) ->
 %%%------------------------------------------------------------------   
 
 'ESTABLISHED'({ssl_error, _, Reason}, Pipe, State) ->
-   pipe:a(Pipe, {ssl, self(), {terminated, Reason}}),   
+   pipe:b(Pipe, {ssl, self(), {terminated, Reason}}),   
    {stop, Reason, State};
 
 'ESTABLISHED'({ssl_closed, _}, Pipe, State) ->
-   pipe:a(Pipe, {ssl, self(), {terminated, normal}}),
+   pipe:b(Pipe, {ssl, self(), {terminated, normal}}),
    {stop, normal, State};
 
 'ESTABLISHED'({ssl, _, Pckt}, Pipe, #fsm{stream = Stream0} = State) ->
@@ -201,7 +201,7 @@ ioctl(socket,  #fsm{sock = Sock}) ->
 'ESTABLISHED'({ttl, Pack}, Pipe, State) ->
    case io_ttl(Pack, State#fsm.stream) of
       {eof, Stream} ->
-         pipe:a(Pipe, {ssl, self(), {terminated, timeout}}),
+         pipe:b(Pipe, {ssl, self(), {terminated, timeout}}),
          {stop, normal, State#fsm{stream=Stream}};
       {_,   Stream} ->
          {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
@@ -297,7 +297,7 @@ io_ttl(N, #stream{}=Sock) ->
 io_recv(Pckt, Pipe, #stream{}=Sock) ->
    ?DEBUG("knet [ssl] ~p: recv ~p~n~p", [self(), Sock#stream.peer, Pckt]),
    {Msg, Recv} = pstream:decode(Pckt, Sock#stream.recv),
-   lists:foreach(fun(X) -> pipe:a(Pipe, {ssl, self(), X}) end, Msg),
+   lists:foreach(fun(X) -> pipe:b(Pipe, {ssl, self(), X}) end, Msg),
    {active, Sock#stream{recv=Recv}}.
 
 %%
@@ -402,5 +402,5 @@ cipher_suites() ->
    ).
 -else.
 cipher_suites() ->
-      ssl:cipher_suites().
+   ssl:cipher_suites().
 -endif.

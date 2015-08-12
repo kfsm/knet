@@ -30,12 +30,8 @@
 -export([
    knet_cli_io/1
   ,knet_cli_timeout/1
-
-   % knet_srv_listen/1,
   ,knet_srv_io/1
-   % knet_srv_timeout/1,
-
-   % knet_io/1
+  ,knet_io/1
 ]).
 
 -define(HOST, "127.0.0.1").
@@ -53,7 +49,7 @@ all() ->
       {group, client}
      ,{group, 'round-robin'}
      ,{group, 'peer-to-peer'}
-     % ,{group, knet}
+     ,{group, knet}
    ].
 
 groups() ->
@@ -71,9 +67,8 @@ groups() ->
          knet_srv_io
       ]}
 
-     %  ,{knet, [], [{group, knet_io}]}
-
-     %  ,{knet_io,  [parallel, {repeat, 100}], [knet_io]}
+      ,{knet, [], [{group, knet_io}]}
+      ,{knet_io,  [parallel, {repeat, 10}], [knet_io]}
    ].
 
 %%%----------------------------------------------------------------------------   
@@ -93,20 +88,20 @@ end_per_suite(_Config) ->
 %%   
 %%
 init_per_group(client, Config) ->
-   Uri = uri:port(?PORT, uri:new("udp://127.0.0.1")),
+   Uri = uri:port(?PORT, uri:host(?HOST, uri:new(udp))),
    [{server, udp_echo_listen()}, {uri, Uri} | Config];
 
 init_per_group('round-robin', Config) ->
-   Uri = uri:port(?PORT, uri:new("udp://*")),
+   Uri = uri:port(?PORT, uri:host(?HOST, uri:new(udp))),
    [{uri, Uri}, {dispatch, 'round-robin'} | Config];
 
 init_per_group('peer-to-peer', Config) ->
-   Uri = uri:port(?PORT, uri:new("udp://*")),
+   Uri = uri:port(?PORT, uri:host(?HOST, uri:new(udp))),
    [{uri, Uri}, {dispatch, p2p} | Config];
 
-% init_per_group(knet,   Config) ->
-%    Uri = uri:port(?PORT, uri:new("tcp://127.0.0.1")),
-%    [{server, knet_echo_listen()}, {uri, Uri} | Config];
+init_per_group(knet,   Config) ->
+   Uri = uri:port(?PORT, uri:host(?HOST, uri:new(udp))),
+   [{server, knet_echo_listen()}, {uri, Uri} | Config];
 
 init_per_group(_, Config) ->
    Config.
@@ -118,9 +113,9 @@ end_per_group(client, Config) ->
    erlang:exit(?config(server, Config), kill),
    ok;
 
-% end_per_group(knet,   Config) ->
-%    erlang:exit(?config(server, Config), kill),
-%    ok; 
+end_per_group(knet,   Config) ->
+   erlang:exit(?config(server, Config), kill),
+   ok; 
 
 end_per_group(_, _Config) ->
    ok.
@@ -134,9 +129,7 @@ end_per_group(_, _Config) ->
 %%
 %%
 knet_cli_io(Opts) ->
-   Sock = knet:connect(?config(uri, Opts), []),
-   {ioctl, b, Sock} = knet:recv(Sock),
-   {udp, Sock, {listen, _}} = knet:recv(Sock),
+   {ok, Sock} = knet_connect(?config(uri, Opts)),
    <<">123456">> = knet:send(Sock, <<">123456">>),
    {udp, Sock, {_, <<"<123456">>}} = knet:recv(Sock), 
    ok      = knet:close(Sock),
@@ -145,11 +138,9 @@ knet_cli_io(Opts) ->
 %%
 %%
 knet_cli_timeout(Opts) ->
-   Sock = knet:connect(?config(uri, Opts), [
+   {ok, Sock} = knet_connect(?config(uri, Opts), [
       {timeout, [{ttl, 500}, {tth, 100}]}
    ]),
-   {ioctl, b, Sock} = knet:recv(Sock),
-   {udp, Sock, {listen, _}} = knet:recv(Sock),
    <<">123456">> = knet:send(Sock, <<">123456">>),
    {udp, Sock, {_, <<"<123456">>}} = knet:recv(Sock),
    timer:sleep(1100),
@@ -159,18 +150,49 @@ knet_cli_timeout(Opts) ->
 %%
 %%
 knet_srv_io(Opts) ->
-   LSock = knet:listen(?config(uri, Opts), [
-      {backlog,  2},
-      {acceptor, fun knet_echo/1},
-      {dispatch, ?config(dispatch, Opts)}
-   ]),
-   {ioctl, b, LSock} = knet:recv(LSock),
-   {udp, LSock, {listen, _}} = knet:recv(LSock),
-   {ok, Sock} = gen_udp:open(0, [binary, {active, false}]),
+   {ok, LSock} = knet_listen(?config(uri, Opts), ?config(dispatch, Opts)),
+   {ok,  Sock} = gen_udp:open(0, [binary, {active, false}]),
    ok = gen_udp:send(Sock, ?HOST, ?PORT, <<"-123456">>),
    {ok, {_, _, <<"+123456">>}} = gen_udp:recv(Sock, 0, 5000),
    gen_udp:close(Sock),
    knet:close(LSock).
+
+%%
+%%
+knet_io(Opts) ->
+   {ok, Sock} = knet_connect(?config(uri, Opts), []),
+   <<"-123456">> = knet:send(Sock, <<"-123456">>),
+   {udp, Sock, {_, <<"+123456">>}} = knet:recv(Sock),
+   knet:close(Sock).
+
+%%
+%%
+knet_connect(Uri) ->
+   knet_connect(Uri, []).
+
+knet_connect(Uri, Opts) ->
+   Sock = knet:connect(Uri, Opts),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   case knet:recv(Sock) of
+      {udp, Sock, {listen, _}} ->
+         {ok, Sock};
+      {udp, Sock, {terminated, Reason}} ->
+         {error, Reason}
+   end.
+
+knet_listen(Uri, Type) ->
+   Sock = knet:listen(Uri, [
+      {backlog,  2},
+      {acceptor, fun knet_echo/1},
+      {dispatch, Type}
+   ]),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   case knet:recv(Sock) of
+      {udp, Sock, {listen, _}} ->
+         {ok, Sock};
+      {udp, Sock, {terminated, Reason}} ->
+         {error, Reason}
+   end.
 
 %%%----------------------------------------------------------------------------   
 %%%
@@ -203,15 +225,16 @@ udp_echo_loop(Sock) ->
 
 %%
 %%
-% knet_echo_listen() ->
-%    spawn(
-%       fun() ->
-%          knet:listen(uri:port(?PORT, uri:new("udp://*")), [
-%             {backlog,  2},
-%             {acceptor, fun knet_echo/1}
-%          ])
-%       end
-%    ).
+knet_echo_listen() ->
+   spawn(
+      fun() ->
+         knet:listen(uri:port(?PORT, uri:new("udp://*")), [
+            {backlog,  2},
+            {acceptor, fun knet_echo/1},
+            {dispatch, p2p}
+         ])
+      end
+   ).
 
 knet_echo({udp, _Sock, {listen, _}}) ->
    ok;
@@ -219,5 +242,5 @@ knet_echo({udp, _Sock, {listen, _}}) ->
 knet_echo({udp, _Sock,  {Peer, <<$-, Pckt/binary>>}}) ->
    {a, {Peer, <<$+, Pckt/binary>>}};
 
-knet_echo({udp, _Sock, M}) ->
+knet_echo({udp, _Sock, _}) ->
    ok.
