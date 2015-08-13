@@ -116,6 +116,7 @@ ioctl(_, _) ->
 %%%------------------------------------------------------------------   
 
 'LISTEN'(_Msg, _Pipe, State) ->
+   %% Note: listen do not forward tcp messages to client
    {next_state, 'LISTEN', State}.
 
 %%%------------------------------------------------------------------
@@ -429,8 +430,10 @@ server_upgrade(Pipe, #fsm{stream=#stream{recv=Http}=Stream, so=SOpt}=State) ->
          %%  - it shall emit message
          %%  - it shall return pipe compatible upgrade signature
          access_log(websocket, State),
-         {Msg, Upgrade} = knet_ws:ioctl({upgrade, Req, SOpt}, undefined),
-         pipe:a(Pipe, Msg),
+         {MsgA, MsgB, Upgrade} = knet_ws:ioctl({upgrade, Req, SOpt}, undefined),
+         io:format("=> pipe ~p~n", [Pipe]),
+         pipe:a(Pipe, MsgA),
+         pipe:b(Pipe, MsgB),
          Upgrade;
       _ ->
          throw(not_implemented)

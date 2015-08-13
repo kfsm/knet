@@ -36,6 +36,7 @@
   ,close/1
   ,recv/1
   ,recv/2
+  ,recv/3
   ,send/2
 ]).
 
@@ -195,12 +196,16 @@ close(Sock) ->
 %% receive data from socket
 -spec(recv/1 :: (pid()) -> {atom(), pid(), any()}).
 -spec(recv/2 :: (pid(), timeout()) -> {atom(), pid(), any()}).
+-spec(recv/3 :: (pid(), timeout(), list()) -> {atom(), pid(), any()}).
 
 recv(Sock) ->
    recv(Sock, 5000).
 
 recv(Sock, Timeout) ->
-   pipe:recv(Sock, Timeout, []).
+   recv(Sock, Timeout, []).
+
+recv(Sock, Timeout, Opts) ->
+   pipe:recv(Sock, Timeout, Opts).
 
 %%
 %% send data to socket

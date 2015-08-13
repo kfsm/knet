@@ -46,6 +46,7 @@ EFLAGS = \
 	-pa ${ROOT}/src \
 	-pa ${ROOT}/deps/*/ebin \
 	-pa ${ROOT}/apps/*/ebin \
+	-pa ${ROOT}/examples/*/ebin \
 	-pa ${ROOT}/rel/files \
 	-pa ${ROOT}/priv \
 	-kernel inet_dist_listen_min 32100 \
