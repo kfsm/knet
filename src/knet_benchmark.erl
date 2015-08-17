@@ -48,32 +48,21 @@ init() ->
 
 %%
 %%
-run(do, _KeyGen, ValGen, #fsm{url={uri, Prot, _}}=State)
- when Prot =:= tcp orelse Prot =:= ssl orelse Prot =:= ws orelse Prot =:= wss ->
-   % try
-      do_session(ValGen, State).
-   % catch _:Reason ->
-   %    lager:error("process crash: ~p~n~p~n", [Reason, erlang:get_stacktrace()]),
-   %    {error, crash, State}
-   % end.
+run(ping, _KeyGen, ValGen, #fsm{url={uri, Prot, _}}=State)
+ when Prot =:= tcp orelse Prot =:= ssl  ->
+   do_session(ValGen, State);
 
-% run(do, _KeyGen, ValGen, #fsm{url={uri, Prot, _}}=State)
-%  when Prot =:= udp ->
-%    try
-%       do_message(ValGen, State)
-%    catch _:Reason ->
-%       lager:error("process crash: ~p~n~p~n", [Reason, erlang:get_stacktrace()]),
-%       {error, crash, State}
-%    end;
+run(ping, _KeyGen, ValGen, #fsm{url={uri, Prot, _}}=State)
+ when Prot =:= ws orelse Prot =:= wss ->
+   do_websock(ValGen, State);
+   
+run(ping, _KeyGen, ValGen, #fsm{url={uri, Prot, _}}=State)
+ when Prot =:= udp ->
+   do_message(ValGen, State);
 
-% run(do, _KeyGen, ValGen, #fsm{url={uri, Prot, _}}=S)
-%  when Prot =:= http orelse Prot =:= https ->
-%    try
-% 	  do_request(ValGen, State)
-%    catch _:Reason ->
-%       lager:error("process crash: ~p~n~p~n", [Reason, erlang:get_stacktrace()]),
-%       {error, crash, State}
-%    end.
+run(ping, _KeyGen, ValGen, #fsm{url={uri, Prot, _}}=State)
+ when Prot =:= http orelse Prot =:= https ->
+	do_request(ValGen, State).
 
 %%%------------------------------------------------------------------
 %%%
@@ -107,78 +96,90 @@ do_session(ValGen, #fsm{sock = Sock} = State) ->
          {error, Reason, close(now, State)}
    end.
 
+%%
+%% websocket protocol
+do_websock(ValGen, #fsm{url = Url, sock = undefined} = State) ->
+   Sock = knet:connect(Url, []),
+   {ioctl, b, _} = knet:recv(Sock),
+   case knet:recv(Sock) of
+      {ws, _, {101, _Text, _Head, _Env}} ->
+         do_websock(ValGen, State#fsm{sock = Sock, ttl = ttl()});
 
+      {ws, _, {terminated, Reason}} ->
+         {error, Reason, State}
+   end;
 
+do_websock(ValGen, #fsm{sock = Sock} = State) ->
+   _ = knet:send(Sock, ValGen()),
+   case knet:recv(Sock, 1000, [noexit]) of
+      {ws, _, Msg} when is_binary(Msg) ->
+         {ok, close(State)};
+      
+      {ws, _, {terminated, Reason}} ->
+         {error, Reason, close(now, State)};
 
+      {error, Reason} ->
+         {error, Reason, close(now, State)}
+   end.
 
+%%
+%% datagram message protocol
+do_message(ValGen, #fsm{url = Url, sock = undefined} = State) ->
+   Sock = knet:connect(Url, []),
+   {ioctl, b, _} = knet:recv(Sock),
+   case knet:recv(Sock) of
+      {_, _, {listen, _}} ->
+         do_message(ValGen, State#fsm{sock = Sock, ttl = ttl()});
 
-% 	_ = do_tcp_recv(),
-% 	Sock = case os:timestamp() of
-% 		X when X > S#fsm.expire ->
-% 			knet:close(S#fsm.sock),
-% 			undefined;
-% 		X ->
-% 			S#fsm.sock
-% 	end,
-% 	{ok, S#fsm{sock=Sock}}.
+      {_, _, {terminated, Reason}} ->
+         {error, Reason, State}
+   end;
 
-% do_tcp_recv() ->
-% 	case pipe:recv(1000, [noexit]) of
-% 		{tcp, _, Msg} when is_binary(Msg) ->
-% 			ok;
-% 		{error, timeout} ->
-% 			timeout;
-% 		_ ->
-% 			do_tcp_recv()
-% 	end.
+do_message(ValGen, #fsm{sock = Sock} = State) ->
+   _ = knet:send(Sock, ValGen()),
+   case knet:recv(Sock, 1000, [noexit]) of
+      {_, _, {_, Msg}} when is_binary(Msg) ->
+         {ok, close(State)};
+      
+      {_, _, {terminated, Reason}} ->
+         {error, Reason, close(now, State)};
 
-% %%%------------------------------------------------------------------
-% %%%
-% %%% http
-% %%%
-% %%%------------------------------------------------------------------   
+      {error, Reason} ->
+         {error, Reason, close(now, State)}
+   end.
 
-% do_http(ValGen, #fsm{sock=undefined}=S)	->
-%    {ok, Sock} = knet:socket(S#fsm.url, []),
-%    _ = pipe:recv(), 
-%    do_http(ValGen, 
-%    	S#fsm{
-%    		sock   = Sock,
-%    		expire = ttl()
-%    	}
-%    );
+%%
+%% request response protocol
+do_request(ValGen, #fsm{url = Url, sock = undefined} = State) ->
+   Sock = knet:socket(Url, []),
+   {ioctl, b, _} = knet:recv(Sock),
+   do_request(ValGen, State#fsm{sock = Sock, ttl = ttl()});
 
-% do_http(ValGen, S) ->
-% 	pipe:send(S#fsm.sock, {'POST', S#fsm.url, [
-% 		{'Connection',   <<"keep-alive">>}, 
-% 		{'Accept',       [{'*', '*'}]}, 
-% 		{'Content-Type', {text, plain}}, 
-% 		{'Transfer-Encoding', <<"chunked">>},
-% 		{'Host',   uri:authority(S#fsm.url)}
-% 	]}),
-% 	_ = pipe:send(S#fsm.sock, ValGen()),
-% 	_ = pipe:send(S#fsm.sock, eof),
-% 	_ = do_http_recv(),
-% 	Sock = case os:timestamp() of
-% 		X when X > S#fsm.expire ->
-% 			knet:close(S#fsm.sock),
-% 			undefined;
-% 		X ->
-% 			S#fsm.sock
-% 	end,
-% 	{ok, S#fsm{sock=Sock}}.
+do_request(ValGen, #fsm{url = Url, sock = Sock} = State) ->
+   knet:send(Sock, {'POST', Url, [
+      {'Connection',   <<"keep-alive">>}, 
+      {'Accept',       [{'*', '*'}]}, 
+      {'Content-Type', {text, plain}}, 
+      {'Transfer-Encoding', <<"chunked">>},
+      {'Host',   uri:authority(Url)}
+   ]}),
+   knet:send(Sock, ValGen()),
+   knet:send(Sock, eof),
+   do_response(State).
 
-% do_http_recv() ->
-% 	case pipe:recv(1000, [noexit]) of
-% 		{http, _, {_Code, _, _}} ->
-% 			do_http_recv();
-% 		{http, _, eof}   ->
-% 			ok;
-% 		{error, timeout} ->
-% 			timeout;
-% 		_ ->
-% 			do_http_recv()
-% 	end.
+do_response(#fsm{sock = Sock} = State) ->
+   case pipe:recv(Sock, 1000, [noexit]) of
+      {http, _, {_Code, _Msg, _Head, _Env}} ->
+         do_response(State);
+
+      {http, _, eof}   ->
+         {ok, close(State)};
+
+      {error, Reason} ->
+         {error, Reason, close(now, State)};
+      _ ->
+         do_response(State)
+   end.
 
 %%
 %%

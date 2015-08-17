@@ -253,11 +253,12 @@ ioctl(_, _) ->
             'STREAM'({Prot, Peer, <<>>}, Pipe, State#fsm{stream=Stream});
 
          %% time to meaningful request
-         {eof, #stream{ts=T, recv=Http}=Stream} ->
+         {eof, #stream{ts=T, send=Send, recv=Http}=Stream} ->
             pipe:b(Pipe, {http, self(), eof}),
             {next_state, 'STREAM', 
                State#fsm{
                   stream = Stream#stream{recv=htstream:new(Http)}
+                 ,req    = q:enq({T, Http}, State#fsm.req)
                }
             };
 
@@ -284,12 +285,14 @@ ioctl(_, _) ->
                   {stop, normal, 
                      State#fsm{
                         stream = Stream#stream{send = htstream:new(Send)}
+                       ,req    = access_log(Send, State)
                      }
                   };
                _             ->
                   {next_state, 'STREAM', 
                      State#fsm{
                         stream = Stream#stream{send = htstream:new(Send)}
+                       ,req    = access_log(Send, State)
                      }
                   }
             end;
@@ -430,10 +433,8 @@ server_upgrade(Pipe, #fsm{stream=#stream{recv=Http}=Stream, so=SOpt}=State) ->
          %%  - it shall emit message
          %%  - it shall return pipe compatible upgrade signature
          access_log(websocket, State),
-         {MsgA, MsgB, Upgrade} = knet_ws:ioctl({upgrade, Req, SOpt}, undefined),
-         io:format("=> pipe ~p~n", [Pipe]),
-         pipe:a(Pipe, MsgA),
-         pipe:b(Pipe, MsgB),
+         {Msg, Upgrade} = knet_ws:ioctl({upgrade, Req, SOpt}, undefined),
+         pipe:a(Pipe, Msg),
          Upgrade;
       _ ->
          throw(not_implemented)

@@ -99,7 +99,7 @@ end_per_group(_, _Config) ->
 knet_cli_ws(_) ->
    Sock = knet:connect(uri:host(?HOST, uri:new("ws://*:80"))),
    {ioctl, b, Sock} = knet:recv(Sock),
-   {ws, Sock, {established, _}} = knet:recv(Sock),
+   {ws, Sock, {101, _Url, _Head, _Env}} = knet:recv(Sock),
    <<"123456">> = knet:send(Sock, <<"123456">>),
    {ws, Sock, <<"123456">>} = knet:recv(Sock),
    ok      = knet:close(Sock),
@@ -108,7 +108,7 @@ knet_cli_ws(_) ->
 knet_cli_wss(_) ->
    Sock = knet:connect(uri:authority(?HOST, uri:new("wss://*:443"))),
    {ioctl, b, Sock} = knet:recv(Sock),
-   {ws, Sock, {established, _}} = knet:recv(Sock),
+   {ws, Sock, {101, _Url, _Head, _Env}} = knet:recv(Sock),
    <<"123456">> = knet:send(Sock, <<"123456">>),
    {ws, Sock, <<"123456">>} = knet:recv(Sock),
    ok      = knet:close(Sock),
@@ -118,7 +118,7 @@ knet_srv_http(Opts) ->
    {ok, LSock} = knet_listen(uri:port(?PORT, uri:host(?LOCAL, uri:new(http)))),
    Sock = knet:connect(uri:port(?PORT, uri:host(?LOCAL, uri:new(ws)))),
    {ioctl, b, Sock} = knet:recv(Sock),
-   {ws, Sock, {established, _}} = knet:recv(Sock),
+   {ws, Sock, {101, _Url, _Head, _Env}} = knet:recv(Sock),
    {ws, Sock, <<"hello">>} = knet:recv(Sock),
    <<"-123456">> = knet:send(Sock, <<"-123456">>),
    {ws, Sock, <<"+123456">>} = knet:recv(Sock),
@@ -129,7 +129,7 @@ knet_srv_ws(Opts) ->
    {ok, LSock} = knet_listen(uri:port(?PORT, uri:host(?LOCAL, uri:new(ws)))),
    Sock = knet:connect(uri:port(?PORT, uri:host(?LOCAL, uri:new(ws)))),
    {ioctl, b, Sock} = knet:recv(Sock),
-   {ws, Sock, {established, _}} = knet:recv(Sock),
+   {ws, Sock, {101, _Url, _Head, _Env}} = knet:recv(Sock),
    {ws, Sock, <<"hello">>} = knet:recv(Sock),
    <<"-123456">> = knet:send(Sock, <<"-123456">>),
    {ws, Sock, <<"+123456">>} = knet:recv(Sock),
@@ -158,7 +158,7 @@ knet_listen(Uri, Opts) ->
    % end.
 
 
-knet_echo({ws, _Sock, {established, _}}) ->
+knet_echo({ws, _Sock, {'GET', _Url, _Head, _Env}}) ->
    {a, <<"hello">>};
 
 knet_echo({ws, _Sock,  <<$-, Pckt/binary>>}) ->

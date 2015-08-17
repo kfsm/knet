@@ -83,13 +83,13 @@ free(_, _) ->
    ok.
 
 %%
-ioctl({upgrade, {_Mthd, Uri, Head, _Env}=Req, SOpt}, undefined) ->
+ioctl({upgrade, {_Mthd, _Uri, Head, _Env}=Req, SOpt}, undefined) ->
    %% web socket upgrade request
    <<"Upgrade">>   = pair:lookup('Connection', Head),
    <<"websocket">> = pair:lookup('Upgrade',    Head),
    Key  = pair:lookup(<<"Sec-Websocket-Key">>, Head),
    Hash = base64:encode(crypto:hash(sha, <<Key/binary, ?WS_GUID>>)),
-   {MsgA, _} = htstream:encode(
+   {Msg, _} = htstream:encode(
       {101
         ,[
             {'Upgrade',  <<"websocket">>}
@@ -100,8 +100,7 @@ ioctl({upgrade, {_Mthd, Uri, Head, _Env}=Req, SOpt}, undefined) ->
       },
       htstream:new()
    ),
-   MsgB = {ws, self(), {established, Uri}},
-   {MsgA, MsgB, {upgrade, ?MODULE, [Req, SOpt]}};
+   {Msg, {upgrade, ?MODULE, [Req, SOpt]}};
 
 ioctl(_, _) ->
    throw(not_implemented).
@@ -170,7 +169,6 @@ ioctl(_, _) ->
  when ?is_transport(Prot), is_binary(Pckt) ->
    case ht_recv(Pckt, Pipe, State#fsm.stream) of
       {upgrade, Stream} ->
-         pipe:b(Pipe, {ws, self(), {established, Stream#stream.peer}}),
          {next_state, 'ESTABLISHED', State#fsm{stream=Stream}};
       {eof,     Stream} ->
          pipe:b(Pipe, {ws, self(), {terminated, normal}}),
@@ -206,10 +204,10 @@ ioctl(_, _) ->
  when ?is_transport(Prot), is_binary(Pckt) ->
    try
       case htstream:decode(Pckt, Stream#stream.recv) of
-         {{101, _, Head}, Http} ->
+         {{101, Msg, Head}, Http} ->
             <<"Upgrade">>   = pair:lookup('Connection', Head),
             <<"websocket">> = pair:lookup('Upgrade',    Head),
-            pipe:b(Pipe, {ws, self(), {established, Stream#stream.peer}}),
+            pipe:b(Pipe, {ws, self(), {101, Msg, Head, []}}),
             'ESTABLISHED'({Prot, Sock, htstream:buffer(Http)}, Pipe, 
                State#fsm{stream = ws_new(server, Stream#stream.peer, [])});
          {[], Http} ->
@@ -340,7 +338,7 @@ ht_recv(Pckt, Pipe, #stream{}=Ht) ->
             htstream:new()
          ),
          pipe:a(Pipe, Msg),
-         pipe:b(Pipe, {ws, self(), {'GET', Url, Head, []}}), %% @todo req
+         pipe:b(Pipe, {ws, self(), {'GET', Url, Head, []}}), %% @todo env
          {upgrade, ws_new(server, Url, [])};
 
       %% ANY Request

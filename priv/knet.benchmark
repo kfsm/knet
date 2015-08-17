@@ -8,7 +8,7 @@
   ,"./deps/pipe"
   ,"./deps/pns"
 ]}.
-{log_level,       info}.
+{log_level,       debug}.
 {report_interval, 1}.
 {driver,          knet_benchmark}.
 
@@ -16,13 +16,19 @@
 %% workload
 {mode,           max}.
 {duration,         1}.
-{concurrent,       4}.
+{concurrent,      10}.
 {key_generator,   {uniform_int, 1000000}}.
 {value_generator, {fixed_bin, 1000}}.
 
 {operations, [
-   {do,  1} 
+   {ping,  1} 
 ]}.
 
-{url,       "tcp://127.0.0.1:8888"}.
+% {url,       "tcp://127.0.0.1:8888"}.
+% {url,       "ssl://127.0.0.1:8888"}.
+% {url,       "ws://127.0.0.1:8888"}.
+% {url,       "wss://127.0.0.1:8443"}.
+% {url,       "udp://127.0.0.1:6001"}.
+{url,       "http://127.0.0.1:8888"}.
+% {url,       "https://127.0.0.1:8443"}.
 {keepalive, 5}.
