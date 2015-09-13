@@ -248,3 +248,10 @@
 -else.
 -define(access_ws(X), lager:notice(knet_log:common(ws, X))). 
 -endif.
+
+-ifndef(CONFIG_TRACE).
+-define(trace(Pid, Msg),      ok).
+-else.
+-define(trace(Pid, Msg),      knet_log:trace(Pid, Msg)).
+-endif.
+

@@ -231,11 +231,12 @@ ioctl(_, _) ->
  when ?is_transport(Prot) ->
    {next_state, 'STREAM', State#fsm{stream = io_peer(Peer, Stream)}};
 
-'STREAM'({Prot, _, {terminated, _}}, Pipe, #fsm{stream=Stream}=State)
+'STREAM'({Prot, _, {terminated, _}}, Pipe, #fsm{stream=Stream, trace = Pid}=State)
  when ?is_transport(Prot) ->
    case htstream:state(Stream#stream.recv) of
       payload -> 
          % time to meaningful response
+         ?trace(Pid, {http, ttmr, tempus:diff(Stream#stream.ts)}),
          pipe:b(Pipe, {http, self(), eof});
       _       -> 
          ok
@@ -244,16 +245,18 @@ ioctl(_, _) ->
 
 %%
 %% remote peer message
-'STREAM'({Prot, Peer, Pckt}, Pipe, State)
+'STREAM'({Prot, Peer, Pckt}, Pipe, #fsm{trace = Pid} = State)
  when ?is_transport(Prot), is_binary(Pckt) ->
    try
       case io_recv(Pckt, Pipe, State#fsm.stream) of
          %% time to first byte
          {eoh, Stream} ->
-            'STREAM'({Prot, Peer, <<>>}, Pipe, State#fsm{stream=Stream});
+            ?trace(Pid, {http, ttfb, tempus:diff(Stream#stream.ts)}),
+            'STREAM'({Prot, Peer, <<>>}, Pipe, State#fsm{stream=Stream#stream{ts = os:timestamp()}});
 
          %% time to meaningful request
          {eof, #stream{ts=T, send=Send, recv=Http}=Stream} ->
+            ?trace(Pid, {http, ttmr, tempus:diff(Stream#stream.ts)}),
             pipe:b(Pipe, {http, self(), eof}),
             {next_state, 'STREAM', 
                State#fsm{

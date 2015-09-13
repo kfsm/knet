@@ -39,6 +39,7 @@
   ,sock     = undefined :: port()     %% tcp/ip socket
   ,active   = true      :: once | true | false  %% socket activity (pipe internally uses active once)
   ,backlog  = 0         :: integer()  %% length of acceptor pool
+  ,trace    = undefined :: pid()      %% trace process
   ,so       = undefined :: any()      %% socket options
 }).
 
@@ -58,6 +59,7 @@ init(Opts) ->
          stream  = io_new(Opts)
         ,backlog = opts:val(backlog, 5, Opts)
         ,active  = opts:val(active, Opts)
+        ,trace   = opts:val(trace, undefined, Opts)
         ,so      = Opts
       }
    }.
@@ -103,12 +105,13 @@ ioctl(socket,  #fsm{sock = Sock}) ->
 
 %%
 %%
-'IDLE'({connect, Uri}, Pipe, #fsm{stream = Stream0} = State) ->
+'IDLE'({connect, Uri}, Pipe, #fsm{stream = Stream0, trace = Pid} = State) ->
    T    = os:timestamp(),
    case tcp_connect(Uri, State) of
       {ok, Sock} ->
          #stream{addr = Addr, peer = Peer} = Stream1 = 
             io_ttl(io_tth(io_connect(Sock, Stream0))),
+         ?trace(Pid, {tcp, connect, tempus:diff(T)}),
          ?access_tcp(#{req => {syn, sack}, peer => Peer, addr => Addr, time => tempus:diff(T)}),
          pipe:a(Pipe, {tcp, self(), {established, Peer}}),
          {next_state, 'ESTABLISHED', 
@@ -122,13 +125,14 @@ ioctl(socket,  #fsm{sock = Sock}) ->
 
 %%
 %%
-'IDLE'({accept, Uri}, Pipe, #fsm{stream = Stream0} = State) ->
+'IDLE'({accept, Uri}, Pipe, #fsm{stream = Stream0, trace = Pid} = State) ->
    T     = os:timestamp(),   
    case tcp_accept(Uri, State) of
       {ok, Sock} ->
          create_acceptor(Uri, State),
          #stream{addr = Addr, peer = Peer} = Stream1 = 
             io_ttl(io_tth(io_connect(Sock, Stream0))),
+         ?trace(Pid, {tcp, connect, tempus:diff(T)}),
          ?access_tcp(#{req => {syn, sack}, peer => Peer, addr => Addr, time => tempus:diff(T)}),
          pipe:a(Pipe, {tcp, self(), {established, Peer}}),
          {next_state, 'ESTABLISHED', 
@@ -170,12 +174,13 @@ ioctl(socket,  #fsm{sock = Sock}) ->
    pipe:b(Pipe, {tcp, self(), {terminated, normal}}),
    {stop, normal, State};
 
-'ESTABLISHED'({tcp, _, Pckt}, Pipe, #fsm{stream = Stream0} = State) ->
+'ESTABLISHED'({tcp, _, Pckt}, Pipe, #fsm{stream = Stream0, trace = Pid} = State) ->
    %% What one can do is to combine {active, once} with gen_tcp:recv().
    %% Essentially, you will be served the first message, then read as many as you 
    %% wish from the socket. When the socket is empty, you can again enable {active, once}. 
    %% Note: release 17.x and later supports {active, n()}
    {_, Stream1} = io_recv(Pckt, Pipe, Stream0),
+   ?trace(Pid, {tcp, packet, byte_size(Pckt)}),
    {next_state, 'ESTABLISHED', tcp_ioctl(State#fsm{stream = Stream1})};
 
 'ESTABLISHED'({ttl, Pack}, Pipe, State) ->

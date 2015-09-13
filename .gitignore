@@ -9,4 +9,5 @@ ebin/
 .eunit/
 deps/
 rebar
+.rebar/
 *.sublime-*

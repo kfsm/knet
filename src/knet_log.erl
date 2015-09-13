@@ -40,6 +40,7 @@
 -export([
    common/1
   ,common/2
+  ,trace/2
 ]).
 
 %%
@@ -129,4 +130,11 @@ val(X) ->
    scalar:c(X).
 
 
+%%
+%% tracing protocol message
+-spec(trace/2 :: (pid(), any()) -> ok).
 
+trace(undefined, _Msg) ->
+   ok;
+trace(Pid, Msg) ->
+   _ = pipe:send(Pid, {trace, os:timestamp(), Msg}), ok.
