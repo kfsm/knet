@@ -34,9 +34,9 @@
    ioctl/2,
    'IDLE'/3, 
    'LISTEN'/3, 
-   'ACCEPT'/3,
-   'STREAM'/3,
-   'TUNNEL'/3
+   % 'ACCEPT'/3,
+   'STREAM'/3
+   % 'TUNNEL'/3
 ]).
 
 -record(fsm, {
@@ -94,12 +94,12 @@ ioctl(_, _) ->
 
 'IDLE'({accept,  Uri}, Pipe, State) ->
    pipe:b(Pipe, {accept, Uri}),
-   {next_state, 'ACCEPT', State};
+   {next_state, 'STREAM', State};
 
 'IDLE'({connect, Uri}, Pipe, State) ->
    % connect is compatibility wrapper for knet socket interface (translated to http GET request)
    % @todo: htstream support HTTP/1.2 (see http://www.jmarshall.com/easy/http/)
-   'IDLE'({'GET', Uri, [{'Connection', <<"close">>}]}, Pipe, State);
+   'IDLE'({'GET', Uri, [{'Connection', <<"keep-alive">>}]}, Pipe, State);
 
 'IDLE'({_Mthd, {uri, _, _}=Uri, _Head}=Req, Pipe, State) ->
    pipe:b(Pipe, {connect, Uri}),
@@ -119,111 +119,12 @@ ioctl(_, _) ->
    %% Note: listen do not forward tcp messages to client
    {next_state, 'LISTEN', State}.
 
-%%%------------------------------------------------------------------
-%%%
-%%% ACCEPT (server-side)
-%%%
-%%%------------------------------------------------------------------   
-
-%%
-%%
-'ACCEPT'(timeout, _Pipe,  State) ->
-   {stop, normal, State};
-
-%%
-%% peer connection
-'ACCEPT'({Prot, _, {established, Peer}}, _Pipe, #fsm{stream=Stream}=State)
- when ?is_transport(Prot) ->
-   {next_state, 'ACCEPT', State#fsm{stream = io_peer(Peer, Stream)}};
-
-'ACCEPT'({Prot, _, {terminated, _}}, Pipe, #fsm{stream=Stream}=State)
- when ?is_transport(Prot) ->
-   case htstream:state(Stream#stream.recv) of
-      payload -> 
-         _ = pipe:b(Pipe, {http, self(), eof});
-      _       -> 
-         ok
-   end,
-   {stop, normal, State};
-
-%%
-%% remote peer message
-'ACCEPT'({Prot, Peer, Pckt}, Pipe, State)
- when ?is_transport(Prot), is_binary(Pckt) ->
-   try
-      case io_recv(Pckt, Pipe, State#fsm.stream) of
-         %% time to first byte
-         {eoh, Stream} ->
-            'STREAM'({Prot, Peer, <<>>}, Pipe, State#fsm{stream=Stream});
-
-         %% time to meaningful request
-         {eof, #stream{ts=T, recv=Http}=Stream} ->
-            pipe:b(Pipe, {http, self(), eof}),
-            {next_state, 'ACCEPT', 
-               State#fsm{
-                  stream = Stream#stream{recv=htstream:new(Http)}
-                 ,req    = q:enq({T, Http}, State#fsm.req)
-               }
-            };
-
-         %% protocol upgrade
-         {upgrade, Stream} ->
-            server_upgrade(Pipe, State#fsm{stream=Stream});
-
-         %% request payload
-         {_,   Stream} ->
-            {next_state, 'ACCEPT', State#fsm{stream=Stream}}
-      end
-   catch _:Reason ->
-      ?NOTICE("knet [http]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
-      pipe:a(Pipe, erlang:element(1, htstream:encode({Reason, make_head()}))),
-      {stop, normal, State}
-   end;
-
-%%
-%% local acceptor message
-'ACCEPT'(Msg, Pipe, State) ->
-   try
-      case io_send(Msg, Pipe, State#fsm.stream) of
-         {eof, #stream{send=Send}=Stream} ->
-            {_, {Code, _Msg, Head}} = htstream:http(Send),
-            case opts:val('Connection', undefined, Head) of
-               <<"close">>   ->
-                  {stop, normal, 
-                     State#fsm{
-                        stream = Stream#stream{send = htstream:new(Send)} 
-                       ,req    = access_log(Send, State)
-                     }
-                  };
-               _             ->
-                  {next_state, 'ACCEPT', 
-                     State#fsm{
-                        stream = Stream#stream{send = htstream:new(Send)}
-                       ,req    = access_log(Send, State)
-                     }
-                  }
-            end;
-         {_,   Stream} ->
-            {next_state, 'STREAM', State#fsm{stream=Stream}}
-      end
-   catch _:Reason ->
-      %% this is applicable to server side only
-      ?NOTICE("knet [http]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
-      pipe:b(Pipe, erlang:element(1, htstream:encode({Reason, make_head()}))),
-      {stop, normal, State}
-   end.
-
 
 %%%------------------------------------------------------------------
 %%%
-%%% SERVER
+%%% HTTP STREAM
 %%%
 %%%------------------------------------------------------------------   
-
-%%
-%%
-'STREAM'(timeout, _Pipe,  State) ->
-   {stop, normal, State};
 
 %%
 %% peer connection
@@ -244,8 +145,8 @@ ioctl(_, _) ->
    {stop, normal, State};
 
 %%
-%% remote peer message
-'STREAM'({Prot, Peer, Pckt}, Pipe, #fsm{trace = Pid} = State)
+%% ingress packet
+'STREAM'({Prot, Peer, Pckt}, Pipe, #fsm{trace = Pid, req = Req} = State)
  when ?is_transport(Prot), is_binary(Pckt) ->
    try
       case io_recv(Pckt, Pipe, State#fsm.stream) of
@@ -255,15 +156,30 @@ ioctl(_, _) ->
             'STREAM'({Prot, Peer, <<>>}, Pipe, State#fsm{stream=Stream#stream{ts = os:timestamp()}});
 
          %% time to meaningful request
-         {eof, #stream{ts=T, send=Send, recv=Http}=Stream} ->
-            ?trace(Pid, {http, ttmr, tempus:diff(Stream#stream.ts)}),
+         {eof, #stream{ts=T, send=Send, recv=Http}=Stream0} ->
+            ?trace(Pid,  {http, ttmr, tempus:diff(T)}),
             pipe:b(Pipe, {http, self(), eof}),
-            {next_state, 'STREAM', 
-               State#fsm{
-                  stream = Stream#stream{recv=htstream:new(Http)}
-                 ,req    = q:enq({T, Http}, State#fsm.req)
-               }
-            };
+            Stream1 = Stream0#stream{recv=htstream:new(Http)},
+            case htstream:http(Http) of
+               {request,  _} ->
+                  {next_state, 'STREAM', 
+                     State#fsm{
+                        stream = Stream1
+                       ,req    = q:enq({T, Http}, Req)
+                     }
+                  };
+               {response, _} ->
+                  {next_state, 'STREAM',
+                     State#fsm{
+                        stream = Stream1
+                       ,req    = access_log(Http, State)
+                     }
+                  }
+            end;
+
+         %% protocol upgrade
+         {upgrade, Stream} ->
+            server_upgrade(Pipe, State#fsm{stream=Stream});
 
          %% request payload
          {_,   Stream} ->
@@ -271,62 +187,44 @@ ioctl(_, _) ->
       end
    catch _:Reason ->
       ?NOTICE("knet [http]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
-      % @todo: error message
       pipe:a(Pipe, {http, self(), eof}),
       {stop, normal, State}
    end;
 
 %%
-%% local acceptor message
-'STREAM'(Msg, Pipe, State) ->
+%% egress message
+'STREAM'(Msg, Pipe, #fsm{req = Req} = State) ->
    try
       case io_send(Msg, Pipe, State#fsm.stream) of
-         {eof, #stream{send=Send}=Stream} ->
-            {_, {Code, _Msg, Head}} = htstream:http(Send),
-            case opts:val('Connection', undefined, Head) of
-               <<"close">>   ->
-                  {stop, normal, 
-                     State#fsm{
-                        stream = Stream#stream{send = htstream:new(Send)}
-                       ,req    = access_log(Send, State)
-                     }
-                  };
-               _             ->
+         {eof, #stream{ts = T, send=Send}=Stream0} ->
+            Stream1 = Stream0#stream{send = htstream:new(Send)},
+            case htstream:http(Send) of
+               {request,  _} ->
                   {next_state, 'STREAM', 
                      State#fsm{
-                        stream = Stream#stream{send = htstream:new(Send)}
+                        stream = Stream1
+                       ,req    = q:enq({T, Send}, Req)
+                     }
+                  };
+
+               {response, _} ->
+                  {next_state, 'STREAM', 
+                     State#fsm{
+                        stream = Stream1
                        ,req    = access_log(Send, State)
                      }
                   }
             end;
+
          {_,   Stream} ->
             {next_state, 'STREAM', State#fsm{stream=Stream}}
       end
    catch _:Reason ->
-      %% @todo: error message
       ?NOTICE("knet [http]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
       pipe:a(Pipe, {http, self(), eof}),
       {stop, normal, State}
    end.
 
-%%%------------------------------------------------------------------
-%%%
-%%% http tunneling
-%%%
-%%%------------------------------------------------------------------
-
-'TUNNEL'({Prot, _, {terminated, _}}, _Pipe, State)
- when ?is_transport(Prot) ->
-   {stop, normal, State};
-
-'TUNNEL'({Prot, _Peer, Pckt}, Pipe, State)
- when ?is_transport(Prot), is_binary(Pckt) ->
-   pipe:b(Pipe, {http, self(), Pckt}),
-   {next_state, 'TUNNEL', State};
-
-'TUNNEL'(Msg, Pipe, State) ->
-   pipe:b(Pipe, Msg),
-   {next_state, 'TUNNEL', State}.
 
 %%%------------------------------------------------------------------
 %%%
@@ -380,11 +278,11 @@ io_send({Mthd, {uri, _, _}=Uri, Head}, Pipe, Sock) ->
 io_send({Mthd, {uri, _, _}=Uri, Head, Msg}, Pipe, Sock) ->
    io_send({Mthd, uri:path(Uri), [{'Host', uri:authority(Uri)}|Head], Msg}, Pipe, Sock);
 
-io_send(Msg, Pipe, #stream{}=Sock) ->
-   ?DEBUG("knet [http] ~p: send ~p~n~p", [self(), Sock#stream.peer, Msg]),
-   {Pckt, Send} = htstream:encode(Msg, Sock#stream.send),
+io_send(Msg, Pipe, #stream{send = Send0, peer = _Peer}=Sock) ->
+   ?DEBUG("knet [http] ~p: send ~p~n~p", [self(), _Peer, Msg]),
+   {Pckt, Send1} = htstream:encode(Msg, Send0),
    lists:foreach(fun(X) -> pipe:b(Pipe, X) end, Pckt),
-   {htstream:state(Send), Sock#stream{send=Send}}.
+   {htstream:state(Send1), Sock#stream{send=Send1}}.
 
 
 %%
