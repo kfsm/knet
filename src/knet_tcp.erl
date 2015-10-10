@@ -174,6 +174,26 @@ ioctl(socket,  #fsm{sock = Sock}) ->
    pipe:b(Pipe, {tcp, self(), {terminated, normal}}),
    {stop, normal, State};
 
+%%
+%%
+'ESTABLISHED'({tcp_passive, _}, _Pipe, #fsm{active = once} = State) ->
+   {next_state, 'ESTABLISHED', tcp_ioctl(State)};
+
+'ESTABLISHED'({tcp_passive, _}, _Pipe, #fsm{active = true} = State) ->
+   {next_state, 'ESTABLISHED', tcp_ioctl(State)};
+
+'ESTABLISHED'({tcp_passive, _}, Pipe, State) ->
+   pipe:b(Pipe, {tcp, self(), passive}),
+   {next_state, 'ESTABLISHED', State};
+
+'ESTABLISHED'(active, _Pipe, State) ->
+   {next_state, 'ESTABLISHED', tcp_ioctl(State)};
+
+'ESTABLISHED'({active, N}, _Pipe, State) ->
+   {next_state, 'ESTABLISHED', tcp_ioctl(State#fsm{active = N})};
+
+%%
+%%
 'ESTABLISHED'({tcp, _, Pckt}, Pipe, #fsm{stream = Stream0, trace = Pid} = State) ->
    %% What one can do is to combine {active, once} with gen_tcp:recv().
    %% Essentially, you will be served the first message, then read as many as you 
@@ -181,7 +201,7 @@ ioctl(socket,  #fsm{sock = Sock}) ->
    %% Note: release 17.x and later supports {active, n()}
    {_, Stream1} = io_recv(Pckt, Pipe, Stream0),
    ?trace(Pid, {tcp, packet, byte_size(Pckt)}),
-   {next_state, 'ESTABLISHED', tcp_ioctl(State#fsm{stream = Stream1})};
+   {next_state, 'ESTABLISHED', State#fsm{stream = Stream1}};
 
 'ESTABLISHED'({ttl, Pack}, Pipe, State) ->
    case io_ttl(Pack, State#fsm.stream) of
@@ -280,13 +300,14 @@ io_send(Msg, Pipe, #stream{}=Sock) ->
 
 %%
 %% set socket i/o control flags
-tcp_ioctl(#fsm{active=true}=State) ->
-   ok = inet:setopts(State#fsm.sock, [{active, once}]),
+tcp_ioctl(#fsm{sock = Sock, active = true} = State) ->
+   ok = inet:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
    State;
-tcp_ioctl(#fsm{active=once}=State) ->
-   ok = inet:setopts(State#fsm.sock, [{active, once}]),
+tcp_ioctl(#fsm{sock = Sock, active = once} = State) ->
+   ok = inet:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
    State;
-tcp_ioctl(#fsm{}=State) ->
+tcp_ioctl(#fsm{sock = Sock, active = N} = State) ->
+   ok = inet:setopts(Sock, [{active, N}]),
    State.
 
 %%

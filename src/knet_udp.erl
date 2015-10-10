@@ -196,9 +196,28 @@ ioctl(socket, State) ->
 %%%
 %%%------------------------------------------------------------------   
 
+%%
+%%
+'ESTABLISHED'({udp_passive, _}, _Pipe, #fsm{active = once} = State) ->
+   {next_state, 'ESTABLISHED', udp_ioctl(State)};
+
+'ESTABLISHED'({udp_passive, _}, _Pipe, #fsm{active = true} = State) ->
+   {next_state, 'ESTABLISHED', udp_ioctl(State)};
+
+'ESTABLISHED'({udp_passive, _}, Pipe, State) ->
+   pipe:b(Pipe, {udp, self(), passive}),
+   {next_state, 'ESTABLISHED', State};
+
+'ESTABLISHED'(active, _Pipe, State) ->
+   {next_state, 'ESTABLISHED', udp_ioctl(State)};
+
+'ESTABLISHED'({active, N}, _Pipe, State) ->
+   {next_state, 'ESTABLISHED', udp_ioctl(State#fsm{active = N})};
+
+
 'ESTABLISHED'({udp, _, Host, Port, Pckt}, Pipe, State) ->
    {_, Stream} = io_recv({{Host, Port}, Pckt}, Pipe, State#fsm.stream),
-   {next_state, 'ESTABLISHED', udp_ioctl(State#fsm{stream=Stream})};
+   {next_state, 'ESTABLISHED', State#fsm{stream=Stream}};
 
 'ESTABLISHED'({udp, _, Msg}, Pipe, State) ->
    %% Note: ingress packet is routed by "listen" socket to acceptor process
@@ -318,14 +337,16 @@ io_send({{Host, Port} = _Peer, Msg}, Pipe, #stream{}=Sock) ->
 
 %%
 %% set socket i/o control flags
-udp_ioctl(#fsm{active=true}=State) ->
-   ok = inet:setopts(State#fsm.sock, [{active, once}]),
+udp_ioctl(#fsm{sock = Sock, active = true} = State) ->
+   ok = inet:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
    State;
-udp_ioctl(#fsm{active=once}=State) ->
-   ok = inet:setopts(State#fsm.sock, [{active, once}]),
+udp_ioctl(#fsm{sock = Sock, active = once} = State) ->
+   ok = inet:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
    State;
-udp_ioctl(#fsm{}=State) ->
+udp_ioctl(#fsm{sock = Sock, active = N} = State) ->
+   ok = inet:setopts(Sock, [{active, N}]),
    State.
+
 
 %%
 %%
