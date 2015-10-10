@@ -28,9 +28,9 @@
 start(_Type, _Args) -> 
    knet:listen("udp://*:6001", [
       {acceptor, udp_protocol}
-     ,{backlog,       10240}
-     ,{sndbuf,   256 * 1024}
-     ,{recbuf,   256 * 1024}
+     ,{backlog,          1024}
+     ,{sndbuf,     256 * 1024}
+     ,{recbuf,     256 * 1024}
    ]),
    udp_sup:start_link(). 
 

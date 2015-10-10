@@ -63,7 +63,6 @@ init(Opts) ->
    {ok, 'IDLE', 
       #fsm{      
          stream   = io_new(Opts)
-        ,dispatch = opts:val(dispatch, 'round-robin', Opts)
         ,backlog  = opts:val(backlog,  5, Opts)
         ,active   = opts:val(active, Opts)
         ,so       = Opts      
@@ -130,18 +129,10 @@ ioctl(socket, State) ->
 
 %%
 %%
-'IDLE'({accept, Uri}, _Pipe, #fsm{stream=Stream, so = SOpt}=State) ->
-   Pid  = opts:val(listen, SOpt), 
-   case pipe:call(Pid, accept, infinity) of
-      % each acceptor handles udp packet
-      {'round-robin', Sock} ->
-         {next_state, 'ESTABLISHED', State#fsm{sock = Sock}};
-
-      % each acceptor handles dedicate peer, spawn new acceptor    
-      {peer, Peer, Sock} ->
-         create_acceptor(Uri, State),
-         {next_state, 'ESTABLISHED', State#fsm{stream = Stream#stream{peer = Peer}, sock = Sock}}
-   end.
+'IDLE'({accept, _Uri}, _Pipe, #fsm{so = SOpt}=State) ->
+   Pid = opts:val(listen, SOpt), 
+   {ok, Sock} = pipe:call(Pid, accept, infinity),
+   {next_state, 'ESTABLISHED', State#fsm{sock = Sock}}.
 
 %%%------------------------------------------------------------------
 %%%
@@ -149,43 +140,23 @@ ioctl(socket, State) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'LISTEN'(accept, Pipe, #fsm{dispatch='round-robin', sock = Sock, acceptor = Acceptor}=State) ->
-   Pid = pipe:a(Pipe),
-   pipe:ack(Pipe, {'round-robin', Sock}),
+'LISTEN'(accept, Pipe, #fsm{sock = Sock, acceptor = Acceptor}=State) ->
+   pipe:ack(Pipe, {ok, Sock}),
 	{next_state, 'LISTEN', 
-      State#fsm{acceptor = q:enq(Pid, Acceptor)}
+      State#fsm{acceptor = q:enq(pipe:a(Pipe), Acceptor)}
    };
 
-'LISTEN'(accept, Pipe, #fsm{dispatch=p2p, acceptor = Acceptor}=State) ->
-   {next_state, 'LISTEN', 
-      State#fsm{acceptor = q:enq(Pipe, Acceptor)}
-   };
-
-
-'LISTEN'({udp, _, Host, Port, Pckt}, _Pipe, #fsm{dispatch='round-robin'}=State) ->
+'LISTEN'({udp, _, Host, Port, Pckt}, _Pipe, #fsm{acceptor = Acceptor}=State) ->
    ?DEBUG("knet udp ~p: recv ~p~n~p", [self(), {Host, Port}, Pckt]),
-   {Pid, Queue} = q:deq(State#fsm.acceptor),
+   {Pid, Queue} = q:deq(Acceptor),
    pipe:send(Pid, {udp, self(), {{Host, Port}, Pckt}}),
-   {next_state, 'LISTEN', udp_ioctl(State#fsm{acceptor = q:enq(Pid, Queue)})};
+   {next_state, 'LISTEN', State#fsm{acceptor = q:enq(Pid, Queue)}};
 
-'LISTEN'({udp, _, Host, Port, Pckt}, _Pipe, #fsm{dispatch=p2p}=State) ->
-   ?DEBUG("knet udp ~p: recv ~p~n~p", [self(), {Host, Port}, Pckt]),
-   case pns:whereis(knet, {udp, {Host, Port}}) of
-      %% peer handler unknown, allocate new one
-      undefined ->
-         {Pipe, Queue} = q:deq(State#fsm.acceptor),
-         Pid  = pipe:a(Pipe),
-         Peer = {Host, Port},
-         pipe:ack(Pipe, {peer, Peer, State#fsm.sock}),
-         pns:register(knet, {udp, Peer}, Pid),
-         pipe:send(Pid, {udp, self(), {Peer, Pckt}}),
-         {next_state, 'LISTEN', udp_ioctl(State#fsm{acceptor = Queue})};
-      %% peer handler exists
-      Pid ->
-         pipe:send(Pid, {udp, self(), {{Host, Port}, Pckt}}),
-         {next_state, 'LISTEN', udp_ioctl(State)}
-   end;
-   
+'LISTEN'({udp_passive, _} = Msg, _Pipe, #fsm{acceptor = Acceptor}=State) ->
+   {Pid, _} = q:deq(Acceptor),
+   pipe:send(Pid, Msg),
+   {next_state, 'LISTEN', State};
+
 'LISTEN'(_Msg, _Pipe, State) ->
    {next_state, 'LISTEN', State}.
 
@@ -374,10 +345,6 @@ create_acceptor_pool(Uri, #fsm{so = SOpt0, backlog = Backlog}) ->
       end,
       lists:seq(1, Backlog)
    ).
-
-create_acceptor(Uri, #fsm{so = SOpt0}) ->
-   Sup = opts:val(acceptor,  SOpt0), 
-   {ok, _} = supervisor:start_child(Sup, [Uri, SOpt0]).
 
 
 
