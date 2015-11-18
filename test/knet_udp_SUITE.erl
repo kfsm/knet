@@ -48,7 +48,7 @@ all() ->
    [
       {group, client}
      ,{group, 'round-robin'}
-     ,{group, 'peer-to-peer'}
+     % ,{group, 'peer-to-peer'}
      ,{group, knet}
    ].
 
@@ -133,7 +133,7 @@ knet_cli_io(Opts) ->
    <<">123456">> = knet:send(Sock, <<">123456">>),
    {udp, Sock, {_, <<"<123456">>}} = knet:recv(Sock), 
    ok      = knet:close(Sock),
-   '$free' = knet:recv(Sock).
+   {error, _} = knet:recv(Sock, 1000, [noexit]).
    
 %%
 %%
@@ -145,7 +145,7 @@ knet_cli_timeout(Opts) ->
    {udp, Sock, {_, <<"<123456">>}} = knet:recv(Sock),
    timer:sleep(1100),
    {udp, Sock, {terminated, timeout}} = knet:recv(Sock),
-   '$free' = knet:recv(Sock).
+   {error, _} = knet:recv(Sock, 1000, [noexit]).
 
 %%
 %%
@@ -230,9 +230,9 @@ knet_echo_listen() ->
       fun() ->
          knet:listen(uri:port(?PORT, uri:new("udp://*")), [
             {backlog,  2},
-            {acceptor, fun knet_echo/1},
-            {dispatch, p2p}
-         ])
+            {acceptor, fun knet_echo/1}
+         ]),
+         timer:sleep(60000)
       end
    ).
 

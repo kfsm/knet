@@ -103,7 +103,7 @@ knet_cli_ws(_) ->
    <<"123456">> = knet:send(Sock, <<"123456">>),
    {ws, Sock, <<"123456">>} = knet:recv(Sock),
    ok      = knet:close(Sock),
-   '$free' = knet:recv(Sock).
+   {error, _} = knet:recv(Sock, 1000, [noexit]).
 
 knet_cli_wss(_) ->
    Sock = knet:connect(uri:authority(?HOST, uri:new("wss://*:443"))),
@@ -112,7 +112,7 @@ knet_cli_wss(_) ->
    <<"123456">> = knet:send(Sock, <<"123456">>),
    {ws, Sock, <<"123456">>} = knet:recv(Sock),
    ok      = knet:close(Sock),
-   '$free' = knet:recv(Sock).
+   {error, _} = knet:recv(Sock, 1000, [noexit]).
 
 knet_srv_http(Opts) ->
    {ok, LSock} = knet_listen(uri:port(?PORT, uri:host(?LOCAL, uri:new(http)))),

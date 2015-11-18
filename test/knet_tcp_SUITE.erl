@@ -138,7 +138,7 @@ knet_cli_refused(Opts) ->
 knet_cli_connect(Opts) ->
    {ok, Sock} = knet_connect(?config(uri, Opts)),
    ok         = knet:close(Sock),
-   '$free'    = knet:recv(Sock).
+   {error, _} = knet:recv(Sock, 1000, [noexit]).
 
 %%
 %%
@@ -147,7 +147,7 @@ knet_cli_io(Opts) ->
    <<">123456">> = knet:send(Sock, <<">123456">>),
    {tcp, Sock, <<"<123456">>} = knet:recv(Sock), 
    ok      = knet:close(Sock),
-   '$free' = knet:recv(Sock).
+   {error, _} = knet:recv(Sock, 1000, [noexit]).
    
 %%
 %%
@@ -159,7 +159,7 @@ knet_cli_timeout(Opts) ->
    {tcp, Sock, <<"<123456">>} = knet:recv(Sock),
    timer:sleep(1100),
    {tcp, Sock, {terminated, timeout}} = knet:recv(Sock),
-   '$free' = knet:recv(Sock).
+   {error, _} = knet:recv(Sock, 1000, [noexit]).
 
 
 %%
@@ -283,7 +283,8 @@ knet_echo_listen() ->
          knet:listen(uri:port(?PORT, uri:new("tcp://*")), [
             {backlog,  2},
             {acceptor, fun knet_echo/1}
-         ])
+         ]),
+         timer:sleep(60000)
       end
    ).
 
