@@ -1,7 +1,7 @@
 {application, knet,
    [
       {description, "konduit network library"},
-      {vsn,         "1.7.1"},
+      {vsn,         "1.7.2"},
       {modules,     []},
       {registered,  []},
       {applications,[

@@ -34,9 +34,8 @@
    ioctl/2,
    'IDLE'/3, 
    'LISTEN'/3, 
-   % 'ACCEPT'/3,
-   'STREAM'/3
-   % 'TUNNEL'/3
+   'STREAM'/3,
+   'HIBERNATE'/3
 ]).
 
 -record(fsm, {
@@ -130,7 +129,7 @@ ioctl(_, _) ->
 %% peer connection
 'STREAM'({Prot, _, {established, Peer}}, _Pipe, #fsm{stream=Stream}=State)
  when ?is_transport(Prot) ->
-   {next_state, 'STREAM', State#fsm{stream = io_peer(Peer, Stream)}};
+   {next_state, 'STREAM', State#fsm{stream = io_tth(io_peer(Peer, Stream))}};
 
 'STREAM'({Prot, _, {terminated, _}}, Pipe, #fsm{stream=Stream, trace = Pid}=State)
  when ?is_transport(Prot) ->
@@ -143,6 +142,12 @@ ioctl(_, _) ->
          ok
    end,
    {stop, normal, State};
+
+%%
+%%
+'STREAM'(hibernate, _, State) ->
+   ?DEBUG("knet [http]: suspend ~p", [(State#fsm.stream)#stream.peer]),
+   {next_state, 'HIBERNATE', State, hibernate};
 
 %%
 %% ingress packet
@@ -225,6 +230,16 @@ ioctl(_, _) ->
       {stop, normal, State}
    end.
 
+%%%------------------------------------------------------------------
+%%%
+%%% HIBERNATE
+%%%
+%%%------------------------------------------------------------------   
+
+'HIBERNATE'(Msg, Pipe, #fsm{stream = Stream} = State) ->
+   ?DEBUG("knet [http]: resume ~p",[Stream#stream.peer]),
+   'STREAM'(Msg, Pipe, State#fsm{stream=io_tth(Stream)}).
+
 
 %%%------------------------------------------------------------------
 %%%
@@ -249,6 +264,14 @@ io_peer(Peer, #stream{}=Sock) ->
    Sock#stream{
       peer = uri:authority(Peer, uri:new(http))
    }.
+
+%%
+%% set hibernate timeout
+io_tth(#stream{}=Sock) ->
+   Sock#stream{
+      tth = tempus:timer(Sock#stream.tth, hibernate)
+   }.
+
 
 %%
 %% recv packet
