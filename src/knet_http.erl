@@ -296,10 +296,10 @@ io_recv(Pckt, Pipe, #stream{}=Sock) ->
 %%
 %% send packet
 io_send({Mthd, {uri, _, _}=Uri, Head}, Pipe, Sock) ->
-   io_send({Mthd, uri:path(Uri), [{'Host', uri:authority(Uri)}|Head]}, Pipe, Sock);
+   io_send({Mthd, uri:suburi(Uri), [{'Host', uri:authority(Uri)}|Head]}, Pipe, Sock);
 
 io_send({Mthd, {uri, _, _}=Uri, Head, Msg}, Pipe, Sock) ->
-   io_send({Mthd, uri:path(Uri), [{'Host', uri:authority(Uri)}|Head], Msg}, Pipe, Sock);
+   io_send({Mthd, uri:suburi(Uri), [{'Host', uri:authority(Uri)}|Head], Msg}, Pipe, Sock);
 
 io_send(Msg, Pipe, #stream{send = Send0, peer = _Peer}=Sock) ->
    ?DEBUG("knet [http] ~p: send ~p~n~p", [self(), _Peer, Msg]),
