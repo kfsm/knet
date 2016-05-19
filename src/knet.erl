@@ -142,10 +142,10 @@ listen(Uri, Opts)
 -spec(acceptor/3 :: (function(), uri:uri(), list()) -> {ok, pid()} | {error, any()}).
 
 acceptor(Fun, Uri, Opts) ->
-   Init = fun() -> bind(Uri, Opts) end,
-   {ok, 
-      pipe:spawn_link(Fun, [{init, Init}])
-   }.
+   Fun1 = fun(bind) -> bind(Uri, Opts), Fun end,
+   Pid  = pipe:spawn_link(Fun1),
+   pipe:send(Pid, bind),
+   {ok, Pid}.
 
 %%
 %% bind process to listening socket. 
