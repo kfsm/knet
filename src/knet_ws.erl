@@ -268,7 +268,10 @@ ioctl(_, _) ->
          {stop, normal, State#fsm{stream=Stream}};
       {_,   Stream} ->
          {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
-   end.
+   end;
+
+'ESTABLISHED'(hibernate, Pipe, State) ->
+   {next_state, 'ESTABLISHED', State}.
 
 %%%------------------------------------------------------------------
 %%%
