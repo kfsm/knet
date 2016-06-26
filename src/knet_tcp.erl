@@ -301,13 +301,13 @@ io_send(Msg, Pipe, #stream{}=Sock) ->
 %%
 %% set socket i/o control flags
 tcp_ioctl(#fsm{sock = Sock, active = true} = State) ->
-   ok = inet:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
+   inet:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
    State;
 tcp_ioctl(#fsm{sock = Sock, active = once} = State) ->
-   ok = inet:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
+   inet:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
    State;
 tcp_ioctl(#fsm{sock = Sock, active = N} = State) ->
-   ok = inet:setopts(Sock, [{active, N}]),
+   inet:setopts(Sock, [{active, N}]),
    State.
 
 %%
