@@ -132,7 +132,7 @@ val(X) ->
 
 %%
 %% tracing protocol message
--spec(trace/2 :: (pid(), any()) -> ok).
+-spec trace(pid(), any()) -> ok.
 
 trace(undefined, _Msg) ->
    ok;

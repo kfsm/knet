@@ -61,8 +61,8 @@ start() ->
 %%  Options tcp
 %%    {backlog, integer()} - defines length of acceptor pool (see also tcp backlog)
 %%
--spec(socket/1 :: (any()) -> pid()).
--spec(socket/2 :: (any(), any()) -> pid()).
+-spec socket(any()) -> pid().
+-spec socket(any(), any()) -> pid().
 
 socket({uri, udp,  _}, Opts) ->
    {ok, A} = supervisor:start_child(knet_udp_sup,  [Opts]),
@@ -109,7 +109,7 @@ create(Stack, Opts) ->
 %%
 %% Options:
 %%   {acceptor,      atom() | pid()} - acceptor module/factory
--spec(listen/2 :: (any(), any()) -> pid()).
+-spec listen(any(), any()) -> pid().
 
 listen({uri, _, _}=Uri, Opts)
  when is_list(Opts) ->
@@ -139,7 +139,7 @@ listen(Uri, Opts)
 
 %%
 %% spawn acceptor bridge process by wrapping a UDF into pipe process
--spec(acceptor/3 :: (function(), uri:uri(), list()) -> {ok, pid()} | {error, any()}).
+-spec acceptor(function(), uri:uri(), list()) -> {ok, pid()} | {error, any()}.
 
 acceptor(Fun, Uri, Opts) ->
    Fun1 = fun(bind) -> bind(Uri, Opts), Fun end,
@@ -152,8 +152,8 @@ acceptor(Fun, Uri, Opts) ->
 %% 
 %% Options:
 %%    nopipe 
--spec(bind/1 :: (any()) -> pid()).
--spec(bind/2 :: (any(), any()) -> pid()).
+-spec bind(any()) -> pid().
+-spec bind(any(), any()) -> pid().
 
 bind({uri, _, _}=Uri, Opts) ->
    Sock = socket(Uri, Opts),
@@ -170,8 +170,8 @@ bind(Url) ->
 %%
 %% connect socket to remote peer
 %%  Options
--spec(connect/1 :: (any()) -> {ok, pid()} | {error, any()}).
--spec(connect/2 :: (any(), any()) -> {ok, pid()} | {error, any()}).
+-spec connect(any()) -> {ok, pid()} | {error, any()}.
+-spec connect(any(), any()) -> {ok, pid()} | {error, any()}.
 
 connect({uri, _, _}=Uri, Opts) ->
    Sock = socket(Uri, Opts),
@@ -187,16 +187,16 @@ connect(Url) ->
 %%
 %% close socket
 %% @todo: close listen socket
--spec(close/1 :: (pid()) -> ok).
+-spec close(pid()) -> ok.
 
 close(Sock) ->
    pipe:free(Sock).
 
 %%
 %% receive data from socket
--spec(recv/1 :: (pid()) -> {atom(), pid(), any()}).
--spec(recv/2 :: (pid(), timeout()) -> {atom(), pid(), any()}).
--spec(recv/3 :: (pid(), timeout(), list()) -> {atom(), pid(), any()}).
+-spec recv(pid()) -> {atom(), pid(), any()}.
+-spec recv(pid(), timeout()) -> {atom(), pid(), any()}.
+-spec recv(pid(), timeout(), list()) -> {atom(), pid(), any()}.
 
 recv(Sock) ->
    recv(Sock, 5000).
@@ -209,7 +209,7 @@ recv(Sock, Timeout, Opts) ->
 
 %%
 %% send data to socket
--spec(send/2 :: (pid(), binary()) -> ok).
+-spec send(pid(), binary()) -> ok.
 
 send(Sock, Pckt) ->
    pipe:send(Sock, Pckt).
