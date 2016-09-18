@@ -156,7 +156,9 @@ ioctl(_, _) ->
    try
       case io_recv(Pckt, Pipe, State#fsm.stream) of
          %% time to first byte
-         {eoh, Stream} ->
+         {eoh, #stream{recv=Http}=Stream} ->
+            {response, {Code, _, _}} = htstream:http(Http),
+            ?trace(Pid, {http, code, Code}),
             ?trace(Pid, {http, ttfb, tempus:diff(Stream#stream.ts)}),
             'STREAM'({Prot, Peer, <<>>}, Pipe, State#fsm{stream=Stream#stream{ts = os:timestamp()}});
 
