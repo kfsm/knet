@@ -157,8 +157,12 @@ ioctl(_, _) ->
       case io_recv(Pckt, Pipe, State#fsm.stream) of
          %% time to first byte
          {eoh, #stream{recv=Http}=Stream} ->
-            {response, {Code, _, _}} = htstream:http(Http),
-            ?trace(Pid, {http, code, Code}),
+            case htstream:http(Http) of
+               {response, {Code, _, _}} ->
+                  ?trace(Pid, {http, code, Code});
+               {request,  {Mthd, _, _}} ->
+                  ?trace(Pid, {http, mthd, Mthd})
+            end,
             ?trace(Pid, {http, ttfb, tempus:diff(Stream#stream.ts)}),
             'STREAM'({Prot, Peer, <<>>}, Pipe, State#fsm{stream=Stream#stream{ts = os:timestamp()}});
 
@@ -194,7 +198,7 @@ ioctl(_, _) ->
       end
    catch _:Reason ->
       ?NOTICE("knet [http]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
-      pipe:a(Pipe, {http, self(), eof}),
+      pipe:b(Pipe, {http, self(), eof}),
       {stop, normal, State}
    end;
 
