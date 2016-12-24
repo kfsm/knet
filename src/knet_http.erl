@@ -295,7 +295,10 @@ io_recv(Pckt, Pipe, #stream{}=Sock) ->
          {htstream:state(Recv), Sock#stream{recv=Recv}};
 
       {Chunk, Recv} ->
-         lists:foreach(fun(X) -> pipe:b(Pipe, {http, self(), X}) end, Chunk),
+         lists:foreach(
+            fun(<<>>) -> ok; (X) -> pipe:b(Pipe, {http, self(), X}) end, 
+            Chunk
+         ),
          {htstream:state(Recv), Sock#stream{recv=Recv}}
    end.
 
