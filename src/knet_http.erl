@@ -305,10 +305,10 @@ io_recv(Pckt, Pipe, #stream{}=Sock) ->
 %%
 %% send packet
 io_send({Mthd, {uri, _, _}=Uri, Head}, Pipe, Sock) ->
-   io_send({Mthd, uri:suburi(Uri), [{'Host', uri:authority(Uri)}|Head]}, Pipe, Sock);
+   io_send({Mthd, get_or_else(uri:suburi(Uri), <<$/>>), [{'Host', uri:authority(Uri)}|Head]}, Pipe, Sock);
 
 io_send({Mthd, {uri, _, _}=Uri, Head, Msg}, Pipe, Sock) ->
-   io_send({Mthd, uri:suburi(Uri), [{'Host', uri:authority(Uri)}|Head], Msg}, Pipe, Sock);
+   io_send({Mthd, get_or_else(uri:suburi(Uri), <<$/>>), [{'Host', uri:authority(Uri)}|Head], Msg}, Pipe, Sock);
 
 io_send(Msg, Pipe, #stream{send = Send0, peer = _Peer}=Sock) ->
    ?DEBUG("knet [http] ~p: send ~p~n~p", [self(), _Peer, Msg]),
@@ -421,3 +421,12 @@ access_log(Send, State) ->
      ,time => tempus:diff(T)
    }),
    q:tail(State#fsm.req).
+
+%%
+%%
+get_or_else(undefined, Default) ->
+   Default;
+get_or_else(Value, _) ->
+   Value.
+
+
