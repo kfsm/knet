@@ -136,7 +136,8 @@ ioctl(_, _) ->
    case htstream:state(Stream#stream.recv) of
       payload -> 
          % time to meaningful response
-         ?trace(Pid, {http, ttmr, tempus:diff(Stream#stream.ts)}),
+         {request, {_, Url, _}} = htstream:http(Stream#stream.send),
+         ?trace(Pid, {http, {ttmr, Url}, tempus:diff(Stream#stream.ts)}),
          pipe:b(Pipe, {http, self(), eof});
       _       -> 
          ok
@@ -159,16 +160,21 @@ ioctl(_, _) ->
          {eoh, #stream{recv=Http}=Stream} ->
             case htstream:http(Http) of
                {response, {Code, _, _}} ->
-                  ?trace(Pid, {http, code, Code});
-               {request,  {Mthd, _, _}} ->
-                  ?trace(Pid, {http, mthd, Mthd})
+                  {_, Send}   = q:head(Req),
+                  {request, {_, Url, _}} = htstream:http(Send),
+                  ?trace(Pid, {http, {code, Url}, Code}),
+                  ?trace(Pid, {http, {ttfb, Url}, tempus:diff(Stream#stream.ts)});
+               {request,  {Mthd, Url1, _}} ->
+                  ?trace(Pid, {http, {mthd, Url1}, Mthd}),
+                  ?trace(Pid, {http, {ttfb, Url1}, tempus:diff(Stream#stream.ts)})
             end,
-            ?trace(Pid, {http, ttfb, tempus:diff(Stream#stream.ts)}),
             'STREAM'({Prot, Peer, <<>>}, Pipe, State#fsm{stream=Stream#stream{ts = os:timestamp()}});
 
          %% time to meaningful request
-         {eof, #stream{ts=T, send=Send, recv=Http}=Stream0} ->
-            ?trace(Pid,  {http, ttmr, tempus:diff(T)}),
+         {eof, #stream{ts=T, recv=Http}=Stream0} ->
+            {_, Send1}   = q:head(Req),
+            {request, {_, Url, _}} = htstream:http(Send1),
+            ?trace(Pid,  {http, {ttmr, Url}, tempus:diff(T)}),
             pipe:b(Pipe, {http, self(), eof}),
             Stream1 = Stream0#stream{recv=htstream:new(Http)},
             case htstream:http(Http) of
@@ -383,11 +389,11 @@ make_env(_Head, #stream{peer=Peer}) ->
 
 %%
 %% make server headers
-make_head() ->
-   [
-      {'Server', ?HTTP_SERVER}
-     ,{'Date',   scalar:s(tempus:encode(?HTTP_DATE, os:timestamp()))}
-   ].
+% make_head() ->
+%    [
+%       {'Server', ?HTTP_SERVER}
+%      ,{'Date',   scalar:s(tempus:encode(?HTTP_DATE, os:timestamp()))}
+%    ].
 
 %%
 %% process access log

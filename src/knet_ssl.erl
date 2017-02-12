@@ -112,15 +112,15 @@ ioctl(socket,  #fsm{sock = Sock}) ->
    T1 = os:timestamp(),
    case tcp_connect(Uri, State) of
       {ok, Tcp} ->
-         ?trace(Pid, {tcp, connect, tempus:diff(T1)}),
+         ?trace(Pid, {tcp, {connect, Uri}, tempus:diff(T1)}),
          {ok, Peer} = inet:peername(Tcp),
          {ok, Addr} = inet:sockname(Tcp),
          ?access_ssl(#{req => {syn, sack}, peer => Peer, addr => Addr, time => tempus:diff(T1)}),
          T2 = os:timestamp(),
          case ssl_connect(Tcp, State) of
             {ok, Sock} ->
-               Stream1 = io_ttl(io_tth(io_connect(T1, Sock, Stream0))),
-               ?trace(Pid, {ssl, handshake, tempus:diff(T2)}),
+               Stream1 = io_ttl(io_tth(io_connect(T1, Sock, Uri, Stream0))),
+               ?trace(Pid, {ssl, {handshake, Uri}, tempus:diff(T2)}),
                ?access_ssl(#{req => {ssl, hand}, peer => Peer, addr => Addr, time => tempus:diff(T2)}),
                pipe:a(Pipe, {ssl, self(), {established, Peer}}),
                {next_state, 'ESTABLISHED', ssl_ioctl(State#fsm{stream=Stream1, sock=Sock})};
@@ -143,7 +143,7 @@ ioctl(socket,  #fsm{sock = Sock}) ->
    T1 = os:timestamp(),
    case tcp_accept(Uri, State) of
       {ok, Sock} ->
-         ?trace(Pid, {tcp, connect, tempus:diff(T1)}),
+         ?trace(Pid, {tcp, {connect, Uri}, tempus:diff(T1)}),
          create_acceptor(Uri, State),
          {ok, Peer} = ssl:peername(Sock),
          {ok, Addr} = ssl:sockname(Sock),
@@ -151,8 +151,8 @@ ioctl(socket,  #fsm{sock = Sock}) ->
          T2 = os:timestamp(),
          case ssl:ssl_accept(Sock) of
             ok ->
-               ?trace(Pid, {ssl, handshake, tempus:diff(T2)}),
-               Stream1 = io_ttl(io_tth(io_connect(T1, Sock, Stream0))),
+               ?trace(Pid, {ssl, {handshake, Uri}, tempus:diff(T2)}),
+               Stream1 = io_ttl(io_tth(io_connect(T1, Sock, Uri, Stream0))),
                ?access_ssl(#{req => {ssl, hand}, peer => Peer, addr => Addr, time => tempus:diff(T2)}),
                pipe:a(Pipe, {ssl, self(), {established, Peer}}),
                {next_state, 'ESTABLISHED', ssl_ioctl(State#fsm{stream=Stream1, sock=Sock})};
@@ -196,13 +196,13 @@ ioctl(socket,  #fsm{sock = Sock}) ->
    pipe:b(Pipe, {ssl, self(), {terminated, normal}}),
    {stop, normal, State};
 
-'ESTABLISHED'({ssl, _, Pckt}, Pipe, #fsm{stream = Stream0, trace = Pid} = State) ->
+'ESTABLISHED'({ssl, _, Pckt}, Pipe, #fsm{stream = #stream{uri = Uri} = Stream0, trace = Pid} = State) ->
    %% What one can do is to combine {active, once} with gen_tcp:recv().
    %% Essentially, you will be served the first message, then read as many as you 
    %% wish from the socket. When the socket is empty, you can again enable 
    %% {active, once}. @todo: {active, n()}
    {_, Stream1} = io_recv(Pckt, Pipe, Stream0),
-   ?trace(Pid, {ssl, packet, byte_size(Pckt)}),
+   ?trace(Pid, {ssl, {packet, Uri}, byte_size(Pckt)}),
    {next_state, 'ESTABLISHED', ssl_ioctl(State#fsm{stream=Stream1})};
 
 'ESTABLISHED'({ttl, Pack}, Pipe, State) ->
@@ -218,8 +218,8 @@ ioctl(socket,  #fsm{sock = Sock}) ->
    ?DEBUG("knet [ssl]: suspend ~p", [(State#fsm.stream)#stream.peer]),
    {next_state, 'HIBERNATE', State, hibernate};
 
-'ESTABLISHED'({ssl_cert, ca, Cert}, _Pipe, #fsm{cert = Certs, trace = Pid} = State) ->
-   ?trace(Pid, {ssl, ca, 
+'ESTABLISHED'({ssl_cert, ca, Cert}, _Pipe, #fsm{stream = #stream{uri = Uri}, cert = Certs, trace = Pid} = State) ->
+   ?trace(Pid, {ssl, {ca, Uri}, 
       erlang:iolist_size(
          public_key:pkix_encode('OTPCertificate', Cert, otp)
       )
@@ -230,8 +230,8 @@ ioctl(socket,  #fsm{sock = Sock}) ->
       }
    };
 
-'ESTABLISHED'({ssl_cert, peer, Cert}, _Pipe, #fsm{cert = Certs, trace = Pid} = State) ->
-   ?trace(Pid, {ssl, peer, 
+'ESTABLISHED'({ssl_cert, peer, Cert}, _Pipe, #fsm{stream = #stream{uri = Uri}, cert = Certs, trace = Pid} = State) ->
+   ?trace(Pid, {ssl, {peer, Uri}, 
       erlang:iolist_size(
          public_key:pkix_encode('OTPCertificate', Cert, otp)
       )
@@ -282,10 +282,10 @@ io_new(SOpt) ->
 
 %%
 %% set stream address(es)
-io_connect(_T, Port, #stream{}=Sock) ->
+io_connect(_T, Port, Uri, #stream{}=Sock) ->
    {ok, Peer} = ssl:peername(Port),
    {ok, Addr} = ssl:sockname(Port),
-   Sock#stream{peer = Peer, addr = Addr, tss = os:timestamp(), ts = os:timestamp()}.
+   Sock#stream{uri = Uri, peer = Peer, addr = Addr, tss = os:timestamp(), ts = os:timestamp()}.
 
 %%
 %% set hibernate timeout

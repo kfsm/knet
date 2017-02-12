@@ -148,6 +148,7 @@
    send  = undefined :: any()      %% outbound stream encoder 
   ,recv  = undefined :: any()      %% inbound  stream encoder
 
+  ,uri   = undefined :: uri:uri()  %% remote peer uri
   ,peer  = undefined :: any()      %% remote peer address
   ,addr  = undefined :: any()      %% local address
 
