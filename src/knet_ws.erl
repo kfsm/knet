@@ -129,7 +129,7 @@ ioctl(_, _) ->
    % connect is compatibility wrapper for knet socket interface (translated to http GET request)
    % TODO: htstream support HTTP/1.2 (see http://www.jmarshall.com/easy/http/)
    pipe:b(Pipe, {connect, Uri}),
-   Hash = base64:encode(crypto:hash(md5, scalar:s(rand:uniform(16#ffff)))),
+   Hash = base64:encode(crypto:hash(md5, scalar:s(random:uniform(16#ffff)))),
    Req  = {'GET', Uri, [
       {'Connection',      <<"Upgrade">>}
      ,{'Upgrade',       <<"websocket">>}
@@ -270,7 +270,7 @@ ioctl(_, _) ->
          {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
    end;
 
-'ESTABLISHED'(hibernate, _Pipe, State) ->
+'ESTABLISHED'(hibernate, Pipe, State) ->
    {next_state, 'ESTABLISHED', State}.
 
 %%%------------------------------------------------------------------

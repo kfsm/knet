@@ -110,8 +110,8 @@ ioctl(socket,  #fsm{sock = Sock}) ->
    case tcp_connect(Uri, State) of
       {ok, Sock} ->
          #stream{addr = Addr, peer = Peer} = Stream1 = 
-            io_ttl(io_tth(io_connect(Sock, Uri, Stream0))),
-         ?trace(Pid, {tcp, {connect, Uri}, tempus:diff(T)}),
+            io_ttl(io_tth(io_connect(Sock, Stream0))),
+         ?trace(Pid, {tcp, connect, tempus:diff(T)}),
          ?access_tcp(#{req => {syn, sack}, peer => Peer, addr => Addr, time => tempus:diff(T)}),
          pipe:a(Pipe, {tcp, self(), {established, Peer}}),
          {next_state, 'ESTABLISHED', 
@@ -131,8 +131,8 @@ ioctl(socket,  #fsm{sock = Sock}) ->
       {ok, Sock} ->
          create_acceptor(Uri, State),
          #stream{addr = Addr, peer = Peer} = Stream1 = 
-            io_ttl(io_tth(io_connect(Sock, Uri, Stream0))),
-         ?trace(Pid, {tcp, {connect, Uri}, tempus:diff(T)}),
+            io_ttl(io_tth(io_connect(Sock, Stream0))),
+         ?trace(Pid, {tcp, connect, tempus:diff(T)}),
          ?access_tcp(#{req => {syn, sack}, peer => Peer, addr => Addr, time => tempus:diff(T)}),
          pipe:a(Pipe, {tcp, self(), {established, Peer}}),
          {next_state, 'ESTABLISHED', 
@@ -194,13 +194,13 @@ ioctl(socket,  #fsm{sock = Sock}) ->
 
 %%
 %%
-'ESTABLISHED'({tcp, _, Pckt}, Pipe, #fsm{stream = #stream{uri = Uri}=Stream0, trace = Pid} = State) ->
+'ESTABLISHED'({tcp, _, Pckt}, Pipe, #fsm{stream = Stream0, trace = Pid} = State) ->
    %% What one can do is to combine {active, once} with gen_tcp:recv().
    %% Essentially, you will be served the first message, then read as many as you 
    %% wish from the socket. When the socket is empty, you can again enable {active, once}. 
    %% Note: release 17.x and later supports {active, n()}
    {_, Stream1} = io_recv(Pckt, Pipe, Stream0),
-   ?trace(Pid, {tcp, {packet, Uri}, byte_size(Pckt)}),
+   ?trace(Pid, {tcp, packet, byte_size(Pckt)}),
    {next_state, 'ESTABLISHED', State#fsm{stream = Stream1}};
 
 'ESTABLISHED'({ttl, Pack}, Pipe, State) ->
@@ -255,10 +255,10 @@ io_new(SOpt) ->
 
 %%
 %% socket connected
-io_connect(Port, Uri, #stream{}=Sock) ->
+io_connect(Port, #stream{}=Sock) ->
    {ok, Peer} = inet:peername(Port),
    {ok, Addr} = inet:sockname(Port),
-   Sock#stream{uri = Uri, peer = Peer, addr = Addr, tss = os:timestamp(), ts = os:timestamp()}.
+   Sock#stream{peer = Peer, addr = Addr, tss = os:timestamp(), ts = os:timestamp()}.
 
 %%
 %% set hibernate timeout
