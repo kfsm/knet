@@ -414,6 +414,7 @@ down_link(Msg, Pipe, State) ->
       http_request_enq(_),
       down_link_egress(Pipe, _),
       % http_request_log(_),
+      http_request_deq(_),
       down_link_return(Pipe, _)
    ].   
 
@@ -467,6 +468,7 @@ up_link(Msg, Pipe, State) ->
       % http_request_trace(_),
       % http_request_enq(_),
       % http_request_log(_),
+      http_request_deq(_),
       up_link_return(Pipe, _)
    ].   
 
@@ -525,16 +527,25 @@ up_link_return(_Pipe, #http{state = State}) ->
 %%
 http_request_enq(#http{is = eof, http = {request,  _} = Ht, state = #fsm{queue = Q} = State} = Http) ->
    Req = #req{http = Ht, treq = os:timestamp()},
-   Http#http{state = State#fsm{queue = q:enq(Req, Q)}};   
+   Http#http{state = State#fsm{queue = deq:enq(Req, Q)}};   
 
 http_request_enq(#http{is = eof, http = {response, _} = Ht, state = #fsm{queue = Q} = State} = Http) ->
-   Req = q:head(Q),
-   io:format("=[ >>> ]=> ~p~n", [Req]),
-   io:format("=[ <<< ]=> ~p~n", [Ht]),
-   Http#http{state = State#fsm{queue = q:tail(Q)}};   
+   % Req = q:head(Q),
+   % io:format("=[ >>> ]=> ~p~n", [Req]),
+   % io:format("=[ <<< ]=> ~p~n", [Ht]),
+   Http#http{state = State#fsm{queue = lens:put(qhead(), lens:tuple(#req.code), Ht, Q)}};   
 
 http_request_enq(Http) ->
    Http.
+
+
+http_request_deq(#http{is = eof, http = {response, _}, state = #fsm{queue = Q} = State} = Http) ->
+   io:format("==> ~p~n", [deq:head(Q)]),
+   Http#http{state = State#fsm{queue = deq:tail(Q)}};
+
+http_request_deq(Http) ->
+   Http.
+
 
 % http_request_enq({eof, {request, Http} = Req, #fsm{mode = client, queue = Queue, t = T} = State}) ->
 %    {eof, Req, State#fsm{queue = q:enq({T, T, Http}, Queue)}};
@@ -572,4 +583,12 @@ http_request_trace({eof, {response, {_Code,_, _}}, #fsm{mode = client, trace = P
 
 http_request_trace(State) ->
    State.
+
+
+%%
+%% lens on queue head
+qhead() ->
+   fun(Fun, Queue) ->
+      lens:fmap(fun(X) -> deq:poke(X, deq:tail(Queue)) end, Fun(deq:head(Queue)))      
+   end.
 
