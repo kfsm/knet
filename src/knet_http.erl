@@ -229,7 +229,10 @@ ioctl(_, _) ->
 %    [
 %       {peer, Peer}
 %    ].
-make_env(_, _) -> [].
+make_env(_Head, Peer) -> 
+   [
+      {peer, uri:authority(Peer, uri:new(http))}
+   ].
 
 
 %%
@@ -320,26 +323,26 @@ up_link(Msg, Pipe, State) ->
 
 %%
 %%
-up_link_decode(Msg, #fsm{recv = Recv0} = State) ->
+up_link_decode(Msg, #fsm{recv = Recv0, peer = Peer} = State) ->
    {Pckt, Recv1} = htstream:decode(Msg, Recv0),
    #http{
       is    = htstream:state(Recv1),
       http  = htstream:http(Recv1),
-      pack  = up_link_decode(Pckt),
+      pack  = up_link_message(Pckt, Peer),
       state = State#fsm{recv = Recv1} 
    }.
 
-up_link_decode({Mthd, Url, Head}) 
+up_link_message({Mthd, Url, Head}, Peer) 
  when ?is_method(Mthd) ->
    Uri = request_url(Url, Head),
-   Env = make_env(Head, undefined),
+   Env = make_env(Head, Peer),
    [{Mthd, Uri, Head, Env}];
 
-up_link_decode({Code, Msg, Head})
+up_link_message({Code, Msg, Head}, Peer)
  when ?is_status(Code) ->
-   [{Code, Msg, Head, make_env(Head, undefined)}];
+   [{Code, Msg, Head, make_env(Head, Peer)}];
 
-up_link_decode(Chunk) ->
+up_link_message(Chunk, _Peer) ->
    [X || X <- Chunk, X =/= <<>>].
 
 %%
