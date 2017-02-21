@@ -47,7 +47,8 @@
   ,recv  = undefined :: htstream:http()  %% ingress packet stream
   ,send  = undefined :: htstream:http()  %% egress  packet stream
   ,queue = undefined :: datum:q()        %% queue of in-flight request
-  ,t     = undefined :: tempus:t()       %%
+  ,t     = undefined :: tempus:t()       %% 
+  ,peer  = undefined :: uri:uri()        %% identity of remote peer
 
   ,trace     = undefined :: pid()        %% knet stats function
   ,so        = undefined :: list()       %% socket options
@@ -66,7 +67,7 @@
    http  = undefined :: _
   ,code  = undefined :: _
   ,treq  = undefined :: _
-  ,teoh  = undefined :: _       
+  ,teoh  = undefined :: _
 }).
 
 
@@ -156,9 +157,9 @@ ioctl(_, _) ->
 %% peer connection
 'STREAM'({Prot, _, {established, Peer}}, _Pipe, State)
  when ?is_transport(Prot) ->
-   {next_state, 'STREAM', State};
+   {next_state, 'STREAM', State#fsm{peer = Peer}};
 
-'STREAM'({Prot, _, {terminated, _}}, Pipe, State)
+'STREAM'({Prot, _, {terminated, _}}, _Pipe, State)
  when ?is_transport(Prot) ->
    % case htstream:state(Stream#stream.recv) of
    %    payload -> 
@@ -178,14 +179,19 @@ ioctl(_, _) ->
 
 %%
 %% ingress packet
-'STREAM'({Prot, Peer, Pckt}, Pipe, State)
+'STREAM'({Prot, _, Pckt}, Pipe, State0)
  when ?is_transport(Prot), is_binary(Pckt) ->
    try
-      {next_state, 'STREAM', up_link(Pckt, Pipe, State)}
+      case up_link(Pckt, Pipe, State0) of
+         {upgrade, _, _} = Upgrade ->
+            Upgrade;
+         State1 ->
+            {next_state, 'STREAM', State1}
+      end
    catch _:Reason ->
       ?NOTICE("knet [http]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
       pipe:b(Pipe, {http, self(), eof}),
-      {stop, normal, State}
+      {stop, normal, State0}
    end;
 
 %%
@@ -216,131 +222,6 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------
 
-
-%%
-%% set remote peer address
-io_peer(Peer, #stream{}=Sock) ->
-   Sock#stream{
-      peer = uri:authority(Peer, uri:new(http))
-   }.
-
-% %%
-% %% set hibernate timeout
-% io_tth(#stream{}=Sock) ->
-%    Sock#stream{
-%       tth = tempus:timer(Sock#stream.tth, hibernate)
-%    }.
-
-
-%%
-%% recv packet
-% http_recv(Pckt, Pipe, #req{}=Sock) ->
-%    recv_http(Pckt, Pipe, Sock).
-
-% recv_http(Pckt, Pipe, #req{}=Sock) ->
-%    % ?DEBUG("knet [http] ~p: recv ~p~n~p", [self(), Sock#stream.peer, Pckt]),
-%    case htstream:decode(Pckt, Sock#req.recv) of
-%       {{Mthd, Url, Head}, Recv} when ?is_method(Mthd) ->
-%          Uri = request_url(Url, Head),
-%          Env = make_env(Head, Sock),
-%          pipe:b(Pipe, {http(Recv, Head), self(), {Mthd, Uri, Head, Env}}),
-%          {htstream:state(Recv), Sock#req{recv=Recv}};
-
-%       {{Code, Msg, Head}, Recv} when ?is_status(Code) ->
-%          pipe:b(Pipe, {http, self(), {Code, Msg, Head, make_env(Head, Sock)}}),
-%          {htstream:state(Recv), Sock#req{recv=Recv}};
-
-%       {Chunk, Recv} ->
-%          lists:foreach(
-%             fun(<<>>) -> ok; (X) -> pipe:b(Pipe, {http, self(), X}) end, 
-%             Chunk
-%          ),
-%          {htstream:state(Recv), Sock#req{recv=Recv}}
-%    end.
-
-%%
-%% send packet
-% io_send({Mthd, {uri, _, _}=Uri, Head}, Pipe, Sock) ->
-%    io_send({Mthd, get_or_else(uri:suburi(Uri), <<$/>>), [{'Host', uri:authority(Uri)}|Head]}, Pipe, Sock);
-
-% io_send({Mthd, {uri, _, _}=Uri, Head, Msg}, Pipe, Sock) ->
-%    io_send({Mthd, get_or_else(uri:suburi(Uri), <<$/>>), [{'Host', uri:authority(Uri)}|Head], Msg}, Pipe, Sock);
-
-% io_send(Msg, Pipe, #stream{send = Send0, peer = _Peer}=Sock) ->
-%    ?DEBUG("knet [http] ~p: send ~p~n~p", [self(), _Peer, Msg]),
-%    {Pckt, Send1} = htstream:encode(Msg, Send0),
-%    lists:foreach(fun(X) -> pipe:b(Pipe, X) end, Pckt),
-%    {htstream:state(Send1), Sock#stream{send=Send1}}.
-
-% send_http({Mthd, {uri, _, _}=Uri, Head}, Pipe, Sock) ->
-%    send_http({Mthd, get_or_else(uri:suburi(Uri), <<$/>>), [{'Host', uri:authority(Uri)}|Head]}, Pipe, Sock);
-
-% send_http({Mthd, {uri, _, _}=Uri, Head, Msg}, Pipe, Sock) ->
-%    send_http({Mthd, get_or_else(uri:suburi(Uri), <<$/>>), [{'Host', uri:authority(Uri)}|Head], Msg}, Pipe, Sock);
-
-% send_http(Msg, Pipe, #req{send = Send0} = Sock) ->
-%    % ?DEBUG("knet [http] ~p: send ~p~n~p", [self(), _Peer, Msg]),
-%    {Pckt, Send1} = htstream:encode(Msg, Send0),
-%    lists:foreach(fun(X) -> pipe:b(Pipe, X) end, Pckt),
-%    {htstream:state(Send1), Sock#req{send=Send1}}.
-
-
-%%
-%% make request uri
-request_url({uri, _, _}=Url, Head) ->
-   case uri:authority(Url) of
-      undefined ->
-         uri:authority(opts:val('Host', Head), uri:schema(http, Url));
-      _ ->
-         uri:schema(http, Url)
-   end;
-request_url(Url, Head) ->
-   request_url(uri:new(Url), Head).
-
-
-%%
-%% http established tag
-http(Http, Head) ->
-   case htstream:state(Http) of
-      upgrade ->
-         case opts:val('Upgrade', undefined, Head) of
-            <<"websocket">> ->
-               ws;
-            _ ->
-               http
-         end;
-      _       ->
-         http         
-   end.
-
-%%  Http, Stream, State#fsm.so
-%%
-% server_upgrade(Pipe, #fsm{stream=#stream{recv=Http}=Stream, so=SOpt}=State) ->
-%    {request, {Mthd, Url, Head}} = htstream:http(Http),
-%    Uri = request_url(Url, Head),
-%    Env = make_env(Head, Stream),
-%    Req = {Mthd, Uri, Head, Env},
-%    case {Mthd, opts:val('Upgrade', undefined, Head)} of
-%       {'CONNECT',       _} ->
-%          {Msg, _} = htstream:encode(
-%             {200, [], <<>>}
-%            ,htstream:new()
-%          ),
-%          pipe:a(Pipe, Msg),
-%          {next_state, 'TUNNEL', State};
-%       {_, <<"websocket">>} ->
-%          %% @todo: upgrade requires better design 
-%          %%  - new protocol needs to run state-less init code
-%          %%  - it shall emit message
-%          %%  - it shall return pipe compatible upgrade signature
-%          access_log(websocket, State),
-%          {Msg, Upgrade} = knet_ws:ioctl({upgrade, Req, SOpt}, undefined),
-%          pipe:a(Pipe, Msg),
-%          Upgrade;
-%       _ ->
-%          throw(not_implemented)
-%    end.
-
 %%
 %% make environment
 %% @todo: handle cookie and request as PHP $_REQUEST
@@ -359,42 +240,6 @@ make_head() ->
      ,{'Date',   scalar:s(tempus:encode(?HTTP_DATE, os:timestamp()))}
    ].
 
-%%
-%% process access log
-% access_log(Upgrade, #fsm{stream = #stream{ts = T, recv = Recv, peer = Peer}})
-%  when is_atom(Upgrade) ->
-%    {_, {_Mthd,  Url,  Head}} = htstream:http(Recv),
-%    ?access_http(#{
-%       req  => {upgrade, Upgrade}
-%      ,peer => uri:host(Peer)
-%      ,addr => request_url(Url, Head)
-%      ,ua   => opts:val('User-Agent', undefined, Head)
-%      ,byte => htstream:octets(Recv)
-%      ,pack => htstream:packets(Recv)
-%      ,time => tempus:diff(T)
-%    });
-
-access_log(_, #fsm{}) ->
-   {};
-
-% @todo: use new model
-% access_log(Send, State) ->
-%    {T, Recv} = q:head(State#fsm.req),
-%    {_, {Mthd,  Url,  Head}} = htstream:http(Recv),
-%    {_, {Code, _Msg, _Head}} = htstream:http(Send),
-%    ?access_http(#{
-%       req  => {Mthd, Code}
-%      ,peer => uri:host(State#fsm.stream#stream.peer)
-%      ,addr => request_url(Url, Head)
-%      ,ua   => opts:val('User-Agent', undefined, Head)
-%      ,byte => htstream:octets(Recv)  + htstream:octets(Send)
-%      ,pack => htstream:packets(Recv) + htstream:packets(Send)
-%      ,time => tempus:diff(T)
-%    }),
-%    q:tail(State#fsm.req).
-
-access_log(_, State) ->
-   State.
 
 %%
 %%
@@ -413,7 +258,8 @@ down_link(Msg, Pipe, State) ->
       down_link_encode(Msg, State),
       http_request_enq(_),
       down_link_egress(Pipe, _),
-      % http_request_log(_),
+      http_request_trace(_),
+      http_request_log(_),
       http_request_deq(_),
       down_link_return(Pipe, _)
    ].   
@@ -450,6 +296,7 @@ down_link_return(_Pipe, #http{is = eof, state = #fsm{send = Send} = State}) ->
    State#fsm{send = htstream:new(Send)};
 
 down_link_return(Pipe, #http{is = eoh, state = State}) ->
+   %% htstream has a feature on eoh event, 
    down_link([], Pipe, State);
 
 down_link_return(_Pipe, #http{state = State}) ->
@@ -465,9 +312,8 @@ up_link(Msg, Pipe, State) ->
       up_link_decode(Msg, State),
       http_request_enq(_),
       up_link_ingress(Pipe, _),
-      % http_request_trace(_),
-      % http_request_enq(_),
-      % http_request_log(_),
+      http_request_trace(_),
+      http_request_log(_),
       http_request_deq(_),
       up_link_return(Pipe, _)
    ].   
@@ -487,7 +333,6 @@ up_link_decode({Mthd, Url, Head})
  when ?is_method(Mthd) ->
    Uri = request_url(Url, Head),
    Env = make_env(Head, undefined),
-   % pipe:b(Pipe, {http(Recv, Head), self(), {Mthd, Uri, Head, Env}}),
    [{Mthd, Uri, Head, Env}];
 
 up_link_decode({Code, Msg, Head})
@@ -499,6 +344,14 @@ up_link_decode(Chunk) ->
 
 %%
 %%
+up_link_ingress(Pipe, #http{is = upgrade, http = {_, {_, _, Head}}, pack = Pack} = Http) ->
+   Prot = case lens:get(lens:pair('Upgrade'), Head) of
+      <<"websocket">> -> ws;
+      _               -> http
+   end,
+   lists:foreach(fun(X) -> pipe:b(Pipe, {Prot, self(), X}) end, Pack),
+   Http;
+
 up_link_ingress(Pipe, #http{pack = Pack} = Http) ->
    % ?DEBUG("knet [http] ~p: recv ~p~n~p", [self(), Sock#stream.peer, Pckt]),
    lists:foreach(fun(X) -> pipe:b(Pipe, {http, self(), X}) end, Pack),
@@ -514,80 +367,120 @@ up_link_return(Pipe, #http{is = eoh, state = State}) ->
    %% htstream has a feature on eoh event, 
    up_link(<<>>, Pipe, State);
 
-up_link_return(_Pipe, #http{is = upgrade, state = State}) ->
+up_link_return(Pipe, #http{is = upgrade, http = {_, {_, _, Head}}} = Http) ->
    % server_upgrade(Pipe, State#fsm{stream=Stream});
-   State;
+   up_link_upgrade(lens:get(lens:pair('Upgrade'), Head), Pipe, Http);
 
 up_link_return(_Pipe, #http{state = State}) ->
    State.
 
 
+up_link_upgrade(<<"websocket">>, Pipe, #http{http = {_, {Mthd, Uri, Head}}, state = #fsm{so = SOpt}}) ->
+   %% @todo: upgrade requires better design 
+   %%  - new protocol needs to run state-less init code
+   %%  - it shall emit message
+   %%  - it shall return pipe compatible upgrade signature
+   % access_log(websocket, State),
+   Req = {Mthd, Uri, Head, []},
+   {Msg, Upgrade} = knet_ws:ioctl({upgrade, Req, SOpt}, undefined),
+   pipe:a(Pipe, Msg),
+   Upgrade;
+
+up_link_upgrade(Upgrade, _, _) ->
+   throw({not_implemented, Upgrade}).
+
 
 %%
 %%
-http_request_enq(#http{is = eof, http = {request,  _} = Ht, state = #fsm{queue = Q} = State} = Http) ->
-   Req = #req{http = Ht, treq = os:timestamp()},
-   Http#http{state = State#fsm{queue = deq:enq(Req, Q)}};   
+http_request_enq(#http{is = eof, http = {request,  _} = Ht, state = #fsm{queue = Q0} = State} = Http) ->
+   Req = #req{
+      http = Ht, 
+      treq = os:timestamp()
+   },
+   Http#http{state = State#fsm{queue = deq:enq(Req, Q0)}};   
 
-http_request_enq(#http{is = eof, http = {response, _} = Ht, state = #fsm{queue = Q} = State} = Http) ->
-   % Req = q:head(Q),
-   % io:format("=[ >>> ]=> ~p~n", [Req]),
-   % io:format("=[ <<< ]=> ~p~n", [Ht]),
-   Http#http{state = State#fsm{queue = lens:put(qhead(), lens:tuple(#req.code), Ht, Q)}};   
+http_request_enq(#http{is = eof, http = {response, _} = Ht, state = #fsm{queue = Q0} = State} = Http) ->
+   Q1 = lens:put(lens_qhd(), lens:tuple(#req.code), Ht, Q0),
+   Http#http{state = State#fsm{queue = Q1}};   
 
 http_request_enq(Http) ->
    Http.
 
-
+%%
+%%
 http_request_deq(#http{is = eof, http = {response, _}, state = #fsm{queue = Q} = State} = Http) ->
-   io:format("==> ~p~n", [deq:head(Q)]),
    Http#http{state = State#fsm{queue = deq:tail(Q)}};
 
 http_request_deq(Http) ->
    Http.
 
-
-% http_request_enq({eof, {request, Http} = Req, #fsm{mode = client, queue = Queue, t = T} = State}) ->
-%    {eof, Req, State#fsm{queue = q:enq({T, T, Http}, Queue)}};
-% http_request_enq(State) ->
-%    State.
-
 %%
 %%
-http_request_log({eof, {response, Http}, _} = State) ->
-   io:format("=[ log ]=> ~p~n", [Http]),
-   State;
-http_request_log(State) ->
-   State.
+http_request_log(#http{is = eof, http = {response, _}, state = #fsm{queue = Q, peer = Peer} = State} = Http) ->
+   #req{
+      http = {_, {Mthd,  Url, HeadA}}, 
+      code = {_, {Code, _Msg, HeadB}}, 
+      treq = T
+   } = deq:head(Q),
+   ?access_http(#{
+      req  => {Mthd, Code}
+     ,peer => Peer
+     ,addr => request_url(Url, HeadA)
+     ,ua   => opts:val('User-Agent', opts:val('Server', undefined, HeadB), HeadA)
+     ,time => tempus:diff(T)
+   }),
+   Http;
+
+http_request_log(#http{is = upgrade, http = {_, {_, Url, Head}}, state = #fsm{peer = Peer}} = Http) ->
+   Upgrade = lens:get(lens:pair('Upgrade'), Head),
+   ?access_http(#{
+      req  => {upgrade, Upgrade}
+     ,peer => Peer
+     ,addr => request_url(Url, Head)
+     ,ua   => opts:val('User-Agent', undefined, Head)
+   }),
+   Http;
+
+http_request_log(Http) ->
+   Http.
+
+%%
+%% make request uri
+request_url({uri, _, _}=Url, Head) ->
+   case uri:authority(Url) of
+      undefined ->
+         uri:authority(opts:val('Host', Head), uri:schema(http, Url));
+      _ ->
+         uri:schema(http, Url)
+   end;
+request_url(Url, Head) ->
+   request_url(uri:new(Url), Head).
+
 
 %%
 %% 
-http_request_trace({_, _, #fsm{trace = undefined}} = State) ->
-   State;
+http_request_trace(#http{state = #fsm{trace = undefined}} = Http) ->
+   Http;
 
-% http_request_trace({eoh, {request,  {Mthd, _, _}}, #fsm{mode = client, trace = Pid, queue = Queue}} = State) ->
-%    knet_log:trace(Pid, {http, mthd, Mthd}),
-%    % knet_log:trace(Pid, {http, ttfb, tempus:diff(Stream#stream.ts)}),
-%    State;
-
-http_request_trace({eoh, {response, {Code, _, _}} = Response, #fsm{mode = client, trace = Pid, queue = Queue} = State}) ->
-   {{T, _, Req}, Tail} = deq:deq(Queue),
+http_request_trace(#http{is = eoh, http = {response, {Code, _, _}}, state = #fsm{trace = Pid, queue = Q0} = State} = Http) ->
+   T = lens:get(lens_qhd(), lens:tuple(#req.treq), Q0),
    knet_log:trace(Pid, {http, code, Code}),
    knet_log:trace(Pid, {http, ttfb, tempus:diff(T)}),
-   {eoh, Response, State#fsm{queue = deq:poke({T, os:timestamp(), Req}, Tail)}};
+   Q1 = lens:put(lens_qhd(), lens:tuple(#req.teoh), os:timestamp(), Q0),
+   Http#http{state = State#fsm{queue = Q1}};   
 
-http_request_trace({eof, {response, {_Code,_, _}}, #fsm{mode = client, trace = Pid, queue = Queue}} = State) ->
-   {_, T, _} = q:head(Queue),
+http_request_trace(#http{is = eof, http = {response, _}, state = #fsm{trace = Pid, queue = Q0}} = Http) ->
+   T = lens:get(lens_qhd(), lens:tuple(#req.teoh), Q0),
    knet_log:trace(Pid, {http, ttmr, tempus:diff(T)}),
-   State;
+   Http;
 
-http_request_trace(State) ->
-   State.
+http_request_trace(Http) ->
+   Http.
 
 
 %%
-%% lens on queue head
-qhead() ->
+%% focus lens on queue head
+lens_qhd() ->
    fun(Fun, Queue) ->
       lens:fmap(fun(X) -> deq:poke(X, deq:tail(Queue)) end, Fun(deq:head(Queue)))      
    end.
