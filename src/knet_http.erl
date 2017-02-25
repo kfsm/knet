@@ -43,8 +43,7 @@
 %%
 %%
 -record(fsm, {
-   mode  = undefined :: server | client  %%
-  ,recv  = undefined :: htstream:http()  %% ingress packet stream
+   recv  = undefined :: htstream:http()  %% ingress packet stream
   ,send  = undefined :: htstream:http()  %% egress  packet stream
   ,queue = undefined :: datum:q()        %% queue of in-flight request
   ,t     = undefined :: tempus:t()       %% 
@@ -92,7 +91,7 @@ init(Opts) ->
       #fsm{
          recv    = htstream:new()
         ,send    = htstream:new()
-        ,queue   = deq:new() 
+        ,queue   = q:new()
 
         ,trace   = opts:val(trace, undefined, Opts)
         ,so      = Opts
@@ -121,20 +120,20 @@ ioctl(_, _) ->
 
 'IDLE'({accept,  Uri}, Pipe, State) ->
    pipe:b(Pipe, {accept, Uri}),
-   {next_state, 'STREAM', State#fsm{mode = server}};
+   {next_state, 'STREAM', State};
 
 'IDLE'({connect, Uri}, Pipe, State) ->
    % connect is compatibility wrapper for knet socket interface (translated to http GET request)
    % @todo: htstream support HTTP/1.2 (see http://www.jmarshall.com/easy/http/)
    'IDLE'({'GET', Uri, [{'Connection', <<"keep-alive">>}]}, Pipe, State);
 
-'IDLE'({_Mthd, {uri, _, _}=Uri, _Head}=Req, Pipe, State) ->
+'IDLE'({_Mthd, {uri, _, _}=Uri, _Head}=Req, Pipe, #fsm{queue = Queue} = State) ->
    pipe:b(Pipe, {connect, Uri}),
-   'STREAM'(Req, Pipe, State#fsm{mode = client});
+   {next_state, 'STREAM', State#fsm{queue = q:enq(Req, Queue)}};
 
-'IDLE'({_Mthd, {uri, _, _}=Uri, _Head, _Msg}=Req, Pipe, State) ->
+'IDLE'({_Mthd, {uri, _, _}=Uri, _Head, _Msg}=Req, Pipe, #fsm{queue = Queue} = State) ->
    pipe:b(Pipe, {connect, Uri}),
-   'STREAM'(Req, Pipe, State#fsm{mode = client}).
+   {next_state, 'STREAM', State#fsm{queue = q:enq(Req, Queue)}}.
 
 %%%------------------------------------------------------------------
 %%%
@@ -155,9 +154,16 @@ ioctl(_, _) ->
 
 %%
 %% peer connection
-'STREAM'({Prot, _, {established, Peer}}, _Pipe, State)
+'STREAM'({Prot, _, {established, Peer}}, Pipe, #fsm{queue = Queue} = State)
  when ?is_transport(Prot) ->
-   {next_state, 'STREAM', State#fsm{peer = Peer}};
+   % all delayed requests shall be passed using request pipe but tcp message came from inverted one
+   % <-[ tcp ]--(b) --[ http ]-- (a)--[ client ]-<
+   'STREAM'(q:head(Queue), pipe:swap(Pipe), 
+      State#fsm{
+         peer  = Peer, 
+         queue = q:tail(Queue)
+      }
+   );
 
 'STREAM'({Prot, _, {terminated, _}}, _Pipe, State)
  when ?is_transport(Prot) ->
@@ -225,10 +231,6 @@ ioctl(_, _) ->
 %%
 %% make environment
 %% @todo: handle cookie and request as PHP $_REQUEST
-% make_env(_Head, #stream{peer=Peer}) ->
-%    [
-%       {peer, Peer}
-%    ].
 make_env(_Head, Peer) -> 
    [
       {peer, uri:authority(Peer, uri:new(http))}
@@ -237,11 +239,11 @@ make_env(_Head, Peer) ->
 
 %%
 %% make server headers
-make_head() ->
-   [
-      {'Server', ?HTTP_SERVER}
-     ,{'Date',   scalar:s(tempus:encode(?HTTP_DATE, os:timestamp()))}
-   ].
+% make_head() ->
+%    [
+%       {'Server', ?HTTP_SERVER}
+%      ,{'Date',   scalar:s(tempus:encode(?HTTP_DATE, os:timestamp()))}
+%    ].
 
 
 %%
@@ -419,7 +421,7 @@ http_request_deq(Http) ->
 
 %%
 %%
-http_request_log(#http{is = eof, http = {response, _}, state = #fsm{queue = Q, peer = Peer} = State} = Http) ->
+http_request_log(#http{is = eof, http = {response, _}, state = #fsm{queue = Q, peer = Peer}} = Http) ->
    #req{
       http = {_, {Mthd,  Url, HeadA}}, 
       code = {_, {Code, _Msg, HeadB}}, 
