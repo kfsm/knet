@@ -188,6 +188,10 @@ ioctl(socket,  #fsm{sock = Sock}) ->
 %%%
 %%%------------------------------------------------------------------   
 
+'ESTABLISHED'({ssl_error, _, closed}, Pipe, State) ->
+   pipe:b(Pipe, {ssl, self(), {terminated, normal}}),   
+   {stop, normal, State};
+
 'ESTABLISHED'({ssl_error, _, Reason}, Pipe, State) ->
    pipe:b(Pipe, {ssl, self(), {terminated, Reason}}),   
    {stop, Reason, State};
