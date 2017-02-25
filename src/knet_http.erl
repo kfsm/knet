@@ -154,6 +154,10 @@ ioctl(_, _) ->
 
 %%
 %% peer connection
+'STREAM'({Prot, _, {established, Peer}}, Pipe, #fsm{queue = ?NULL} = State)
+ when ?is_transport(Prot) ->
+   {next_state, 'STREAM', State#fsm{peer = Peer}};
+
 'STREAM'({Prot, _, {established, Peer}}, Pipe, #fsm{queue = Queue} = State)
  when ?is_transport(Prot) ->
    % all delayed requests shall be passed using request pipe but tcp message came from inverted one
