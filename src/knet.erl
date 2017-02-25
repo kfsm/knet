@@ -96,7 +96,7 @@ socket(Url) ->
    socket(uri:new(Url), []).
 
 create(Stack, Opts) ->
-   case opts:val(nopipe, false, Opts) of
+   case opts:get(nopipe, false, Opts) of
       nopipe ->
          pipe:make(Stack);
       _      ->
@@ -156,7 +156,7 @@ acceptor(Fun, Uri, Opts) ->
 -spec bind(any(), any()) -> pid().
 
 bind({uri, _, _}=Uri, Opts) ->
-   Sock = socket(Uri, Opts),
+   Sock = socket(Uri, [X || X <- Opts, X /= nopipe]),
    _    = pipe:send(Sock, {accept, Uri}),
    Sock;
 
