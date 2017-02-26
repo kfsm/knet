@@ -36,6 +36,8 @@
 %%   127.0.0.1  -  "GET http://127.0.0.1:8888/" 200 "curl/7.37.1" 252 4 37123209
 -module(knet_log).
 -include("knet.hrl").
+-include("include/knet.hrl").
+
 
 -export([
    common/1
@@ -136,5 +138,20 @@ val(X) ->
 
 trace(undefined, _Msg) ->
    ok;
+trace({Session, Pid}, {Prot, Event, Value}) ->
+   pipe:send(Pid, 
+      #trace{
+         t        = os:timestamp(),
+         id       = Session,
+         protocol = Prot,
+         %% @todo: define peer value. It is not available at current trace interface
+         event    = Event,
+         value    = Value
+      }
+   ),
+   ok;
 trace(Pid, Msg) ->
-   _ = pipe:send(Pid, {trace, os:timestamp(), Msg}), ok.
+   %% @todo: this is kept for compatibility reasons
+   pipe:send(Pid, {trace, os:timestamp(), Msg}), 
+   ok.
+
