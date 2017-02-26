@@ -19,10 +19,18 @@
 %%   IO-monad: http 
 -module(k_http).
 -compile({parse_transform, category}).
+
+-include("knet.hrl").
 -include_lib("datum/include/datum.hrl").
 
 -export([return/1, fail/1, '>>='/2]).
--export([new/1, new/2, url/1, h/2, header/2, payload/1]).
+-export([
+   new/1, new/2, 
+   x/1, method/1, 
+   h/2, header/2, 
+   d/1, payload/1, 
+   r/0, request/0, request/1
+]).
 
 -type m(A)    :: fun((_) -> [A|_]).
 -type f(A, B) :: fun((A) -> m(B)).
@@ -37,8 +45,8 @@
 %%
 -spec return(A) -> m(A).
 
-return(_) ->
-   fun http_io/1.
+return(X) ->
+   m_state:return(X).
 
 %%
 %%
@@ -56,23 +64,28 @@ fail(X) ->
 
 %%
 %%
--spec new(atom()) -> m(_).
--spec new(atom(), list()) -> m(_).
+-spec new(_) -> m(_).
+-spec new(_, list()) -> m(_).
 
-new(Mthd) ->
-   m_state:put(method(), Mthd).
+new(Uri) ->
+   new(Uri, []).
 
-new(Mthd, SOpt) ->
-   fun(State) ->
-      [Mthd|lens:put(method(), Mthd, lens:put(so(), SOpt, State))]
+new(Uri, SOpt) ->
+   fun(State0) ->
+      Id = scalar:s(Uri),
+      [Id|lens:put(so(), SOpt, lens:put(uri(), uri:new(Uri), lens:put(id(), Id, State0)))]
    end.
 
 %%
 %%
--spec url(_) -> m(_).
+-spec x(_) -> m(_).
+-spec method(_) -> m(_).
 
-url(Url) ->
-   m_state:put(url(), Url).
+x(Mthd) ->
+   method(Mthd).
+
+method(Mthd) ->
+   m_state:put(method(), Mthd).
 
 %%
 %%
@@ -88,10 +101,29 @@ header(Head, Value) ->
 
 %%
 %%
+-spec d(_) -> m(_).
 -spec payload(_) -> m(_).
+
+d(Value) ->
+   payload(Value).
 
 payload(Value) ->
    m_state:put(payload(), Value).
+
+%%
+%%
+-spec r() -> m(_).
+-spec request() -> m(_).
+-spec request(_) -> m(_).
+
+r() ->
+   request().
+
+request() ->
+   request(30000).
+
+request(Timeout) ->
+   fun(State) -> http_io(Timeout, State) end.   
 
 %%%----------------------------------------------------------------------------   
 %%%
@@ -99,23 +131,32 @@ payload(Value) ->
 %%%
 %%%----------------------------------------------------------------------------
 
+id() ->
+   lens:map(id, ?NONE).
+
+focus() ->
+   fun(Fun, Map) ->
+      Key = maps:get(id, Map),
+      lens:fmap(fun(X) -> maps:put(Key, X, Map) end, Fun(maps:get(Key, Map, #{})))
+   end.
+
 so() ->
-   lens:c([ lens:map(http, #{}), lens:map(so, []) ]).
+   lens:c([focus(), lens:map(so, [])]).
 
 method() ->
-   lens:c([ lens:map(http, #{}), lens:map(method, ?NONE) ]).
+   lens:c([focus(), lens:map(method, ?NONE)]).
 
-url() ->
-   lens:c([ lens:map(http, #{}), lens:map(url, ?NONE) ]).
+uri() ->
+   lens:c([focus(), lens:map(uri, ?NONE)]).
 
 header() ->
-   lens:c([ lens:map(http, #{}), lens:map(head, []) ]).
+   lens:c([focus(), lens:map(head, [])]).
 
 header(Head) ->
-   lens:c([ lens:map(http, #{}), lens:map(head, []), lens:pair(Head, ?NONE) ]).
+   lens:c([focus(), lens:map(head, []), lens:pair(Head, ?NONE)]).
 
 payload() ->
-   lens:c([ lens:map(http, #{}), lens:map(payload, ?NONE) ]).
+   lens:c([focus(), lens:map(payload, ?NONE)]).
 
 %%%----------------------------------------------------------------------------   
 %%%
@@ -123,39 +164,38 @@ payload() ->
 %%%
 %%%----------------------------------------------------------------------------
 
-http_io(State) ->
+http_io(Timeout, State) ->
    Sock = sock(State),
    Tx   = erlang:monitor(process, Sock),
    send(Sock, State),
    receive
       {'DOWN', Tx, _, _, _Reason} ->
          erlang:demonitor(Tx, [flush]),
-         Url       = uri:new(lens:get(url(), State)),
-         Authority = uri:authority(Url),
-         http_io(maps:remove(Authority, State))
+         Authority = uri:authority( lens:get(uri(), State) ),
+         http_io(Timeout, maps:remove(Authority, State))
    after 0 ->
       erlang:demonitor(Tx, [flush]),
-      recv(Sock, State)
+      recv(Sock, Timeout, State)
    end.
 
 %%
 %% create a new socket or re-use existed one
 sock(State) ->
    SOpt      = lens:get(so(), State),
-   Url       = uri:new(lens:get(url(), State)),
-   Authority = uri:authority(Url),
+   Uri       = lens:get(uri(), State),
+   Authority = uri:authority(Uri),
    case State of
       #{Authority := Sock} ->
          Sock;
       _ ->
-         knet:socket(Url, SOpt)
+         knet:socket(Uri, SOpt)
    end.
 
 %%
 %%
 send(Sock, State) ->
    Mthd = lens:get(method(), State),   
-   Url  = uri:new(lens:get(url(), State)),
+   Url  = lens:get(uri(), State),
    Head = lens:get(header(), State),
    knet:send(Sock, {Mthd, Url, Head}),
    [$?|| lens:get(payload(), State), knet:send(Sock, _)],
@@ -163,24 +203,27 @@ send(Sock, State) ->
 
 %%
 %%
-recv(Sock, State) ->
-   case recv(Sock) of
+recv(Sock, Timeout, State) ->
+   case recv(Sock, Timeout) of
       {ok, Pckt} ->
          unit(Sock, Pckt, State);
       {error, Reason} ->
-         exit({knet, Reason})
+         exit({k_http, Reason})
    end.
 
-recv(Sock) ->
-   case knet:recv(Sock, 60000, [noexit]) of
+recv(Sock, Timeout) ->
+   case knet:recv(Sock, Timeout, [noexit]) of
       {http, Sock, eof} ->
          {ok, []};
       {http, Sock, {_, _, _, _} = Http} ->
-         [$? || recv(Sock), join(Http, _)];
+         [$? || recv(Sock, Timeout), join(Http, _)];
       {http, Sock, Pckt} ->
-         [$? || recv(Sock), join(Pckt, _)];
+         [$? || recv(Sock, Timeout), join(Pckt, _)];
+      {http, _, _} = Http ->
+         ?WARNING("k [http]: unexpected message: ~p~n", [Http]),
+         recv(Sock, Timeout);
       {ioctl, _, _} ->
-         recv(Sock);
+         recv(Sock, Timeout);
       {error, _} = Error ->
          Error
    end.
@@ -195,7 +238,6 @@ unit(Sock, Pckt, State) ->
       <<"close">> ->
          [Pckt|maps:remove(http, State)];
       _           ->
-         Url       = uri:new(lens:get(url(), State)),
-         Authority = uri:authority(Url),
-         [Pckt|maps:remove(http, State#{Authority => Sock})]
+         Authority = uri:authority( lens:get(uri(), State) ),
+         [Pckt|State#{Authority => Sock}]
    end.
