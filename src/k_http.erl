@@ -22,27 +22,42 @@
 -include_lib("datum/include/datum.hrl").
 
 -export([return/1, fail/1, '>>='/2]).
--export([new/1, new/2, url/1, header/2]).
+-export([new/1, new/2, url/1, h/2, header/2, payload/1]).
+
+-type m(A)    :: fun((_) -> [A|_]).
+-type f(A, B) :: fun((A) -> m(B)).
 
 %%%----------------------------------------------------------------------------   
 %%%
 %%% http monad
 %%%
 %%%----------------------------------------------------------------------------
-return(X) ->
-   fun(State) ->
-      [$.||
-         sock(State),
-         send(_, State),
-         recv(_, State)
-      ]
-   end.
+
+%%
+%%
+-spec return(A) -> m(A).
+
+return(_) ->
+   fun http_io/1.
+
+%%
+%%
+-spec fail(_) -> _.
 
 fail(X) ->
    m_state:fail(X).
 
+%%
+%%
+-spec '>>='(m(A), f(A, B)) -> m(B).
+
 '>>='(X, Fun) ->
    m_state:'>>='(X, Fun).
+
+%%
+%%
+-spec new(atom()) -> m(_).
+-spec new(atom(), list()) -> m(_).
 
 new(Mthd) ->
    m_state:put(method(), Mthd).
@@ -52,12 +67,31 @@ new(Mthd, SOpt) ->
       [Mthd|lens:put(method(), Mthd, lens:put(so(), SOpt, State))]
    end.
 
+%%
+%%
+-spec url(_) -> m(_).
+
 url(Url) ->
    m_state:put(url(), Url).
 
+%%
+%%
+-spec h(_, _) -> m(_).
+-spec header(_, _) -> m(_).
+
+h(Head, Value) ->
+   header(Head, Value).
+
 header(Head, Value) ->
-   % @todo: fix htstream to accept various headers
+   % @todo: htstream works only with atoms, we need to fix library
    m_state:put(header(scalar:atom(Head)), scalar:s(Value)).
+
+%%
+%%
+-spec payload(_) -> m(_).
+
+payload(Value) ->
+   m_state:put(payload(), Value).
 
 %%%----------------------------------------------------------------------------   
 %%%
@@ -80,32 +114,59 @@ header() ->
 header(Head) ->
    lens:c([ lens:map(http, #{}), lens:map(head, []), lens:pair(Head, ?NONE) ]).
 
+payload() ->
+   lens:c([ lens:map(http, #{}), lens:map(payload, ?NONE) ]).
+
 %%%----------------------------------------------------------------------------   
 %%%
 %%% i/o routine
 %%%
 %%%----------------------------------------------------------------------------
 
-%%
-%%
-sock(State) ->
-   SOpt = lens:get(so(), State),
-   Url  = uri:new(lens:get(url(), State)),
-   knet:socket(Url, SOpt).
+http_io(State) ->
+   Sock = sock(State),
+   Tx   = erlang:monitor(process, Sock),
+   send(Sock, State),
+   receive
+      {'DOWN', Tx, _, _, _Reason} ->
+         erlang:demonitor(Tx, [flush]),
+         Url       = uri:new(lens:get(url(), State)),
+         Authority = uri:authority(Url),
+         http_io(maps:remove(Authority, State))
+   after 0 ->
+      erlang:demonitor(Tx, [flush]),
+      recv(Sock, State)
+   end.
 
+%%
+%% create a new socket or re-use existed one
+sock(State) ->
+   SOpt      = lens:get(so(), State),
+   Url       = uri:new(lens:get(url(), State)),
+   Authority = uri:authority(Url),
+   case State of
+      #{Authority := Sock} ->
+         Sock;
+      _ ->
+         knet:socket(Url, SOpt)
+   end.
+
+%%
+%%
 send(Sock, State) ->
    Mthd = lens:get(method(), State),   
    Url  = uri:new(lens:get(url(), State)),
    Head = lens:get(header(), State),
    knet:send(Sock, {Mthd, Url, Head}),
-   %% @todo: send payload
-   knet:send(Sock, eof),
-   Sock.
+   [$?|| lens:get(payload(), State), knet:send(Sock, _)],
+   knet:send(Sock, eof).
 
+%%
+%%
 recv(Sock, State) ->
    case recv(Sock) of
       {ok, Pckt} ->
-         [Pckt|State];
+         unit(Sock, Pckt, State);
       {error, Reason} ->
          exit({knet, Reason})
    end.
@@ -126,3 +187,15 @@ recv(Sock) ->
 
 join(Head, {ok, Tail}) ->
    {ok, [Head|Tail]}.
+
+%%
+%%
+unit(Sock, Pckt, State) ->
+   case lens:get(header('Connection'), State) of
+      <<"close">> ->
+         [Pckt|maps:remove(http, State)];
+      _           ->
+         Url       = uri:new(lens:get(url(), State)),
+         Authority = uri:authority(Url),
+         [Pckt|maps:remove(http, State#{Authority => Sock})]
+   end.

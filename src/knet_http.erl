@@ -199,7 +199,7 @@ ioctl(_, _) ->
             {next_state, 'STREAM', State1}
       end
    catch _:Reason ->
-      ?NOTICE("knet [http]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
+      ?NOTICE("knet [http]: ingress failure ~p ~p", [Reason, erlang:get_stacktrace()]),
       pipe:b(Pipe, {http, self(), eof}),
       {stop, normal, State0}
    end;
@@ -210,7 +210,7 @@ ioctl(_, _) ->
    try
       {next_state, 'STREAM', down_link(Msg, Pipe, State)}
    catch _:Reason ->
-      ?NOTICE("knet [http]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
+      ?NOTICE("knet [http]: egress failure ~p ~p", [Reason, erlang:get_stacktrace()]),
       pipe:a(Pipe, {http, self(), eof}),
       {stop, normal, State}
    end.
