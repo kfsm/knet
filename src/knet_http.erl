@@ -154,7 +154,7 @@ ioctl(_, _) ->
 
 %%
 %% peer connection
-'STREAM'({Prot, _, {established, Peer}}, Pipe, #fsm{queue = ?NULL} = State)
+'STREAM'({Prot, _, {established, Peer}}, _Pipe, #fsm{queue = ?NULL} = State)
  when ?is_transport(Prot) ->
    {next_state, 'STREAM', State#fsm{peer = Peer}};
 
@@ -211,7 +211,7 @@ ioctl(_, _) ->
       {next_state, 'STREAM', down_link(Msg, Pipe, State)}
    catch _:Reason ->
       ?NOTICE("knet [http]: egress failure ~p ~p", [Reason, erlang:get_stacktrace()]),
-      pipe:a(Pipe, {http, self(), eof}),
+      % pipe:a(Pipe, {http, self(), eof}),
       {stop, normal, State}
    end.
 
