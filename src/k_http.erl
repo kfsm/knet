@@ -132,7 +132,7 @@ request(Timeout) ->
 %%%----------------------------------------------------------------------------
 
 id() ->
-   lens:map(id, ?NONE).
+   lens:c([lens:map(spec, #{}), lens:map(id, ?NONE)]).
 
 focus() ->
    fun(Fun, Map) ->
@@ -140,23 +140,26 @@ focus() ->
       lens:fmap(fun(X) -> maps:put(Key, X, Map) end, Fun(maps:get(Key, Map, #{})))
    end.
 
+sys_so() ->
+   lens:map(so, []).
+
 so() ->
-   lens:c([focus(), lens:map(so, [])]).
+   lens:c([lens:map(spec, #{}), focus(), lens:map(so, [])]).
 
 method() ->
-   lens:c([focus(), lens:map(method, ?NONE)]).
+   lens:c([lens:map(spec, #{}), focus(), lens:map(method, ?NONE)]).
 
 uri() ->
-   lens:c([focus(), lens:map(uri, ?NONE)]).
+   lens:c([lens:map(spec, #{}), focus(), lens:map(uri, ?NONE)]).
 
 header() ->
-   lens:c([focus(), lens:map(head, [])]).
+   lens:c([lens:map(spec, #{}), focus(), lens:map(head, [])]).
 
 header(Head) ->
-   lens:c([focus(), lens:map(head, []), lens:pair(Head, ?NONE)]).
+   lens:c([lens:map(spec, #{}), focus(), lens:map(head, []), lens:pair(Head, ?NONE)]).
 
 payload() ->
-   lens:c([focus(), lens:map(payload, ?NONE)]).
+   lens:c([lens:map(spec, #{}), focus(), lens:map(payload, ?NONE)]).
 
 %%%----------------------------------------------------------------------------   
 %%%
@@ -181,6 +184,7 @@ http_io(Timeout, State) ->
 %%
 %% create a new socket or re-use existed one
 sock(State) ->
+   GOpt      = lens:get(sys_so(), State),
    SOpt      = lens:get(so(), State),
    Uri       = lens:get(uri(), State),
    Authority = uri:authority(Uri),
@@ -188,7 +192,7 @@ sock(State) ->
       #{Authority := Sock} ->
          Sock;
       _ ->
-         knet:socket(Uri, SOpt)
+         knet:socket(Uri, GOpt ++ SOpt)
    end.
 
 %%

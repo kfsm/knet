@@ -78,7 +78,7 @@ recv(Timeout) ->
 %%%----------------------------------------------------------------------------
 
 id() ->
-   lens:map(id, ?NONE).
+   lens:c([lens:map(spec, #{}), lens:map(id, ?NONE)]).
 
 focus() ->
    fun(Fun, Map) ->
@@ -86,11 +86,14 @@ focus() ->
       lens:fmap(fun(X) -> maps:put(Key, X, Map) end, Fun(maps:get(Key, Map, #{})))
    end.
 
+sys_so() ->
+   lens:map(so, []).
+
 so() ->
-   lens:c([focus(), lens:map(so, [])]).
+   lens:c([lens:map(spec, #{}), focus(), lens:map(so, [])]).
 
 uri() ->
-   lens:c([focus(), lens:map(uri, ?NONE)]).
+   lens:c([lens:map(spec, #{}), focus(), lens:map(uri, ?NONE)]).
 
 %%%----------------------------------------------------------------------------   
 %%%
@@ -137,6 +140,7 @@ recv(Sock, Timeout) ->
 %%
 %% create a new socket or re-use existed one
 sock(State) ->
+   GOpt      = lens:get(sys_so(), State),
    SOpt      = lens:get(so(), State),
    Uri       = lens:get(uri(), State),
    Authority = uri:authority(Uri),
@@ -144,7 +148,7 @@ sock(State) ->
       #{Authority := Sock} ->
          Sock;
       _ ->
-         Sock = knet:socket(Uri, SOpt),
+         Sock = knet:socket(Uri, GOpt ++ SOpt),
          {ioctl, b, _} = knet:recv(Sock, 30000, []),
          knet:send(Sock, {connect, Uri}),
          {_, Sock, {established, _}} = knet:recv(Sock, 30000, []),
