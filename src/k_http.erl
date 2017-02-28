@@ -229,7 +229,9 @@ recv(Sock, Timeout) ->
    end.
 
 join(Head, {ok, Tail}) ->
-   {ok, [Head|Tail]}.
+   {ok, [Head|Tail]};
+join(_, {error, _} = Error) ->
+   Error.
 
 %%
 %%
