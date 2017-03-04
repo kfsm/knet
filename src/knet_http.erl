@@ -127,13 +127,13 @@ ioctl(_, _) ->
    % @todo: htstream support HTTP/1.2 (see http://www.jmarshall.com/easy/http/)
    'IDLE'({'GET', Uri, [{'Connection', <<"keep-alive">>}]}, Pipe, State);
 
-'IDLE'({_Mthd, {uri, _, _}=Uri, _Head}=Req, Pipe, #fsm{queue = Queue} = State) ->
+'IDLE'({_Mthd, {uri, _, _}=Uri, _Head}=Req, Pipe, State) ->
    pipe:b(Pipe, {connect, Uri}),
-   {next_state, 'STREAM', State#fsm{queue = q:enq(Req, Queue)}};
+   'STREAM'(Req, Pipe, State);
 
-'IDLE'({_Mthd, {uri, _, _}=Uri, _Head, _Msg}=Req, Pipe, #fsm{queue = Queue} = State) ->
+'IDLE'({_Mthd, {uri, _, _}=Uri, _Head, _Msg}=Req, Pipe, State) ->
    pipe:b(Pipe, {connect, Uri}),
-   {next_state, 'STREAM', State#fsm{queue = q:enq(Req, Queue)}}.
+   'STREAM'(Req, Pipe, State).
 
 %%%------------------------------------------------------------------
 %%%
@@ -154,20 +154,11 @@ ioctl(_, _) ->
 
 %%
 %% peer connection
-'STREAM'({Prot, _, {established, Peer}}, _Pipe, #fsm{queue = ?NULL} = State)
+'STREAM'({Prot, _, {established, Peer}}, _Pipe, #fsm{queue = Queue0} = State)
  when ?is_transport(Prot) ->
-   {next_state, 'STREAM', State#fsm{peer = Peer}};
-
-'STREAM'({Prot, _, {established, Peer}}, Pipe, #fsm{queue = Queue} = State)
- when ?is_transport(Prot) ->
-   % all delayed requests shall be passed using request pipe but tcp message came from inverted one
-   % <-[ tcp ]--(b) --[ http ]-- (a)--[ client ]-<
-   'STREAM'(q:head(Queue), pipe:swap(Pipe), 
-      State#fsm{
-         peer  = Peer, 
-         queue = q:tail(Queue)
-      }
-   );
+   T = os:timestamp(),
+   Queue1 = qmap(fun(Req) -> Req#req{treq = T} end, Queue0),
+   {next_state, 'STREAM', State#fsm{peer = Peer, queue = Queue1}};
 
 'STREAM'({Prot, _, {terminated, _}}, _Pipe, State)
  when ?is_transport(Prot) ->
@@ -494,3 +485,7 @@ lens_qhd() ->
       lens:fmap(fun(X) -> deq:poke(X, deq:tail(Queue)) end, Fun(deq:head(Queue)))      
    end.
 
+qmap(_, ?NULL) ->
+   ?NULL;
+qmap(Fun, {q, N, Tail, Head}) ->
+   {q, N, lists:map(Fun, Tail), lists:map(Fun, Head)}.      
