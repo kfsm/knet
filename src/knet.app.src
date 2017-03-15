@@ -9,6 +9,7 @@
          stdlib,
          lager,
          feta,
+         htstream,
          pipe,
          datum,
          pns 
