@@ -146,23 +146,6 @@ ioctl(socket,  #fsm{sock = Sock}) ->
          {stop, Reason, State0}
    end;
 
-   % T    = os:timestamp(),
-   % case tcp_connect(Uri, State) of
-   %    {ok, Sock} ->
-   %       #stream{addr = Addr, peer = Peer} = Stream1 = 
-   %          io_ttl(io_tth(io_connect(Sock, Stream0))),
-   %       ?trace(Pid, {tcp, {connect, Peer}, tempus:diff(T)}),
-   %       ?access_tcp(#{req => {syn, sack}, peer => Peer, addr => Addr, time => tempus:diff(T)}),
-   %       pipe:a(Pipe, {tcp, self(), {established, Peer}}),
-   %       {next_state, 'ESTABLISHED', 
-   %          tcp_ioctl(State#fsm{stream=Stream1, sock=Sock})};
-
-   %    {error, Reason} ->
-   %       ?access_tcp(#{req => {syn, Reason}, addr => Uri}),
-   %       pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),
-   %       {stop, Reason, State}
-   % end;
-
 %%
 %%
 'IDLE'({accept, Uri}, Pipe, #fsm{stream = Stream0, trace = Pid} = State) ->
@@ -234,6 +217,20 @@ ioctl(socket,  #fsm{sock = Sock}) ->
 
 %%
 %%
+'ESTABLISHED'({tcp, _, Pckt}, Pipe, #state{} = State0) ->
+   case
+      [$^ ||
+         tcp_uplink_packet(Pipe, Pckt, State0),
+         tcp_ltracelog_packet(Pckt, _)
+      ] 
+   of
+      {ok, State1} ->
+         {next_state, 'ESTABLISHED', State1};
+      {error, Reason} ->
+         {stop, Reason, State0}
+   end;
+
+
 'ESTABLISHED'({tcp, _, Pckt}, Pipe, #fsm{stream = Stream0, trace = Pid} = State) ->
    %% What one can do is to combine {active, once} with gen_tcp:recv().
    %% Essentially, you will be served the first message, then read as many as you 
@@ -242,6 +239,7 @@ ioctl(socket,  #fsm{sock = Sock}) ->
    {_, #stream{peer = Peer} = Stream1} = io_recv(Pckt, Pipe, Stream0),
    ?trace(Pid, {tcp, {packet, Peer}, byte_size(Pckt)}),
    {next_state, 'ESTABLISHED', State#fsm{stream = Stream1}};
+
 
 'ESTABLISHED'({ttl, Pack}, Pipe, State) ->
    case io_ttl(Pack, State#fsm.stream) of
@@ -258,22 +256,12 @@ ioctl(socket,  #fsm{sock = Sock}) ->
 
 'ESTABLISHED'(Pckt, Pipe, #state{} = State0)
  when ?is_iolist(Pckt) ->
-   case tcp_downlink_send(Pckt, State0) of
+   case tcp_downlink_packet(Pipe, Pckt, State0) of
       {ok, State1} ->
          {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
          pipe:b(Pipe, {tcp, self(), {terminated, Reason}}),
          {stop, Reason, State0}
-   end;
-
-'ESTABLISHED'(Msg, Pipe, #fsm{sock = Sock, stream = Stream0} = State)
- when ?is_iolist(Msg) ->
-   try
-      {_, Stream1} = io_send(Msg, Sock, Stream0),
-      {next_state, 'ESTABLISHED', State#fsm{stream = Stream1}}
-   catch _:{badmatch, {error, Reason}} ->
-      pipe:b(Pipe, {tcp, self(), {terminated, Reason}}),
-      {stop, Reason, State}
    end.
 
 %%%------------------------------------------------------------------
@@ -377,10 +365,11 @@ getstat(#socket{in = In, eg = Eg}) ->
    pstream:packets(In) + pstream:packets(Eg).
 
 %%
-%% send message 
--spec send(_, #socket{}) -> {ok, #socket{}} | {error, _}.
+%% send packet to socket message 
+%% @todo: think what todo with pipe
+-spec send(_, _, #socket{}) -> {ok, #socket{}} | {error, _}.
 
-send(Pckt, #socket{sock = Sock, eg = Egress0, peername = _Peername} = Socket) ->
+send(_, Pckt, #socket{sock = Sock, eg = Egress0, peername = _Peername} = Socket) ->
    ?DEBUG("knet [tcp] ~p: send ~s~n~p", [self(), uri:s(_Peername), Pckt]),
    {Chunks, Egress1} = pstream:encode(Pckt, Egress0),
    try
@@ -389,6 +378,12 @@ send(Pckt, #socket{sock = Sock, eg = Egress0, peername = _Peername} = Socket) ->
    catch _:{badmatch, {error, _} = Error} ->
       Error
    end.
+
+recv(Pipe, Pckt, #socket{sock = Sock, in = Ingress0, peername = _Peername} = Socket) ->
+   ?DEBUG("knet [tcp] ~p: recv ~s~n~p", [self(), uri:s(_Peername), Pckt]),
+   {Chunks, Ingress1} = pstream:decode(Pckt, Ingress0),
+   lists:foreach(fun(X) -> pipe:b(Pipe, {tcp, self(), X}) end, Chunks),
+   {ok, Socket#socket{in = Ingress1}}.
 
 
 %%%------------------------------------------------------------------
@@ -464,10 +459,17 @@ tcp_uplink_terminated(Pipe, Reason, #state{} = State) ->
    ].
 
 %%
-tcp_downlink_send(Pckt, #state{socket = Sock} = State) ->
+tcp_downlink_packet(Pipe, Pckt, #state{socket = Sock} = State) ->
    [$^ ||
-      send(Pckt, Sock),
+      send(Pipe, Pckt, Sock),
       fmap(State#state{socket = _})
+   ].
+
+%%
+tcp_uplink_packet(Pipe, Pckt, #state{socket = Sock} = State) ->
+   [$^ ||
+      recv(Pipe, Pckt, Sock),
+      fmap(State#state{socket = _})      
    ].
 
 
@@ -491,6 +493,15 @@ tcp_ltracelog_established(T, #state{socket = Sock, trace = Pid} = State) ->
    [$^ ||
       peername(Sock),
       ?trace(Pid, {tcp, {connect, _}, tempus:diff(T)}),
+      fmap(State)
+   ].
+
+tcp_ltracelog_packet(_, #state{trace = undefined} = State) ->
+   {ok, State};
+tcp_ltracelog_packet(Pckt, #state{socket = Sock, trace = Pid} = State) ->
+   [$^ ||
+      peername(Sock),
+      ?trace(Pid, {tcp, {packet, _}, byte_size(Pckt)}),
       fmap(State)
    ].
 

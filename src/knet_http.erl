@@ -228,7 +228,8 @@ ioctl(_, _) ->
 %% @todo: handle cookie and request as PHP $_REQUEST
 make_env(_Head, Peer) -> 
    [
-      {peer, uri:authority(Peer, uri:new(http))}
+      % {peer, uri:authority(Peer, uri:new(http))}
+      {peer, Peer}
    ].
 
 
