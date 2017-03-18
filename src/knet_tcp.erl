@@ -256,6 +256,16 @@ ioctl(socket,  #fsm{sock = Sock}) ->
    ?DEBUG("knet [tcp]: suspend ~p", [(State#fsm.stream)#stream.peer]),
    {next_state, 'HIBERNATE', State, hibernate};
 
+'ESTABLISHED'(Pckt, Pipe, #state{} = State0)
+ when ?is_iolist(Pckt) ->
+   case tcp_downlink_send(Pckt, State0) of
+      {ok, State1} ->
+         {next_state, 'ESTABLISHED', State1};
+      {error, Reason} ->
+         pipe:b(Pipe, {tcp, self(), {terminated, Reason}}),
+         {stop, Reason, State0}
+   end;
+
 'ESTABLISHED'(Msg, Pipe, #fsm{sock = Sock, stream = Stream0} = State)
  when ?is_iolist(Msg) ->
    try
@@ -283,7 +293,7 @@ ioctl(socket,  #fsm{sock = Sock}) ->
 %%%------------------------------------------------------------------   
 
 %%
-%% build socket object and stream filters
+%% build socket object with stream filters
 -spec socket() -> {ok, #socket{}}.
 -spec socket([_]) -> {ok, #socket{}}.
 
@@ -366,6 +376,21 @@ setopts(#socket{sock = Sock} = Socket, Opts) ->
 getstat(#socket{in = In, eg = Eg}) ->
    pstream:packets(In) + pstream:packets(Eg).
 
+%%
+%% send message 
+-spec send(_, #socket{}) -> {ok, #socket{}} | {error, _}.
+
+send(Pckt, #socket{sock = Sock, eg = Egress0, peername = _Peername} = Socket) ->
+   ?DEBUG("knet [tcp] ~p: send ~s~n~p", [self(), uri:s(_Peername), Pckt]),
+   {Chunks, Egress1} = pstream:encode(Pckt, Egress0),
+   try
+      lists:foreach(fun(X) -> ok = gen_tcp:send(Sock, X) end, Chunks),
+      {ok, Socket#socket{eg = Egress1}}
+   catch _:{badmatch, {error, _} = Error} ->
+      Error
+   end.
+
+
 %%%------------------------------------------------------------------
 %%%
 %%% private
@@ -377,7 +402,7 @@ getstat(#socket{in = In, eg = Eg}) ->
 tcp_connect(Uri, #state{socket = Sock0, so = SOpt} = State) ->
    [$^ ||
       connect(Uri, Sock0, SOpt),
-      fun(Sock1) -> {ok, State#state{socket = Sock1}} end 
+      fmap(State#state{socket = _})
    ].
 
 
@@ -436,6 +461,13 @@ tcp_uplink_terminated(Pipe, Reason, #state{} = State) ->
    [$^ ||
       fmap(pipe:a(Pipe, {tcp, self(), {terminated, Reason}})),
       fmap(State)
+   ].
+
+%%
+tcp_downlink_send(Pckt, #state{socket = Sock} = State) ->
+   [$^ ||
+      send(Pckt, Sock),
+      fmap(State#state{socket = _})
    ].
 
 
