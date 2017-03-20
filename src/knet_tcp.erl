@@ -365,26 +365,22 @@ getstat(#socket{in = In, eg = Eg}) ->
    pstream:packets(In) + pstream:packets(Eg).
 
 %%
-%% send packet to socket message 
-%% @todo: think what todo with pipe
--spec send(_, _, #socket{}) -> {ok, #socket{}} | {error, _}.
+%% encode outgoing data through socket egress filter 
+-spec encode(_, #socket{}) -> {ok, [_], #socket{}}.
 
-send(_, Pckt, #socket{sock = Sock, eg = Egress0, peername = _Peername} = Socket) ->
-   ?DEBUG("knet [tcp] ~p: send ~s~n~p", [self(), uri:s(_Peername), Pckt]),
-   {Chunks, Egress1} = pstream:encode(Pckt, Egress0),
-   try
-      lists:foreach(fun(X) -> ok = gen_tcp:send(Sock, X) end, Chunks),
-      {ok, Socket#socket{eg = Egress1}}
-   catch _:{badmatch, {error, _} = Error} ->
-      Error
-   end.
+encode(Data, #socket{eg = Egress0, peername = _Peername} = Socket) ->
+   ?DEBUG("knet [tcp] ~p: encode ~s~n~p", [self(), uri:s(_Peername), Data]),
+   {Pckt, Egress1} = pstream:encode(Data, Egress0),
+   {ok, Pckt, Socket#socket{eg = Egress1}}.
 
-recv(Pipe, Pckt, #socket{sock = Sock, in = Ingress0, peername = _Peername} = Socket) ->
-   ?DEBUG("knet [tcp] ~p: recv ~s~n~p", [self(), uri:s(_Peername), Pckt]),
-   {Chunks, Ingress1} = pstream:decode(Pckt, Ingress0),
-   lists:foreach(fun(X) -> pipe:b(Pipe, {tcp, self(), X}) end, Chunks),
-   {ok, Socket#socket{in = Ingress1}}.
+%%
+%% decode incoming data through socket ingress filter 
+-spec decode(_, #socket{}) -> {ok, [_], #socket{}}.
 
+decode(Data, #socket{in = Ingress0, peername = _Peername} = Socket) ->
+   ?DEBUG("knet [tcp] ~p: decode ~s~n~p", [self(), uri:s(_Peername), Data]),
+   {Pckt, Ingress1} = pstream:decode(Data, Ingress0),
+   {ok, Pckt, Socket#socket{in = Ingress1}}.
 
 %%%------------------------------------------------------------------
 %%%
@@ -461,16 +457,30 @@ tcp_uplink_terminated(Pipe, Reason, #state{} = State) ->
 %%
 tcp_downlink_packet(Pipe, Pckt, #state{socket = Sock} = State) ->
    [$^ ||
-      send(Pipe, Pckt, Sock),
+      encode(Pckt, Sock),
+      tcp_downlink(Pipe, _, _),
       fmap(State#state{socket = _})
    ].
+
+tcp_downlink(Pipe, Pckt, #socket{sock = Sock} = Socket) ->
+   try
+      lists:foreach(fun(X) -> ok = gen_tcp:send(Sock, X) end, Pckt),
+      {ok, Socket}
+   catch _:{badmatch, {error, _} = Error} ->
+      Error
+   end.
 
 %%
 tcp_uplink_packet(Pipe, Pckt, #state{socket = Sock} = State) ->
    [$^ ||
-      recv(Pipe, Pckt, Sock),
+      decode(Pckt, Sock),
+      tcp_uplink(Pipe, _, _),
       fmap(State#state{socket = _})      
    ].
+
+tcp_uplink(Pipe, Pckt, Socket) ->
+   lists:foreach(fun(X) -> pipe:b(Pipe, {tcp, self(), X}) end, Pckt),
+   {ok, Socket}.
 
 
 %%
