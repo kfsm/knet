@@ -145,15 +145,17 @@
 %%
 %% algebraic data structure to hold socket state.
 %% knet library defines a new socket category
-%%   * uses `uri:uri()` to address identity (addresses)
-%%   * uses stream filters to encode data streams   
+%%   * `uri:uri()` to address identity (addresses)
+%%   * stream filters to encode data streams   
 -record(socket, {
-   sock     = undefined :: _,          %%
-   peername = undefined :: uri:uri(),  %%
-   sockname = undefined :: uri:uri(),  %%
-   in       = undefined :: _,          %% ingress stream filter
-   eg       = undefined :: _           %% egress stream filter
+   sock     = undefined :: _,          %% socket port or communication process
+   peername = undefined :: uri:uri(),  %% socket remote peer identity
+   sockname = undefined :: uri:uri(),  %% socket local peer identity
+   in       = undefined :: _,          %% socket ingress packet stream
+   eg       = undefined :: _,          %% socket egress packet stream
+   so       = []        :: [_]         %% socket options 
 }).
+
 
 
 %%
