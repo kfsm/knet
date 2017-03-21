@@ -44,14 +44,14 @@
 }).
 
 
--record(fsm, {
-   stream   = undefined :: #stream{}  %% tcp packet stream
-  ,sock     = undefined :: port()     %% tcp/ip socket
-  ,active   = true      :: once | true | false  %% socket activity (pipe internally uses active once)
-  ,backlog  = 0         :: integer()  %% length of acceptor pool
-  ,trace    = undefined :: pid()      %% trace process
-  ,so       = undefined :: any()      %% socket options
-}).
+% -record(fsm, {
+%    stream   = undefined :: #stream{}  %% tcp packet stream
+%   ,sock     = undefined :: port()     %% tcp/ip socket
+%   ,active   = true      :: once | true | false  %% socket activity (pipe internally uses active once)
+%   ,backlog  = 0         :: integer()  %% length of acceptor pool
+%   ,trace    = undefined :: pid()      %% trace process
+%   ,so       = undefined :: any()      %% socket options
+% }).
 
 %%%------------------------------------------------------------------
 %%%
@@ -72,32 +72,26 @@ init(Opts) ->
         ,trace   = opts:val(trace, undefined, Opts)
         ,so      = Opts
       }
-      % #fsm{
-      %    stream  = io_new(Opts)
-      %   ,backlog = opts:val(backlog, 5, Opts)
-      %   ,active  = opts:val(active, Opts)
-      %   ,trace   = opts:val(trace, undefined, Opts)
-      %   ,so      = Opts
-      % }
    }.
 
 %%
-free(Reason, #state{}) ->
-   ok;
-free(Reason, #fsm{stream=Stream, sock=Sock}) ->
+free(Reason, #state{socket = Sock}) ->
+   {ok, Peer} = peername(Sock),
+   {ok, Addr} = sockname(Sock),
+   Packets    = getstat(Sock),
+   Bytes      = getstat(Sock),  
    ?access_tcp(#{
       req  => {fin, Reason}
-     ,peer => Stream#stream.peer 
-     ,addr => Stream#stream.addr
-     ,byte => pstream:octets(Stream#stream.recv) + pstream:octets(Stream#stream.send)
-     ,pack => pstream:packets(Stream#stream.recv) + pstream:packets(Stream#stream.send)
-     ,time => tempus:diff(Stream#stream.ts)
+     ,peer => Peer 
+     ,addr => Addr
+     ,byte => Bytes
+     ,pack => Packets
    }),
-   (catch gen_tcp:close(Sock)),
+   % (catch gen_tcp:close(Sock)),
    ok. 
 
 %% 
-ioctl(socket,  #fsm{sock = Sock}) -> 
+ioctl(socket, #state{socket = #socket{sock = Sock}}) -> 
    Sock.
 
 %%%------------------------------------------------------------------
@@ -108,18 +102,21 @@ ioctl(socket,  #fsm{sock = Sock}) ->
 
 %%
 %%
-'IDLE'({listen, Uri}, Pipe, State) ->
-   case tcp_listen(Uri, State) of
-      {ok, Sock} ->
-         ?access_tcp(#{req => listen, addr => Uri}),
-         create_acceptor_pool(Uri, State),
-         pipe:a(Pipe, {tcp, self(), {listen, Uri}}),
-         {next_state, 'LISTEN', State#fsm{sock = Sock}};
-
+'IDLE'({listen, Uri}, Pipe, State0) ->
+   case
+      [$^ ||
+         tcp_listen(Uri, State0),
+         tcp_spawn_acceptor_pool(Uri, _),
+         tcp_uplink_listen(Pipe, _),
+         tcp_accesslog_listen(Uri, _)
+      ]
+   of
+      {ok, State1} ->
+         {next_state, 'LISTEN', State1};
       {error, Reason} ->
-         ?access_tcp(#{req => {listen, Reason}, addr => Uri}),
-         pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),
-         {stop, Reason, State}
+         tcp_accesslog_error({listen, Reason}, Uri, State0),
+         tcp_uplink_terminated(Pipe, Reason, State0),
+         {stop, Reason, State0}
    end;
 
 %%
@@ -141,36 +138,37 @@ ioctl(socket,  #fsm{sock = Sock}) ->
       {ok, State1} ->
          {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
-         tcp_accesslog_error(Reason, Uri, State0),
+         tcp_accesslog_error({syn, Reason}, Uri, State0),
          tcp_uplink_terminated(Pipe, Reason, State0),
          {stop, Reason, State0}
    end;
 
 %%
 %%
-'IDLE'({accept, Uri}, Pipe, #fsm{stream = Stream0, trace = Pid} = State) ->
-   T     = os:timestamp(),   
-   case tcp_accept(Uri, State) of
-      {ok, Sock} ->
-         create_acceptor(Uri, State),
-         #stream{addr = Addr, peer = Peer} = Stream1 = 
-            io_ttl(io_tth(io_connect(Sock, Stream0))),
-         ?trace(Pid, {tcp, {connect, Peer}, tempus:diff(T)}),
-         ?access_tcp(#{req => {syn, sack}, peer => Peer, addr => Addr, time => tempus:diff(T)}),
-         pipe:a(Pipe, {tcp, self(), {established, Peer}}),
-         {next_state, 'ESTABLISHED', 
-            tcp_ioctl(State#fsm{stream=Stream1, sock=Sock})};
-
-      %% listen socket is closed
+'IDLE'({accept, Uri}, Pipe, #state{} = State0) ->
+   T = os:timestamp(),
+   case
+      [$^ ||
+         tcp_accept(Uri, State0),
+         tcp_spawn_acceptor(Uri, _),
+         tcp_ltracelog_established(T, _),
+         tcp_ttl(_),
+         tcp_tth(_),
+         tcp_ttp(_),
+         tcp_uplink_established(Pipe, _),
+         tcp_accesslog_established(T, _),
+         tcp_flow_ctrl(_)
+      ]
+   of
+      {ok, State1} ->
+         {next_state, 'ESTABLISHED', State1};
       {error, closed} ->
-         {stop, normal, State};
-
-      %% unable to accept connection  
+         {stop, normal, State0};
       {error, Reason} ->
-         create_acceptor(Uri, State),
-         ?access_tcp(#{req => {syn, Reason}, addr => Uri}),
-         pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),      
-         {stop, Reason, State}
+         tcp_spawn_acceptor(Uri, State0),
+         tcp_accesslog_error(Reason, Uri, State0),
+         tcp_uplink_terminated(Pipe, Reason, State0),
+         {stop, Reason, State0}
    end.
 
 %%%------------------------------------------------------------------
@@ -189,35 +187,51 @@ ioctl(socket,  #fsm{sock = Sock}) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'ESTABLISHED'({tcp_error, _, Reason}, Pipe, State) ->
+'ESTABLISHED'({tcp_error, _, Reason}, Pipe, #state{} = State) ->
    pipe:b(Pipe, {tcp, self(), {terminated, Reason}}),   
    {stop, Reason, State};
    
-'ESTABLISHED'({tcp_closed, _}, Pipe, State) ->
+'ESTABLISHED'({tcp_closed, _}, Pipe, #state{} = State) ->
    pipe:b(Pipe, {tcp, self(), {terminated, normal}}),
    {stop, normal, State};
 
 %%
 %%
-'ESTABLISHED'({tcp_passive, _}, _Pipe, #fsm{active = once} = State) ->
-   {next_state, 'ESTABLISHED', tcp_ioctl(State)};
-
-'ESTABLISHED'({tcp_passive, _}, _Pipe, #fsm{active = true} = State) ->
-   {next_state, 'ESTABLISHED', tcp_ioctl(State)};
-
-'ESTABLISHED'({tcp_passive, _}, Pipe, State) ->
+'ESTABLISHED'({tcp_passive, _}, Pipe, #state{flowctl = false} = State) ->
    pipe:b(Pipe, {tcp, self(), passive}),
    {next_state, 'ESTABLISHED', State};
 
-'ESTABLISHED'(active, _Pipe, State) ->
-   {next_state, 'ESTABLISHED', tcp_ioctl(State)};
+'ESTABLISHED'({tcp_passive, _}, _Pipe, #state{} = State0) ->
+   case tcp_flow_ctrl(State0) of
+      {ok, State1} ->
+         {next_state, 'ESTABLISHED', State1};
+      {error, Reason} ->
+         {stop, Reason, State0}
+   end;
 
-'ESTABLISHED'({active, N}, _Pipe, State) ->
-   {next_state, 'ESTABLISHED', tcp_ioctl(State#fsm{active = N})};
+'ESTABLISHED'(active, _Pipe, #state{} = State0) ->
+   case tcp_flow_ctrl(State0) of
+      {ok, State1} ->
+         {next_state, 'ESTABLISHED', State1};
+      {error, Reason} ->
+         {stop, Reason, State0}
+   end;
+
+'ESTABLISHED'({active, N}, _Pipe, #state{} = State0) ->
+   case tcp_flow_ctrl(State0#state{flowctl = N}) of
+      {ok, State1} ->
+         {next_state, 'ESTABLISHED', State1};
+      {error, Reason} ->
+         {stop, Reason, State0}
+   end;
 
 %%
 %%
 'ESTABLISHED'({tcp, _, Pckt}, Pipe, #state{} = State0) ->
+   %% What one can do is to combine {active, once} with gen_tcp:recv().
+   %% Essentially, you will be served the first message, then read as many as you 
+   %% wish from the socket. When the socket is empty, you can again enable {active, once}. 
+   %% Note: release 17.x and later supports {active, n()}
    case
       [$^ ||
          tcp_uplink_packet(Pipe, Pckt, State0),
@@ -231,27 +245,19 @@ ioctl(socket,  #fsm{sock = Sock}) ->
    end;
 
 
-'ESTABLISHED'({tcp, _, Pckt}, Pipe, #fsm{stream = Stream0, trace = Pid} = State) ->
-   %% What one can do is to combine {active, once} with gen_tcp:recv().
-   %% Essentially, you will be served the first message, then read as many as you 
-   %% wish from the socket. When the socket is empty, you can again enable {active, once}. 
-   %% Note: release 17.x and later supports {active, n()}
-   {_, #stream{peer = Peer} = Stream1} = io_recv(Pckt, Pipe, Stream0),
-   ?trace(Pid, {tcp, {packet, Peer}, byte_size(Pckt)}),
-   {next_state, 'ESTABLISHED', State#fsm{stream = Stream1}};
-
-
-'ESTABLISHED'({ttl, Pack}, Pipe, State) ->
-   case io_ttl(Pack, State#fsm.stream) of
-      {eof, Stream} ->
+'ESTABLISHED'({ttp, Pack}, Pipe, #state{} = State0) ->
+   case tcp_ttp(Pack, State0) of
+      {ok, State1} ->
+         {next_state, 'ESTABLISHED', State1};
+      {error, timeout} ->
          pipe:b(Pipe, {tcp, self(), {terminated, timeout}}),
-         {stop, normal, State#fsm{stream=Stream}};
-      {_,   Stream} ->
-         {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
+         {stop, normal, State0};
+      {error, Reason} ->
+         {stop, Reason, State0}   
    end;
 
-'ESTABLISHED'(hibernate, _, State) ->
-   ?DEBUG("knet [tcp]: suspend ~p", [(State#fsm.stream)#stream.peer]),
+'ESTABLISHED'(tth, _, State) ->
+   % ?DEBUG("knet [tcp]: suspend ~p", [(State#fsm.stream)#stream.peer]),
    {next_state, 'HIBERNATE', State, hibernate};
 
 'ESTABLISHED'(Pckt, Pipe, #state{} = State0)
@@ -270,9 +276,10 @@ ioctl(socket,  #fsm{sock = Sock}) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'HIBERNATE'(Msg, Pipe, #fsm{stream = Stream} = State) ->
-   ?DEBUG("knet [tcp]: resume ~p",[Stream#stream.peer]),
-   'ESTABLISHED'(Msg, Pipe, State#fsm{stream=io_tth(Stream)}).
+'HIBERNATE'(Msg, Pipe, #state{} = State0) ->
+   % ?DEBUG("knet [tcp]: resume ~p",[Stream#stream.peer]),
+   {ok, State1} = tcp_tth(State0),
+   'ESTABLISHED'(Msg, Pipe, State1).
 
 %%%------------------------------------------------------------------
 %%%
@@ -282,11 +289,7 @@ ioctl(socket,  #fsm{sock = Sock}) ->
 
 %%
 %% build socket object with stream filters
--spec socket() -> {ok, #socket{}}.
 -spec socket([_]) -> {ok, #socket{}}.
-
-socket() ->
-   socket([]).
 
 socket(SOpt) ->
    {ok,
@@ -306,7 +309,7 @@ socket_bind_with(Sock, Uri, #socket{} = Socket) ->
 
 %%
 %%
--spec connect(uri:uri(), [_], #socket{}) -> {ok, #socket{}} | {error, _}.
+-spec connect(uri:uri(), #socket{}, [_]) -> {ok, #socket{}} | {error, _}.
 
 connect(Uri, #socket{} = Socket, SOpt) ->
    Host = scalar:c(uri:host(Uri)),
@@ -315,6 +318,30 @@ connect(Uri, #socket{} = Socket, SOpt) ->
    [$^ ||
       gen_tcp:connect(Host, Port, opts:filter(?SO_TCP_ALLOWED, SOpt), Tout),
       socket_bind_with(_, Uri, Socket)
+   ].
+
+%%
+%%
+-spec accept(uri:uri(), #socket{}, [_]) -> {ok, #socket{}} | {error, _}.
+
+accept(Uri, #socket{} = Socket, SOpt) ->
+   LPipe = opts:val(listen, SOpt),
+   LSock = pipe:ioctl(LPipe, socket),
+   [$^ ||
+      gen_tcp:accept(LSock),
+      socket_bind_with(_, Uri, Socket) %% @todo: swap peername to sockname 
+   ].
+
+%%
+%%
+-spec listen(uri:uri(), #socket{}, [_]) -> {ok, #socket{}} | {error, _}.
+
+listen(Uri, #socket{} = Socket, SOpt) ->
+   Port = uri:port(Uri),
+   Opts = lists:keydelete(active, 1, opts:filter(?SO_TCP_ALLOWED, SOpt)),
+   [$^ ||
+      gen_tcp:listen(Port, [{active, false}, {reuseaddr, true} | Opts]),
+      socket_bind_with(_, Uri, Socket) %% @todo: swap peername to sockname       
    ].
 
 %%
@@ -362,7 +389,7 @@ setopts(#socket{sock = Sock} = Socket, Opts) ->
 -spec getstat(#socket{}) -> {ok, integer()}.
 
 getstat(#socket{in = In, eg = Eg}) ->
-   pstream:packets(In) + pstream:packets(Eg).
+   {ok, pstream:packets(In) + pstream:packets(Eg)}.
 
 %%
 %% encode outgoing data through socket egress filter 
@@ -390,9 +417,21 @@ decode(Data, #socket{in = Ingress0, peername = _Peername} = Socket) ->
 
 %%
 %% socket connectivity
-tcp_connect(Uri, #state{socket = Sock0, so = SOpt} = State) ->
+tcp_connect(Uri, #state{socket = Sock, so = SOpt} = State) ->
    [$^ ||
-      connect(Uri, Sock0, SOpt),
+      connect(Uri, Sock, SOpt),
+      fmap(State#state{socket = _})
+   ].
+
+tcp_accept(Uri, #state{socket = Sock, so = SOpt} = State) ->
+   [$^ ||
+      accept(Uri, Sock, SOpt),
+      fmap(State#state{socket = _})
+   ].
+
+tcp_listen(Uri, #state{socket = Sock, so = SOpt} = State) ->
+   [$^ ||
+      listen(Uri, Sock, SOpt),
       fmap(State#state{socket = _})
    ].
 
@@ -415,10 +454,18 @@ tcp_tth(#state{so = SOpt} = State) ->
 
 tcp_ttp(#state{socket = Sock, so = SOpt} = State) ->
    [$? ||
-      lens:get(lens:pair(timeout, []), lens:pair(tth, undefined), SOpt),
+      lens:get(lens:pair(timeout, []), lens:pair(ttp, undefined), SOpt),
       tempus:timer(_, {ttp, erlang:element(2, getstat(Sock))})
    ],
    {ok, State}.
+
+tcp_ttp(N, #state{socket = Sock} = State) ->
+   case getstat(Sock) of
+      {ok, X} when X > N ->
+         tcp_ttp(State);
+      _ ->
+         {error, timeout}
+   end.
 
 
 %%
@@ -433,7 +480,7 @@ tcp_flow_ctrl(#state{flowctl = once, socket = Sock} = State) ->
       setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
       fmap(State)
    ];
-tcp_flow_ctrl(#state{flowctl = N, socket = Sock} = State) ->
+tcp_flow_ctrl(#state{flowctl = _N, socket = Sock} = State) ->
    [$^ ||
       setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
       fmap(State)
@@ -444,6 +491,14 @@ tcp_uplink_established(Pipe, #state{socket = Sock} = State) ->
    [$^ ||
       peername(Sock),
       fmap(pipe:a(Pipe, {tcp, self(), {established, _}})),
+      fmap(State)
+   ].
+
+%%
+tcp_uplink_listen(Pipe, #state{socket = Sock} = State) ->
+   [$^ ||
+      peername(Sock), %% @todo: swap peername to sockname 
+      fmap(pipe:a(Pipe, {tcp, self(), {listen, _}})),
       fmap(State)
    ].
 
@@ -462,7 +517,7 @@ tcp_downlink_packet(Pipe, Pckt, #state{socket = Sock} = State) ->
       fmap(State#state{socket = _})
    ].
 
-tcp_downlink(Pipe, Pckt, #socket{sock = Sock} = Socket) ->
+tcp_downlink(_Pipe, Pckt, #socket{sock = Sock} = Socket) ->
    try
       lists:foreach(fun(X) -> ok = gen_tcp:send(Sock, X) end, Pckt),
       {ok, Socket}
@@ -486,7 +541,7 @@ tcp_uplink(Pipe, Pckt, Socket) ->
 %%
 %% socket logging 
 tcp_accesslog_error(Reason, Uri, #state{} = State) ->
-   ?access_tcp(#{req => {syn, Reason}, addr => Uri}),
+   ?access_tcp(#{req => Reason, addr => Uri}),
    {ok, State}.
 
 %%
@@ -497,7 +552,12 @@ tcp_accesslog_established(T, #state{socket = Sock} = State) ->
    {ok, State}.
 
 %%
-tcp_ltracelog_established(T, #state{trace = undefined} = State) ->
+tcp_accesslog_listen(Uri, #state{} = State) ->
+   ?access_tcp(#{req => listen, addr => Uri}),
+   {ok, State}.
+
+%%
+tcp_ltracelog_established(_, #state{trace = undefined} = State) ->
    {ok, State};
 tcp_ltracelog_established(T, #state{socket = Sock, trace = Pid} = State) ->
    [$^ ||
@@ -515,88 +575,79 @@ tcp_ltracelog_packet(Pckt, #state{socket = Sock, trace = Pid} = State) ->
       fmap(State)
    ].
 
+%%
+%%
+tcp_spawn_acceptor(Uri, #state{so = SOpt} = State) ->
+   Sup = opts:val(acceptor,  SOpt), 
+   {ok, _} = supervisor:start_child(Sup, [Uri, SOpt]),
+   {ok, State}.
 
+tcp_spawn_acceptor_pool(Uri, #state{so = SOpt} = State) ->
+   Sup  = opts:val(acceptor,  SOpt), 
+   Opts = [{listen, self()} | SOpt],
+   lists:foreach(
+      fun(_) ->
+         {ok, _} = supervisor:start_child(Sup, [Uri, Opts])
+      end,
+      lists:seq(1, opts:val(backlog, 5, SOpt))
+   ),
+   {ok, State}.
 
 
 %%
 %% new socket stream
-io_new(SOpt) ->
-   #stream{
-      send = pstream:new(opts:val(pack, raw, SOpt))
-     ,recv = pstream:new(opts:val(pack, raw, SOpt))
-     ,ttl  = pair:lookup([timeout, ttl], ?SO_TTL, SOpt)
-     ,tth  = pair:lookup([timeout, tth], ?SO_TTH, SOpt)
-     ,ts   = os:timestamp()
-   }.
+% io_new(SOpt) ->
+%    #stream{
+%       send = pstream:new(opts:val(pack, raw, SOpt))
+%      ,recv = pstream:new(opts:val(pack, raw, SOpt))
+%      ,ttl  = pair:lookup([timeout, ttl], ?SO_TTL, SOpt)
+%      ,tth  = pair:lookup([timeout, tth], ?SO_TTH, SOpt)
+%      ,ts   = os:timestamp()
+%    }.
 
 %%
 %% socket connected
-io_connect(Port, #stream{}=Sock) ->
-   {ok, Peer} = inet:peername(Port),
-   {ok, Addr} = inet:sockname(Port),
-   Sock#stream{peer = Peer, addr = Addr, tss = os:timestamp(), ts = os:timestamp()}.
+% io_connect(Port, #stream{}=Sock) ->
+%    {ok, Peer} = inet:peername(Port),
+%    {ok, Addr} = inet:sockname(Port),
+%    Sock#stream{peer = Peer, addr = Addr, tss = os:timestamp(), ts = os:timestamp()}.
 
 %%
 %% set hibernate timeout
-io_tth(#stream{}=Sock) ->
-   Sock#stream{
-      tth = tempus:timer(Sock#stream.tth, hibernate)
-   }.
+% io_tth(#stream{}=Sock) ->
+%    Sock#stream{
+%       tth = tempus:timer(Sock#stream.tth, hibernate)
+%    }.
 
-%%
-%% set time-to-live timeout
-io_ttl(#stream{}=Sock) ->
-   erlang:element(2, io_ttl(-1, Sock)). 
-
-io_ttl(N, #stream{}=Sock) ->
-   case pstream:packets(Sock#stream.recv) + pstream:packets(Sock#stream.send) of
-      %% stream activity
-      X when X > N ->
-         {active, Sock#stream{ttl = tempus:timer(Sock#stream.ttl, {ttl, X})}};
-      %% no stream activity
-      _ ->
-         {eof, Sock}
-   end.
 
 %%
 %% recv packet
-io_recv(Pckt, Pipe, #stream{}=Sock) ->
-   ?DEBUG("knet [tcp] ~p: recv ~p~n~p", [self(), Sock#stream.peer, Pckt]),
-   {Msg, Recv} = pstream:decode(Pckt, Sock#stream.recv),
-   lists:foreach(fun(X) -> pipe:b(Pipe, {tcp, self(), X}) end, Msg),
-   {active, Sock#stream{recv=Recv}}.
+% io_recv(Pckt, Pipe, #stream{}=Sock) ->
+%    ?DEBUG("knet [tcp] ~p: recv ~p~n~p", [self(), Sock#stream.peer, Pckt]),
+%    {Msg, Recv} = pstream:decode(Pckt, Sock#stream.recv),
+%    lists:foreach(fun(X) -> pipe:b(Pipe, {tcp, self(), X}) end, Msg),
+%    {active, Sock#stream{recv=Recv}}.
 
 %%
 %% send packet
-io_send(Msg, Pipe, #stream{}=Sock) ->
-   ?DEBUG("knet [tcp] ~p: send ~p~n~p", [self(), Sock#stream.peer, Msg]),
-   {Pckt, Send} = pstream:encode(Msg, Sock#stream.send),
-   lists:foreach(fun(X) -> ok = gen_tcp:send(Pipe, X) end, Pckt),
-   {active, Sock#stream{send=Send}}.
+% io_send(Msg, Pipe, #stream{}=Sock) ->
+%    ?DEBUG("knet [tcp] ~p: send ~p~n~p", [self(), Sock#stream.peer, Msg]),
+%    {Pckt, Send} = pstream:encode(Msg, Sock#stream.send),
+%    lists:foreach(fun(X) -> ok = gen_tcp:send(Pipe, X) end, Pckt),
+%    {active, Sock#stream{send=Send}}.
 
 %%
 %% set socket i/o control flags
-tcp_ioctl(#fsm{sock = Sock, active = true} = State) ->
-   inet:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
-   State;
-tcp_ioctl(#fsm{sock = Sock, active = once} = State) ->
-   inet:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
-   State;
-tcp_ioctl(#fsm{sock = Sock, active = N} = State) ->
-   inet:setopts(Sock, [{active, N}]),
-   State.
+% tcp_ioctl(#fsm{sock = Sock, active = true} = State) ->
+%    inet:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
+%    State;
+% tcp_ioctl(#fsm{sock = Sock, active = once} = State) ->
+%    inet:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
+%    State;
+% tcp_ioctl(#fsm{sock = Sock, active = N} = State) ->
+%    inet:setopts(Sock, [{active, N}]),
+%    State.
 
-%%
-%% creates tcp listen socket
-%% note: socket opts for listener socket requires {active, false}
-tcp_listen(Uri, #fsm{so = SOpt0}) ->
-   Port = uri:port(Uri),
-   SOpt = opts:filter(?SO_TCP_ALLOWED, SOpt0),
-   gen_tcp:listen(Port, [
-      {active,   false}
-     ,{reuseaddr, true} 
-     |lists:keydelete(active, 1, SOpt)
-   ]).
 
 %%
 %%
@@ -609,24 +660,10 @@ tcp_listen(Uri, #fsm{so = SOpt0}) ->
 
 %%
 %%
-tcp_accept(_Uri, #fsm{so = SOpt0}) ->
-   LPipe = opts:val(listen, SOpt0),
-   LSock = pipe:ioctl(LPipe, socket),
-   gen_tcp:accept(LSock).
+% tcp_accept(_Uri, #fsm{so = SOpt0}) ->
+%    LPipe = opts:val(listen, SOpt0),
+%    LSock = pipe:ioctl(LPipe, socket),
+%    gen_tcp:accept(LSock).
 
 
-%%
-%% create app acceptor pool
-create_acceptor_pool(Uri, #fsm{so = SOpt0, backlog = Backlog}) ->
-   Sup  = opts:val(acceptor,  SOpt0), 
-   SOpt = [{listen, self()} | SOpt0],
-   lists:foreach(
-      fun(_) ->
-         {ok, _} = supervisor:start_child(Sup, [Uri, SOpt])
-      end,
-      lists:seq(1, Backlog)
-   ).
 
-create_acceptor(Uri, #fsm{so = SOpt0}) ->
-   Sup = opts:val(acceptor,  SOpt0), 
-   {ok, _} = supervisor:start_child(Sup, [Uri, SOpt0]).

@@ -29,6 +29,7 @@ start(_Type, _Args) ->
    knet:listen("tcp://*:8888", [
       {acceptor, tcp_protocol}
      ,{backlog,  256}
+     ,{timeout,  [{ttp, 10000}]}
      ,inet
    ]),
    tcp_sup:start_link(). 
