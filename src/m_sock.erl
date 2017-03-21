@@ -1,6 +1,6 @@
 %% @doc
 %%   IO-monad: socket
--module(k_sock).
+-module(m_sock).
 -compile({parse_transform, category}).
 
 -include("knet.hrl").

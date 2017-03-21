@@ -17,7 +17,7 @@
 %%
 %% @doc
 %%   IO-monad: http 
--module(k_http).
+-module(m_http).
 -compile({parse_transform, category}).
 
 -include("knet.hrl").

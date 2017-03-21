@@ -20,6 +20,7 @@
 -module(knet_tcp).
 -behaviour(pipe).
 -compile({parse_transform, category}).
+-compile({parse_transform, monad}).
 
 -include("knet.hrl").
 
@@ -76,19 +77,22 @@ init(Opts) ->
 
 %%
 free(Reason, #state{socket = Sock}) ->
-   {ok, Peer} = peername(Sock),
-   {ok, Addr} = sockname(Sock),
-   Packets    = getstat(Sock),
-   Bytes      = getstat(Sock),  
-   ?access_tcp(#{
-      req  => {fin, Reason}
-     ,peer => Peer 
-     ,addr => Addr
-     ,byte => Bytes
-     ,pack => Packets
-   }),
+   case 
+      do([m_either ||
+         Peer <- peername(Sock),
+         Addr <- sockname(Sock),
+         Pack <- getstat(Sock),
+         Byte <- getstat(Sock),
+         return(#{req => {fin, Reason}, peer => Peer, addr => Addr, byte => Byte, pack => Pack})
+      ])
+   of
+      {ok, Log} ->
+         ?access_tcp(Log),
+         ok;
+      _ ->
+         ok
+   end.
    % (catch gen_tcp:close(Sock)),
-   ok. 
 
 %% 
 ioctl(socket, #state{socket = #socket{sock = Sock}}) -> 
@@ -299,11 +303,13 @@ socket(SOpt) ->
       }
    }.
 
-socket_bind_with(Sock, Uri, #socket{} = Socket) ->
+socket_bind_with(Sock, Uri, #socket{} = Socket0) ->
+   Socket1 = Socket0#socket{sock = Sock},
+   {ok, Sockname} = sockname(Socket1),
    {ok, 
-      Socket#socket{
-         sock     = Sock, 
-         peername = uri:authority(uri:authority(Uri), uri:new(tcp))
+      Socket1#socket{
+         peername = uri:authority(uri:authority(Uri), uri:new(tcp)),
+         sockname = Sockname
       }
    }.
 
