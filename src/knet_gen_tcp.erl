@@ -8,12 +8,16 @@
 -export([
    socket/1,
    close/1,
+   setopts/2, %% *
    peername/1,
    sockname/1,
    connect/2,
+   listen/2, %% *
+   accept/2, %% *
    send/2,
    recv/1,
-   recv/2
+   recv/2,
+   getstat/2 %% *
 ]).
 
 %%
@@ -40,6 +44,19 @@ close(#socket{sock = Sock, so = SOpt}) ->
    [$^||
       gen_tcp:close(Sock),
       socket(SOpt)
+   ].
+
+%%
+%%
+%% set socket options
+-spec setopts(#socket{}, [_]) -> {ok, #socket{}} | {error, _}.
+
+setopts(#socket{sock = undefined}, _) ->
+   {error, enotconn};
+setopts(#socket{sock = Sock} = Socket, Opts) ->
+   [$^ ||
+      inet:setopts(Sock, Opts),
+      fmap(Socket)
    ].
 
 %%
@@ -110,6 +127,32 @@ connect(Uri, #socket{so = SOpt} = Socket) ->
       peername(Uri, _)
    ].
 
+%%
+%%
+-spec listen(uri:uri(), #socket{}) -> {ok, #socket{}} | {error, _}.
+
+listen(Uri, #socket{so = SOpt} = Socket) ->
+   {_Host, Port} = uri:authority(Uri),
+   Opts = lists:keydelete(active, 1, so_tcp(SOpt)),
+   [$^ ||
+      gen_tcp:listen(Port, [{active, false}, {reuseaddr, true} | Opts]),
+      fmap(Socket#socket{sock = _}),
+      sockname(Uri, _),
+      peername(Uri, _)  %% @todo: ???
+   ].
+
+%%
+%%
+-spec accept(uri:uri(), #socket{}) -> {ok, #socket{}} | {error, _}.
+
+accept(Uri, #socket{sock = LSock} = Socket) ->
+   [$^ ||
+      gen_tcp:accept(LSock),
+      fmap(Socket#socket{sock = _}),
+      sockname(Uri, _),
+      fmap(_#socket{peername = undefined})
+   ].
+
 
 %%
 %%
@@ -144,3 +187,15 @@ recv(#socket{sock = Sock} = Socket) ->
 recv(#socket{in = Stream0} = Socket, Data) ->
    {Pckt, Stream1} = pstream:decode(Data, Stream0),
    {ok, Pckt, Socket#socket{in = Stream1}}.
+
+%%
+%%
+-spec getstat(#socket{}, atom()) -> {ok, _} | {error, _}.
+
+getstat(#socket{in = In, eg = Eg}, packet) ->
+   {ok, pstream:packets(In) + pstream:packets(Eg)};
+
+getstat(#socket{in = In, eg = Eg}, octet) ->
+   {ok, pstream:octets(In) + pstream:octets(Eg)}.
+
+
