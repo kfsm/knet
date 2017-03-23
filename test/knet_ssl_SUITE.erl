@@ -155,7 +155,7 @@ knet_cli_io(Opts) ->
 %%
 knet_cli_timeout(Opts) ->
    {ok, Sock} = knet_connect(?config(uri, Opts), [
-      {timeout, [{ttl, 500}, {tth, 100}]}
+      {timeout, [{ttp, 500}, {tth, 100}]}
    ]),
    <<">123456">> = knet:send(Sock, <<">123456">>),
    {ssl, Sock, <<"<123456">>} = knet:recv(Sock),
@@ -183,7 +183,7 @@ knet_srv_io(Opts) ->
 
 knet_srv_timeout(Opts) ->
    {ok, LSock} = knet_listen(?config(uri, Opts), [
-      {timeout,  [{ttl, 500}, {tth, 100}]}
+      {timeout,  [{ttp, 500}, {tth, 100}]}
    ]),
    {ok, Sock} = ssl:connect(?HOST, ?PORT, [binary, {active, false}]),
    {ok, <<"hello">>} = ssl:recv(Sock, 0),

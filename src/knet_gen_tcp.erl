@@ -47,7 +47,6 @@ close(#socket{sock = Sock, so = SOpt}) ->
    ].
 
 %%
-%%
 %% set socket options
 -spec setopts(#socket{}, [_]) -> {ok, #socket{}} | {error, _}.
 

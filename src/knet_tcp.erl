@@ -101,16 +101,13 @@ ioctl(socket, #state{socket = Sock}) ->
 %%
 %%
 'IDLE'({connect, Uri}, Pipe, #state{} = State0) ->
-   T = os:timestamp(),
    case 
       [$^ ||
          connect(Uri, State0),
-         tracelog(connect, tempus:diff(T), _),
          time_to_live(_),
          time_to_hibernate(_),
          time_to_packet(0, _),
          pipe_to_side_a(Pipe, established, _),
-         accesslog({syn, sack}, tempus:diff(T), _), 
          stream_flow_ctrl(_)
       ]
    of
@@ -129,8 +126,7 @@ ioctl(socket, #state{socket = Sock}) ->
       [$^ ||
          listen(Uri, State0),
          spawn_acceptor_pool(Uri, _),
-         pipe_to_side_a(Pipe, listen, _),
-         accesslog(listen, undefined, _)
+         pipe_to_side_a(Pipe, listen, _)
       ]
    of
       {ok, State1} ->
@@ -144,17 +140,14 @@ ioctl(socket, #state{socket = Sock}) ->
 %%
 %%
 'IDLE'({accept, Uri}, Pipe, #state{} = State0) ->
-   T = os:timestamp(),
    case
       [$^ ||
          accept(Uri, State0),
          spawn_acceptor(Uri, _),
-         tracelog(connect, tempus:diff(T), _),
          time_to_live(_),
          time_to_hibernate(_),
          time_to_packet(0, _),
          pipe_to_side_a(Pipe, established, _),
-         accesslog({syn, sack}, tempus:diff(T), _), 
          stream_flow_ctrl(_)
       ]
    of
@@ -229,12 +222,7 @@ ioctl(socket, #state{socket = Sock}) ->
    %% Essentially, you will be served the first message, then read as many as you 
    %% wish from the socket. When the socket is empty, you can again enable {active, once}. 
    %% Note: release 17.x and later supports {active, n()}
-   case
-      [$^ ||
-         stream_recv(Pipe, Pckt, State0),
-         tracelog(packet, byte_size(Pckt), _)
-      ] 
-   of
+   case stream_recv(Pipe, Pckt, State0) of
       {ok, State1} ->
          {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
@@ -287,22 +275,30 @@ ioctl(socket, #state{socket = Sock}) ->
 %%
 %% 
 connect(Uri, #state{socket = Sock} = State) ->
+   T = os:timestamp(),
    [$^ ||
       knet_gen_tcp:connect(Uri, Sock),
-      fmap(State#state{socket = _})
+      fmap(State#state{socket = _}),
+      tracelog(connect, tempus:diff(T), _),
+      accesslog({syn, sack}, tempus:diff(T), _)
    ].
 
 listen(Uri, #state{socket = Sock} = State) ->
    [$^ ||
       knet_gen_tcp:listen(Uri, Sock),
-      fmap(State#state{socket = _})
+      fmap(State#state{socket = _}),
+      accesslog(listen, undefined, _)
    ].
 
 accept(Uri, #state{so = SOpt} = State) ->
+   T    = os:timestamp(),
+   %% Note: this is a design decision to inject listen socket via socket options
    Sock = pipe:ioctl(opts:val(listen, SOpt), socket),
    [$^ ||
       knet_gen_tcp:accept(Uri, Sock),
-      fmap(State#state{socket = _})
+      fmap(State#state{socket = _}),
+      tracelog(connect, tempus:diff(T), _),
+      accesslog({syn, sack}, tempus:diff(T), _)
    ].
 
 %%
@@ -360,13 +356,6 @@ pipe_to_side_a(Pipe, Event, #state{socket = Sock} = State) ->
       fmap(State)
    ].
 
-pipe_to_side_b(Pipe, Event, #state{socket = Sock} = State) ->
-   [$^ ||
-      knet_gen_tcp:peername(Sock),
-      fmap(pipe:b(Pipe, {tcp, self(), {Event, _}})),
-      fmap(State)
-   ].
-
 pipe_to_side_a(Pipe, Event, Reason, #state{} = State) ->
    pipe:a(Pipe, {tcp, self(), {Event, Reason}}),
    {ok, State}.
@@ -376,7 +365,7 @@ pipe_to_side_b(Pipe, Event, Reason, #state{} = State) ->
    {ok, State}.
 
 %%
-stream_send(Pipe, Pckt, #state{socket = Sock} = State) ->
+stream_send(_Pipe, Pckt, #state{socket = Sock} = State) ->
    [$^ ||
       knet_gen_tcp:send(Sock, Pckt),
       fmap(State#state{socket = _})
@@ -387,7 +376,8 @@ stream_recv(Pipe, Pckt, #state{socket = Sock} = State) ->
    [$^ ||
       knet_gen_tcp:recv(Sock, Pckt),
       stream_uplink(Pipe, _, _),
-      fmap(State#state{socket = _})     
+      fmap(State#state{socket = _}),
+      tracelog(packet, byte_size(Pckt), _)     
    ].
 
 stream_uplink(Pipe, Pckt, Socket) ->
@@ -408,7 +398,7 @@ accesslog(Req, T, #state{socket = Sock} = State) ->
    ?access_tcp(#{req => Req, peer => Peer, addr => Addr, time => T}),
    {ok, State}.
 
-tracelog(Key, Val, #state{trace = undefined} = State) ->
+tracelog(_Key, _Val, #state{trace = undefined} = State) ->
    {ok, State};
 tracelog(Key, Val, #state{trace = Pid, socket = Sock} = State) ->
    [$^ ||
