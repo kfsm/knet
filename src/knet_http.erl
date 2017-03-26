@@ -464,20 +464,32 @@ http_request_trace(#http{state = #fsm{trace = undefined}} = Http) ->
    Http;
 
 http_request_trace(#http{is = eoh, http = {response, {Code, _, _}}, state = #fsm{trace = Pid, queue = Q0} = State} = Http) ->
-   T = lens:get(lens_qhd(), lens:tuple(#req.treq), Q0),
-   knet_log:trace(Pid, {http, code, Code}),
-   knet_log:trace(Pid, {http, ttfb, tempus:diff(T)}),
+   #req{
+      http = Ht,
+      treq = T
+   } = lens:get(lens_qhd(), Q0),
+   Uri = uri_at_req(Ht),
+   knet_log:trace(Pid, {http, {code, Uri},  Code}),
+   knet_log:trace(Pid, {http, {ttfb, Uri}, tempus:diff(T)}),
    Q1 = lens:put(lens_qhd(), lens:tuple(#req.teoh), os:timestamp(), Q0),
    Http#http{state = State#fsm{queue = Q1}};   
 
 http_request_trace(#http{is = eof, http = {response, _}, state = #fsm{trace = Pid, queue = Q0}} = Http) ->
-   T = lens:get(lens_qhd(), lens:tuple(#req.teoh), Q0),
-   knet_log:trace(Pid, {http, ttmr, tempus:diff(T)}),
+   #req{
+      http = Ht,
+      teoh = T
+   } = lens:get(lens_qhd(), Q0),
+   Uri = uri_at_req(Ht),
+   knet_log:trace(Pid, {http, {ttmr, Uri}, tempus:diff(T)}),
    Http;
 
 http_request_trace(Http) ->
    Http.
 
+
+uri_at_req({request, {_Mthd, Path, Head}}) ->
+   Authority = lens:get(lens:pair('Host'), Head),
+   uri:path(Path, uri:authority(Authority, uri:new(http))).
 
 %%
 %% focus lens on queue head
