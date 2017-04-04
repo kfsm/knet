@@ -242,6 +242,7 @@ join(_, {error, _} = Error) ->
 unit(Sock, Pckt, State) ->
    case lens:get(header('Connection'), State) of
       <<"close">> ->
+         knet:close(Sock),
          [Pckt|maps:remove(http, State)];
       _           ->
          Authority = uri:authority( lens:get(uri(), State) ),
