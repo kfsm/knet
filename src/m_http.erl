@@ -19,6 +19,7 @@
 %%   IO-monad: http 
 -module(m_http).
 -compile({parse_transform, category}).
+-compile({parse_transform, monad}).
 
 -include("knet.hrl").
 -include_lib("datum/include/datum.hrl").
@@ -95,9 +96,14 @@ method(Mthd) ->
 h(Head, Value) ->
    header(Head, Value).
 
-header(Head, Value) ->
+header(Head, Value)
+ when is_list(Value) ->
    % @todo: htstream works only with atoms, we need to fix library
-   m_state:put(header(scalar:atom(Head)), scalar:s(Value)).
+   m_state:put(header(scalar:atom(Head)), scalar:s(Value));
+
+header(Head, Value) ->
+   m_state:put(header(scalar:atom(Head)), Value).
+
 
 %%
 %%
@@ -108,7 +114,7 @@ d(Value) ->
    payload(Value).
 
 payload(Value) ->
-   m_state:put(payload(), Value).
+   m_state:put(payload(), scalar:s(Value)).
 
 %%
 %%
@@ -200,10 +206,39 @@ sock(State) ->
 send(Sock, State) ->
    Mthd = lens:get(method(), State),   
    Url  = lens:get(uri(), State),
-   Head = lens:get(header(), State),
+   Head = head(State),
+io:format("=> ~p~n", [Head]),
    knet:send(Sock, {Mthd, Url, Head}),
    [$?|| lens:get(payload(), State), knet:send(Sock, _)],
    knet:send(Sock, eof).
+
+%%
+%% 
+head(State) ->
+   [$.||
+      lens:get(header(), State),
+      head_connection(_),
+      head_te(payload(), _)
+   ].
+
+head_connection(Head) ->
+   case lens:get(lens:pair('Connection', ?NONE), Head) of
+      ?NONE ->
+         [{'Connection', <<"close">>}|Head];
+      _     ->
+         Head
+   end.
+
+head_te(undefined, Head) ->
+   Head;
+head_te(_, Head) ->
+   case lens:get(lens:pair('Transfer-Encoding', ?NONE), Head) of
+      ?NONE ->
+         [{'Transfer-Encoding', <<"chunked">>}|Head];
+      _     ->
+         Head
+   end.
+
 
 %%
 %%
