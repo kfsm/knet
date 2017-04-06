@@ -28,7 +28,7 @@
 -export([
    new/1, new/2, 
    x/1, method/1, 
-   h/2, header/2, 
+   h/1, h/2, header/2, 
    d/1, payload/1, 
    r/0, request/0, request/1
 ]).
@@ -90,8 +90,14 @@ method(Mthd) ->
 
 %%
 %%
+-spec h(_) -> m(_).
 -spec h(_, _) -> m(_).
 -spec header(_, _) -> m(_).
+
+h(Head) ->
+   [Head, Value] = binary:split(scalar:s(Head), <<$:>>),
+   header(Head, Value).
+
 
 h(Head, Value) ->
    header(Head, Value).
@@ -153,7 +159,7 @@ so() ->
    lens:c([lens:map(spec, #{}), focus(), lens:map(so, [])]).
 
 method() ->
-   lens:c([lens:map(spec, #{}), focus(), lens:map(method, ?NONE)]).
+   lens:c([lens:map(spec, #{}), focus(), lens:map(method, 'GET')]).
 
 uri() ->
    lens:c([lens:map(spec, #{}), focus(), lens:map(uri, ?NONE)]).
@@ -207,7 +213,6 @@ send(Sock, State) ->
    Mthd = lens:get(method(), State),   
    Url  = lens:get(uri(), State),
    Head = head(State),
-io:format("=> ~p~n", [Head]),
    knet:send(Sock, {Mthd, Url, Head}),
    [$?|| lens:get(payload(), State), knet:send(Sock, _)],
    knet:send(Sock, eof).
