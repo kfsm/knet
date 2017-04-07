@@ -223,7 +223,7 @@ head(State) ->
    [$.||
       lens:get(header(), State),
       head_connection(_),
-      head_te(payload(), _)
+      head_te(lens:get(payload(), State), _)
    ].
 
 head_connection(Head) ->
