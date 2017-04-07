@@ -95,8 +95,14 @@ method(Mthd) ->
 -spec header(_, _) -> m(_).
 
 h(Head) ->
-   [Head, Value] = binary:split(scalar:s(Head), <<$:>>),
-   header(Head, Value).
+   [H, V] = binary:split(scalar:s(Head), <<$:>>),
+   header(H, hv(V)).
+
+hv(<<$\s, X/binary>>) -> hv(X);
+hv(<<$\t, X/binary>>) -> hv(X);
+hv(<<$\n, X/binary>>) -> hv(X);
+hv(<<$\r, X/binary>>) -> hv(X);
+hv(X) -> X.
 
 
 h(Head, Value) ->
@@ -281,7 +287,7 @@ join(_, {error, _} = Error) ->
 %%
 unit(Sock, Pckt, State) ->
    case lens:get(header('Connection'), State) of
-      <<"close">> ->
+      Conn when Conn =:= <<"close">> orelse Conn =:= ?NONE ->
          knet:close(Sock),
          [Pckt|maps:remove(http, State)];
       _           ->
