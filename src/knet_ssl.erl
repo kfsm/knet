@@ -364,15 +364,13 @@ time_to_packet(N, #state{socket = Sock, timeout = SOpt} = State) ->
 %%
 %% socket up/down link i/o
 stream_flow_ctrl(#state{flowctl = true, socket = Sock} = State) ->
-   [$^ ||
-      knet_gen_ssl:setopts(Sock, [{active, once}]),
-      fmap(State)
-   ];
+   %% we need to ignore any error for i/o setup
+   %% it will crash the process while data reside in mailbox
+   knet_gen_ssl:setopts(Sock, [{active, once}]),
+   {ok, State};
 stream_flow_ctrl(#state{flowctl = once, socket = Sock} = State) ->
-   [$^ ||
-      knet_gen_ssl:setopts(Sock, [{active, once}]),
-      fmap(State)
-   ];
+   knet_gen_ssl:setopts(Sock, [{active, once}]),
+   {ok, State};
 stream_flow_ctrl(State) ->
    {ok, State}.
 

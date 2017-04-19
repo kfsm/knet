@@ -332,20 +332,16 @@ time_to_packet(N, #state{socket = Sock, timeout = SOpt} = State) ->
 %%
 %% socket up/down link i/o
 stream_flow_ctrl(#state{flowctl = true, socket = Sock} = State) ->
-   [$^ ||
-      knet_gen_tcp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
-      fmap(State)
-   ];
+   %% we need to ignore any error for i/o setup
+   %% it will crash the process while data reside in mailbox
+   knet_gen_tcp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
+   {ok, State};
 stream_flow_ctrl(#state{flowctl = once, socket = Sock} = State) ->
-   [$^ ||
-      knet_gen_tcp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
-      fmap(State)
-   ];
+   knet_gen_tcp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
+   {ok, State};
 stream_flow_ctrl(#state{flowctl = _N, socket = Sock} = State) ->
-   [$^ ||
-      knet_gen_tcp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
-      fmap(State)
-   ].
+   knet_gen_tcp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
+   {ok, State}.
 
 %%
 %%
