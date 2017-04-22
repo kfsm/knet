@@ -4,41 +4,47 @@
    {i, "include"}, 
    {outdir, "_build/default/lib/knet/ebin"},
    debug_info, 
-   {parse_transform, lager_transform}
+   {parse_transform, lager_transform},
+   {d, 'CONFIG_LOG_TCP',  true},
+   {d, 'CONFIG_LOG_UDP',  true},
+   {d, 'CONFIG_LOG_SSL',  true},
+   {d, 'CONFIG_LOG_HTTP', true},
+   {d, 'CONFIG_LOG_WS',   true},
+   {d, 'CONFIG_TRACE',    true}
 ]}.
 
-{"examples/tcp/src/*", [
+{"apps/tcp/src/*", [
    report, 
    verbose, 
    {i, "include"}, 
-   {outdir, "examples/tcp/ebin"},
+   {outdir, "_build/default/lib/tcp/ebin"},
    debug_info, 
    {parse_transform, lager_transform}
 ]}.
 
-{"examples/tls/src/*", [
+{"apps/tls/src/*", [
    report, 
    verbose, 
    {i, "include"}, 
-   {outdir, "examples/tls/ebin"},
+   {outdir, "_build/default/lib/tls/ebin"},
    debug_info, 
    {parse_transform, lager_transform}
 ]}.
 
-{"examples/http/src/*", [
+{"apps/http/src/*", [
    report, 
    verbose, 
    {i, "include"}, 
-   {outdir, "examples/http/ebin"},
+   {outdir, "_build/default/lib/http/ebin"},
    debug_info, 
    {parse_transform, lager_transform}
 ]}.
 
-{"examples/websocket/src/*", [
+{"apps/websocket/src/*", [
    report, 
    verbose, 
    {i, "include"}, 
-   {outdir, "examples/websocket/ebin"},
+   {outdir, "_build/default/lib/websocket/ebin"},
    debug_info, 
    {parse_transform, lager_transform}
 ]}.

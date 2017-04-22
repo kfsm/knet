@@ -48,6 +48,9 @@ ioctl(_, _) ->
 %%
 handle({tcp, _, {established, _Peer}}, _Pipe, Sock) ->
 	{next_state, handle, Sock};
+
+handle({tcp, _, {terminated, _Reason}}, Pipe, Sock) ->
+   {stop, normal, Sock};
    
 handle({tcp, _, Msg}, Pipe, Sock) ->
 	pipe:a(Pipe, Msg),
