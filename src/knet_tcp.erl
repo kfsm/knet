@@ -210,6 +210,7 @@ ioctl(socket, #state{socket = Sock}) ->
       {ok, State1} ->
          {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
+         %% @todo: spawn pipe so that b is client
          'ESTABLISHED'({tcp_error, undefined, Reason}, Pipe, State0)
    end;
 
@@ -218,6 +219,7 @@ ioctl(socket, #state{socket = Sock}) ->
       {ok, State1} ->
          {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
+         %% @todo: spawn pipe so that b is client
          'ESTABLISHED'({tcp_error, undefined, Reason}, Pipe, State0)
    end;
 
@@ -253,6 +255,7 @@ ioctl(socket, #state{socket = Sock}) ->
       {ok, State1} ->
          {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
+         %% @todo: spawn pipe so that b is client
          'ESTABLISHED'({tcp_error, undefined, Reason}, Pipe, State0)
    end.
 
