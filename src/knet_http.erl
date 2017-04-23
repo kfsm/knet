@@ -43,8 +43,8 @@
 %%
 %%
 -record(fsm, {
-   socket = undefined :: #socket{}       %% http i/o streams
-  ,queue  = undefined :: datum:q()       %% queue of in-flight request
+   socket = undefined :: #socket{}    %% http i/o streams
+  ,queue  = undefined :: datum:q()    %% queue of in-flight request
   ,trace  = undefined :: pid()        %% knet stats function
 }).
 
@@ -87,13 +87,8 @@ init(Opts) ->
    {ok, 'IDLE', 
       #fsm{
          socket  = gen_http_socket(Opts)
-
-        % ,recv    = htstream:new()
-        % ,send    = htstream:new()
         ,queue   = q:new()
-
         ,trace   = opts:val(trace, undefined, Opts)
-        % ,so      = Opts
       }
    }.
 
@@ -482,7 +477,7 @@ http_request_deq(Http) ->
 
 %%
 %%
-http_request_log(#http{is = eof, http = {response, _}, state = #fsm{queue = Q}} = Http) ->
+http_request_log(#http{is = eof, http = {response, _}, state = #fsm{queue = Q} = State} = Http) ->
    #req{
       http = {_, {Mthd,  Url, HeadA}}, 
       code = {_, {Code, _Msg, HeadB}}, 
@@ -490,8 +485,7 @@ http_request_log(#http{is = eof, http = {response, _}, state = #fsm{queue = Q}} 
    } = deq:head(Q),
    ?access_http(#{
       req  => {Mthd, Code}
-     % ,peer => Peer
-     ,peer => undefined
+     ,peer => lens:get(lens_http_socket_peername(), Http)
      ,addr => request_url(Url, HeadA)
      ,ua   => opts:val('User-Agent', opts:val('Server', undefined, HeadB), HeadA)
      ,time => tempus:diff(T)
@@ -502,8 +496,7 @@ http_request_log(#http{is = upgrade, http = {_, {_, Url, Head}}} = Http) ->
    Upgrade = lens:get(lens:pair('Upgrade'), Head),
    ?access_http(#{
       req  => {upgrade, Upgrade}
-     % ,peer => Peer
-     ,peer => undefined
+     ,peer => lens:get(lens_http_socket_peername(), Http)
      ,addr => request_url(Url, Head)
      ,ua   => opts:val('User-Agent', undefined, Head)
    }),
@@ -562,6 +555,10 @@ uri_at_req({request, {_Mthd, Path, Head}}) ->
 %% lenses
 lens_socket_peername() ->
    lens:c([lens:tuple(#fsm.socket), lens:tuple(#socket.peername)]).
+
+lens_http_socket_peername() ->
+   lens:c([lens:tuple(#http.state), lens_socket_peername()]).
+
 
 
 %%
