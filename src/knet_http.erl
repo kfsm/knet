@@ -46,8 +46,8 @@
    socket = undefined :: #socket{}       %% http i/o streams
   ,queue  = undefined :: datum:q()       %% queue of in-flight request
 
-  ,recv  = undefined :: htstream:http()  %% ingress packet stream
-  ,send  = undefined :: htstream:http()  %% egress  packet stream
+  % ,recv  = undefined :: htstream:http()  %% ingress packet stream
+  % ,send  = undefined :: htstream:http()  %% egress  packet stream
   ,t     = undefined :: tempus:t()       %% 
   ,peer  = undefined :: uri:uri()        %% identity of remote peer
 
@@ -93,10 +93,10 @@ start_link(Opts) ->
 init(Opts) ->
    {ok, 'IDLE', 
       #fsm{
-         socket  = http_socket(Opts)
+         socket  = gen_http_socket(Opts)
 
-        ,recv    = htstream:new()
-        ,send    = htstream:new()
+        % ,recv    = htstream:new()
+        % ,send    = htstream:new()
         ,queue   = q:new()
 
         ,trace   = opts:val(trace, undefined, Opts)
@@ -139,7 +139,10 @@ ioctl(_, _) ->
 
 'IDLE'({_Mthd, {uri, _, _}=Uri, _Head, _Msg}=Req, Pipe, State) ->
    pipe:b(Pipe, {connect, Uri}),
-   'STREAM'(Req, Pipe, State).
+   'STREAM'(Req, Pipe, State);
+
+'IDLE'(_, _, State) ->
+   {next_state, 'IDLE', State}.
 
 %%%------------------------------------------------------------------
 %%%
@@ -166,7 +169,7 @@ ioctl(_, _) ->
    Queue1 = qmap(fun(Req) -> Req#req{treq = T} end, Queue0),
    {next_state, 'STREAM', State#fsm{peer = Peer, queue = Queue1}};
 
-'STREAM'({Prot, _, {terminated, _}}, _Pipe, #fsm{queue = Q} = State)
+'STREAM'({Prot, _, {terminated, _}}, Pipe, #fsm{} = State)
  when ?is_transport(Prot) ->
    %% @todo: clean-up state
    % case htstream:state(Stream#stream.recv) of
@@ -177,10 +180,9 @@ ioctl(_, _) ->
    %    _       -> 
    %       ok
    % end,
-
    % {stop, normal, State};
-   io:format("=[ +++ ]=> ~p~n", [Q]),
-   {next_state, 'IDLE', State};
+   % io:format("=[ +++ ]=> ~p~n", [Q]),
+   {next_state, 'IDLE', stream_reset(Pipe, State)};
 
 %%
 %%
@@ -201,8 +203,9 @@ ioctl(_, _) ->
       end
    catch _:Reason ->
       ?NOTICE("knet [http]: ingress failure ~p ~p", [Reason, erlang:get_stacktrace()]),
-      pipe:b(Pipe, {http, self(), eof}),
-      {stop, normal, State0}
+      % pipe:b(Pipe, {http, self(), eof}),
+      % {stop, normal, State0}
+      {next_state, 'IDLE', stream_reset(Pipe, State0)}
    end;
 
 %%
@@ -213,7 +216,8 @@ ioctl(_, _) ->
    catch _:Reason ->
       ?NOTICE("knet [http]: egress failure ~p ~p", [Reason, erlang:get_stacktrace()]),
       % pipe:a(Pipe, {http, self(), eof}),
-      {stop, normal, State}
+      % {stop, normal, State}
+      {next_state, 'IDLE', stream_reset(Pipe, State)}
    end.
 
 %%%------------------------------------------------------------------
@@ -291,13 +295,9 @@ down_link_packet(Payload) ->
 
 %%
 down_link_encode(Data, #fsm{socket = Socket0} = State) ->
-   {Pckt, #socket{eg = Stream} = Socket1} = http_send(Socket0, down_link_packet(Data)),
-   #http{
-      is    = htstream:state(Stream),
-      http  = htstream:http(Stream),
-      pack  = Pckt,
-      state = State#fsm{socket = Socket1}
-   }.
+   {Pckt, #socket{eg = Stream} = Socket1} = gen_http_send(Socket0, down_link_packet(Data)),
+   http_set_state(Stream, Socket1, #http{pack = Pckt, state = State}).
+
 
 %%
 %%
@@ -308,7 +308,7 @@ down_link_egress(Pipe, #http{pack = Pckt} = Http) ->
 %%
 %%
 down_link_return(Pipe, #http{is = eoh, state = State}) ->
-   %% htstream has a feature on eoh event, 
+   %% htstream has a feature of "eoh event". 
    down_link([], Pipe, State);
 
 down_link_return(_Pipe, #http{state = State}) ->
@@ -337,14 +337,10 @@ up_link(Msg, Pipe, State) ->
 
 %%
 %%
-up_link_decode(Msg, #fsm{recv = Recv0, peer = Peer} = State) ->
-   {Pckt, Recv1} = htstream:decode(Msg, Recv0),
-   #http{
-      is    = htstream:state(Recv1),
-      http  = htstream:http(Recv1),
-      pack  = up_link_message(Pckt, Peer),
-      state = State#fsm{recv = Recv1} 
-   }.
+up_link_decode(Data, #fsm{socket = Socket0, peer = Peer} = State) ->
+   {Pckt, #socket{in = Stream} = Socket1} = gen_http_recv(Socket0, Data),
+   http_set_state(Stream, Socket1, #http{pack = up_link_message(Pckt, Peer), state = State}).
+
 
 up_link_message({Mthd, Url, Head}, Peer) 
  when ?is_method(Mthd) ->
@@ -406,11 +402,58 @@ up_link_upgrade(<<"websocket">>, Pipe, #http{http = {_, {Mthd, Uri, Head}}, stat
 up_link_upgrade(Upgrade, _, _) ->
    throw({not_implemented, Upgrade}).
 
+%%
+%%
+stream_reset(_Pipe, #fsm{queue = {}} = State) ->
+   state_new(State);
+
+stream_reset(Pipe,  #fsm{socket = #socket{in = Stream}, queue = Queue} = State) ->
+   case htstream:state(Stream) of
+      payload ->
+         send_eof_to_side(Pipe, q:head(Queue)),
+         send_503_to_side(Pipe, q:tail(Queue));
+      _       ->
+         send_503_to_side(Pipe, Queue)
+   end,
+   state_new(State).
+
+send_eof_to_side(Pipe, _) ->
+   pipe:b(Pipe, {http, self(), eof}).
+
+send_503_to_side(Pipe, Queue) ->
+   lists:map(
+      fun(_) -> 
+         pipe:b(Pipe, {http, self(), {503, <<"Service Unavailable">>, []}}),
+         pipe:b(Pipe, {http, self(), eof})
+      end,
+      q:list(Queue)
+   ).
+
+state_new(#fsm{socket = #socket{so = Opts} = Socket}) ->
+   #fsm{
+      socket  = Socket
+     ,queue   = q:new()
+     ,trace   = opts:val(trace, undefined, Opts)
+     ,so      = Opts
+   }.
+
 %%%------------------------------------------------------------------
 %%%
 %%% private
 %%%
 %%%------------------------------------------------------------------
+
+%%
+%%
+-spec http_set_state(htstream:http(), #socket{}, #http{}) -> #http{}.
+
+http_set_state(Stream, Socket, #http{state = State} = Http) ->
+   Http#http{
+      is    = htstream:state(Stream),
+      http  = htstream:http(Stream),
+      state = State#fsm{socket = Socket}
+   }.
+
 
 %%
 %% annotate http request with aux data 
@@ -549,26 +592,45 @@ lens_qhd() ->
       lens:fmap(fun(X) -> deq:poke(X, deq:tail(Queue)) end, Fun(deq:head(Queue)))      
    end.
 
+
+
+
 %%%------------------------------------------------------------------
 %%%
 %%% http socket
 %%%
 %%%------------------------------------------------------------------
 
+%%
+%% 
+-spec gen_http_socket(_) -> #socket{}.
 
--spec http_socket(_) -> #socket{}.
-
-http_socket(SOpt) ->
+gen_http_socket(SOpt) ->
    #socket{
       in = htstream:new(),
       eg = htstream:new(),
       so = SOpt
    }.
 
+%%
+%%
+-spec gen_http_close(#socket{}) -> #socket{}.
 
--spec http_send(#socket{}, _) -> {[binary()], #socket{}}.
+gen_http_close(#socket{so = SOpt}) ->
+   gen_http_socket(SOpt).
 
-http_send(#socket{eg = Stream0} = Socket, Data) ->
+%%
+%%
+-spec gen_http_send(#socket{}, _) -> {[binary()], #socket{}}.
+
+gen_http_send(#socket{eg = Stream0} = Socket, Data) ->
    {Pckt, Stream1} = htstream:encode(Data, Stream0),
    {Pckt, Socket#socket{eg = Stream1}}.
 
+%%
+%%
+-spec gen_http_recv(#socket{}, _) -> {_, #socket{}}.
+
+gen_http_recv(#socket{in = Stream0} = Socket, Data) ->
+   {Pckt, Stream1} = htstream:decode(Data, Stream0),
+   {Pckt, Socket#socket{in = Stream1}}.
