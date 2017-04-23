@@ -401,7 +401,7 @@ errorlog(Reason, Peer, #state{} = State) ->
 accesslog(Req, T, #state{socket = Sock} = State) ->
    %% @todo: move sock abstraction to knet_log
    Peer = maybeT(knet_gen_tcp:peername(Sock)),
-   Addr = maybeT(knet_gen_tcp:sockname(Sock)),  
+   Addr = maybeT(knet_gen_tcp:sockname(Sock)),
    ?access_tcp(#{req => Req, peer => Peer, addr => Addr, time => T}),
    {ok, State}.
 

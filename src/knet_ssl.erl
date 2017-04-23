@@ -58,7 +58,7 @@ start_link(Opts) ->
 
 %%
 init(SOpt) ->
-   [$^ ||
+   [either ||
       knet_gen_ssl:socket(SOpt),
       fmap('IDLE',
          #state{
@@ -73,21 +73,7 @@ init(SOpt) ->
 
 %%
 free(Reason, #state{socket = Sock}) ->
-   case 
-      do([m_either ||
-         Peer <- knet_gen_ssl:peername(Sock),
-         Addr <- knet_gen_ssl:sockname(Sock),
-         Pack <- knet_gen_ssl:getstat(Sock, packet),
-         Byte <- knet_gen_ssl:getstat(Sock, octet),
-         return(#{req => {fin, Reason}, peer => Peer, addr => Addr, byte => Byte, pack => Pack})
-      ])
-   of
-      {ok, Log} ->
-         ?access_ssl(Log),
-         ok;
-      _ ->
-         ok
-   end.
+   ok.
 
 %% 
 ioctl(socket,  #state{socket = Sock}) -> 
@@ -97,13 +83,18 @@ ioctl(socket,  #state{socket = Sock}) ->
 %%%
 %%% IDLE
 %%%
+%%%   This is the default state that each connection starts in before 
+%%%   the process of establishing it begins. This state is fictional.
+%%%   It represents the situation where there is no connection between
+%%%   peers either hasn't been created yet, or has just been destroyed.
+%%%
 %%%------------------------------------------------------------------   
 
 %%
 %%
 'IDLE'({connect, Uri}, Pipe, #state{} = State0) ->
    case 
-      [$^ ||
+      [either ||
          connect(Uri, State0),
          handshake(_),
          time_to_live(_),
@@ -118,7 +109,7 @@ ioctl(socket,  #state{socket = Sock}) ->
       {error, Reason} ->
          pipe_to_side_a(Pipe, terminated, Reason, State0),
          errorlog({syn, Reason}, Uri, State0),
-         {stop, Reason, State0}
+         {next_state, 'IDLE', State0}
    end;
 
 
@@ -126,7 +117,7 @@ ioctl(socket,  #state{socket = Sock}) ->
 %%
 'IDLE'({listen, Uri}, Pipe, State0) ->
    case
-      [$^ ||
+      [either ||
          listen(Uri, State0),
          spawn_acceptor_pool(Uri, _),
          pipe_to_side_a(Pipe, listen, _)
@@ -137,14 +128,14 @@ ioctl(socket,  #state{socket = Sock}) ->
       {error, Reason} ->
          pipe_to_side_a(Pipe, terminated, Reason, State0),
          errorlog({listen, Reason}, Uri, State0),
-         {stop, Reason, State0}
+         {next_state, 'IDLE', State0}
    end;
 
 %%
 %%
 'IDLE'({accept, Uri}, Pipe, #state{} = State0) ->
    case
-      [$^ ||
+      [either ||
          accept(Uri, State0),
          spawn_acceptor(Uri, _),
          handshake(_),
@@ -171,6 +162,8 @@ ioctl(socket,  #state{socket = Sock}) ->
 %%%
 %%% LISTEN
 %%%
+%%%   A peer is waiting to receive a connection request (syn)
+%%%
 %%%------------------------------------------------------------------   
 
 'LISTEN'(_Msg, _Pipe, State) ->
@@ -180,21 +173,32 @@ ioctl(socket,  #state{socket = Sock}) ->
 %%%
 %%% ESTABLISHED
 %%%
+%%%   The steady state of an open TCP connection. Peers can exchange 
+%%%   data. It will continue until the connection is closed for one 
+%%%   reason or another.
+%%%
 %%%------------------------------------------------------------------   
 
-'ESTABLISHED'({ssl_error, _, closed}, Pipe, State) ->
-   pipe_to_side_b(Pipe, terminated, normal, State),
-   {stop, normal, State};
+'ESTABLISHED'({ssl_error, Port, closed}, Pipe, State) ->
+   'ESTABLISHED'({ssl_error, Port, normal}, Pipe, State);
 
-'ESTABLISHED'({ssl_error, _, Reason}, Pipe, State) ->
-   pipe_to_side_b(Pipe, terminated, Reason, State),
-   {stop, Reason, State};
+'ESTABLISHED'({ssl_error, _, Error}, Pipe, #state{} = State0) ->
+   case
+      [either ||
+         close(Error, State0),
+         pipe_to_side_b(Pipe, terminated, Error, _)
+      ]
+   of
+      {ok, State1} -> 
+         {next_state, 'IDLE', State1};
+      {error, Reason} -> 
+         {stop, Reason, State0}
+   end;
 
-'ESTABLISHED'({ssl_closed, _}, Pipe, State) ->
-   pipe_to_side_b(Pipe, terminated, normal, State),
-   {stop, normal, State};
+'ESTABLISHED'({ssl_closed, Port}, Pipe, State) ->
+   'ESTABLISHED'({ssl_error, Port, normal}, Pipe, State);
 
-'ESTABLISHED'({ssl, _, Pckt}, Pipe, #state{} = State0) ->
+'ESTABLISHED'({ssl, Port, Pckt}, Pipe, #state{} = State0) ->
    %% What one can do is to combine {active, once} with gen_tcp:recv().
    %% Essentially, you will be served the first message, then read as many as you 
    %% wish from the socket. When the socket is empty, you can again enable {active, once}. 
@@ -208,7 +212,7 @@ ioctl(socket,  #state{socket = Sock}) ->
       {ok, State1} ->
          {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
-         {stop, Reason, State0}
+         'ESTABLISHED'({ssl_error, Port, Reason}, Pipe, State0)
    end;
 
 
@@ -216,11 +220,8 @@ ioctl(socket,  #state{socket = Sock}) ->
    case time_to_packet(Pack, State0) of
       {ok, State1} ->
          {next_state, 'ESTABLISHED', State1};
-      {error, timeout} ->
-         pipe_to_side_b(Pipe, terminated, timeout, State0),
-         {stop, normal, State0};
       {error, Reason} ->
-         {stop, Reason, State0}   
+         'ESTABLISHED'({ssl_error, undefined, Reason}, Pipe, State0)
    end;
 
 'ESTABLISHED'(tth, _, State) ->
@@ -267,8 +268,7 @@ ioctl(socket,  #state{socket = Sock}) ->
       {ok, State1} ->
          {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
-         pipe_to_side_a(Pipe, terminated, Reason, State0),
-         {stop, Reason, State0}
+         'ESTABLISHED'({ssl_error, undefined, Reason}, Pipe, State0)
    end.
 
 %%%------------------------------------------------------------------
@@ -330,6 +330,12 @@ handshake(#state{socket = Sock} = State) ->
       accesslog({ssl, hand}, tempus:diff(T), _)
    ].
 
+close(Reason, #state{} = State) ->
+   [either ||
+      accesslog({fin, Reason}, undefined, State),
+      knet_gen_ssl:close(_#state.socket),
+      fmap(State#state{socket = _})
+   ].
 
 
 %%
@@ -420,8 +426,8 @@ errorlog(Reason, Peer, #state{} = State) ->
 
 accesslog(Req, T, #state{socket = Sock} = State) ->
    %% @todo: move sock abstraction to knet_log
-   {ok, Peer} = knet_gen_ssl:peername(Sock),
-   {ok, Addr} = knet_gen_ssl:sockname(Sock),  
+   Peer = maybeT(knet_gen_ssl:peername(Sock)),
+   Addr = maybeT(knet_gen_ssl:sockname(Sock)),
    ?access_tcp(#{req => Req, peer => Peer, addr => Addr, time => T}),
    {ok, State}.
 
@@ -452,6 +458,12 @@ spawn_acceptor_pool(Uri, #state{so = SOpt} = State) ->
       lists:seq(1, opts:val(backlog, 5, SOpt))
    ),
    {ok, State}.
+
+%%
+%%
+maybeT({ok, X}) -> X;
+maybeT(_) -> undefined.
+
 
 %
 % This is required to trace TLS certificates per connection (feature is disabled)
