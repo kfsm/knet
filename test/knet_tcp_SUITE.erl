@@ -295,6 +295,7 @@ knet_echo({tcp, _Sock,  <<$-, Pckt/binary>>}) ->
    {a, <<$+, Pckt/binary>>};
 
 knet_echo({tcp, _Sock, _}) ->
+   ok;
+
+knet_echo({sidedown, _, _}) ->
    ok.
-
-

@@ -165,6 +165,7 @@ knet_echo({ws, _Sock,  <<$-, Pckt/binary>>}) ->
    {a, <<$+, Pckt/binary>>};
 
 knet_echo({ws, _Sock, _}) ->
+   ok;
+
+knet_echo({sidedown, _, _}) ->
    ok.
-
-

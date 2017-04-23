@@ -243,4 +243,8 @@ knet_echo({udp, _Sock,  {Peer, <<$-, Pckt/binary>>}}) ->
    {a, {Peer, <<$+, Pckt/binary>>}};
 
 knet_echo({udp, _Sock, _}) ->
+   ok;
+
+knet_echo({sidedown, _, _}) ->
    ok.
+

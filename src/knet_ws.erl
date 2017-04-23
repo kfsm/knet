@@ -137,7 +137,10 @@ ioctl(_, _) ->
      ,{<<"Sec-WebSocket-Key">>,     Hash}
      ,{<<"Sec-WebSocket-Version">>, ?VSN}
    ]},
-  'CLIENT'(Req, Pipe, State#fsm{stream = ht_new(Uri, State#fsm.so)}).
+  'CLIENT'(Req, Pipe, State#fsm{stream = ht_new(Uri, State#fsm.so)});
+
+'IDLE'({sidedown, _, _}, _, State) ->
+   {stop, normal, State}.
 
 
 %%%------------------------------------------------------------------
@@ -154,6 +157,9 @@ ioctl(_, _) ->
 %%% SERVER
 %%%
 %%%------------------------------------------------------------------   
+
+'SERVER'({sidedown, _, _}, _, State) ->
+   {stop, normal, State};
 
 'SERVER'({Prot, _Sock, established}, _Pipe, State)
  when ?is_transport(Prot) ->
@@ -186,6 +192,8 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------   
 
+'CLIENT'({sidedown, _, _}, _, State) ->
+   {stop, normal, State};
 
 %%
 %% protocol signaling
@@ -241,6 +249,9 @@ ioctl(_, _) ->
 %%% ESTABLISHED
 %%%
 %%%------------------------------------------------------------------   
+
+'ESTABLISHED'({sidedown, _, _}, _, State) ->
+   {stop, normal, State};
 
 'ESTABLISHED'({Prot, _, {terminated, Reason}}, Pipe, State)
  when ?is_transport(Prot) ->

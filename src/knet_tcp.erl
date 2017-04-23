@@ -150,7 +150,19 @@ ioctl(socket, #state{socket = Sock}) ->
          pipe_to_side_a(Pipe, terminated, Reason, State0),
          errorlog({syn, Reason}, Uri, State0),
          {stop, Reason, State0}
-   end.
+   end;
+
+'IDLE'({sidedown, a, _}, _Pipe, State0) ->
+   {stop, normal, State0};
+
+'IDLE'(tth, _Pipe, State0) ->
+   {next_state, 'IDLE', State0};
+
+'IDLE'(ttl, _Pipe, State0) ->
+   {next_state, 'IDLE', State0};
+
+'IDLE'({ttp, _}, _Pipe, State0) ->
+   {next_state, 'IDLE', State0}.
 
 
 %%%------------------------------------------------------------------
@@ -174,6 +186,9 @@ ioctl(socket, #state{socket = Sock}) ->
 %%%   reason or another.
 %%%
 %%%------------------------------------------------------------------   
+
+'ESTABLISHED'({sidedown, a, _}, _Pipe, State0) ->
+   {stop, normal, State0};
 
 'ESTABLISHED'({tcp_error, _, Error}, Pipe, #state{} = State0) ->
    case

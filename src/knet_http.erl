@@ -45,14 +45,8 @@
 -record(fsm, {
    socket = undefined :: #socket{}       %% http i/o streams
   ,queue  = undefined :: datum:q()       %% queue of in-flight request
-
-  % ,recv  = undefined :: htstream:http()  %% ingress packet stream
-  % ,send  = undefined :: htstream:http()  %% egress  packet stream
-  ,t     = undefined :: tempus:t()       %% 
   ,peer  = undefined :: uri:uri()        %% identity of remote peer
-
   ,trace     = undefined :: pid()        %% knet stats function
-  ,so        = undefined :: list()       %% socket options
 }).
 
 %%
@@ -100,7 +94,7 @@ init(Opts) ->
         ,queue   = q:new()
 
         ,trace   = opts:val(trace, undefined, Opts)
-        ,so      = Opts
+        % ,so      = Opts
       }
    }.
 
@@ -141,8 +135,8 @@ ioctl(_, _) ->
    pipe:b(Pipe, {connect, Uri}),
    'STREAM'(Req, Pipe, State);
 
-'IDLE'(_, _, State) ->
-   {next_state, 'IDLE', State}.
+'IDLE'({sidedown, _, _}, _, State) ->
+   {stop, normal, State}.
 
 %%%------------------------------------------------------------------
 %%%
@@ -161,27 +155,18 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------   
 
+'STREAM'({sidedown, _, _}, _, State) ->
+   {stop, normal, State};
+
 %%
 %% peer connection
 'STREAM'({Prot, _, {established, Peer}}, _Pipe, #fsm{queue = Queue0} = State)
  when ?is_transport(Prot) ->
-   T = os:timestamp(),
-   Queue1 = qmap(fun(Req) -> Req#req{treq = T} end, Queue0),
+   Queue1 = q:map(fun(Req) -> Req#req{treq = os:timestamp()} end, Queue0),
    {next_state, 'STREAM', State#fsm{peer = Peer, queue = Queue1}};
 
 'STREAM'({Prot, _, {terminated, _}}, Pipe, #fsm{} = State)
  when ?is_transport(Prot) ->
-   %% @todo: clean-up state
-   % case htstream:state(Stream#stream.recv) of
-   %    payload -> 
-   %       % time to meaningful response
-   %       ?trace(Pid, {http, ttmr, tempus:diff(Stream#stream.ts)}),
-   %       pipe:b(Pipe, {http, self(), eof});
-   %    _       -> 
-   %       ok
-   % end,
-   % {stop, normal, State};
-   % io:format("=[ +++ ]=> ~p~n", [Q]),
    {next_state, 'IDLE', stream_reset(Pipe, State)};
 
 %%
@@ -203,8 +188,6 @@ ioctl(_, _) ->
       end
    catch _:Reason ->
       ?NOTICE("knet [http]: ingress failure ~p ~p", [Reason, erlang:get_stacktrace()]),
-      % pipe:b(Pipe, {http, self(), eof}),
-      % {stop, normal, State0}
       {next_state, 'IDLE', stream_reset(Pipe, State0)}
    end;
 
@@ -215,8 +198,6 @@ ioctl(_, _) ->
       {next_state, 'STREAM', down_link(Msg, Pipe, State)}
    catch _:Reason ->
       ?NOTICE("knet [http]: egress failure ~p ~p", [Reason, erlang:get_stacktrace()]),
-      % pipe:a(Pipe, {http, self(), eof}),
-      % {stop, normal, State}
       {next_state, 'IDLE', stream_reset(Pipe, State)}
    end.
 
@@ -283,7 +264,12 @@ down_link(Msg, Pipe, State) ->
       down_link_return(Pipe, _)
    ].   
 
-%% 
+%%
+%%
+down_link_encode(Data, #fsm{socket = Socket0} = State) ->
+   {Pckt, #socket{eg = Stream} = Socket1} = gen_http_send(Socket0, down_link_packet(Data)),
+   http_set_state(Stream, Socket1, #http{pack = Pckt, state = State}).
+ 
 down_link_packet({Mthd, {uri, _, _}=Uri, Head}) ->
    {Mthd, http_req_path(Uri), [{'Host', uri:authority(Uri)}|Head]};
 
@@ -292,11 +278,6 @@ down_link_packet({Mthd, {uri, _, _}=Uri, Head, Payload}) ->
 
 down_link_packet(Payload) ->
    Payload.
-
-%%
-down_link_encode(Data, #fsm{socket = Socket0} = State) ->
-   {Pckt, #socket{eg = Stream} = Socket1} = gen_http_send(Socket0, down_link_packet(Data)),
-   http_set_state(Stream, Socket1, #http{pack = Pckt, state = State}).
 
 
 %%
@@ -388,13 +369,14 @@ up_link_return(_Pipe, #http{state = State}) ->
    State.
 
 
-up_link_upgrade(<<"websocket">>, Pipe, #http{http = {_, {Mthd, Uri, Head}}, state = #fsm{so = SOpt}}) ->
+up_link_upgrade(<<"websocket">>, Pipe, #http{http = {_, {Mthd, Uri, Head}}, state = #fsm{socket = Socket}}) ->
    %% @todo: upgrade requires better design 
    %%  - new protocol needs to run state-less init code
    %%  - it shall emit message
    %%  - it shall return pipe compatible upgrade signature
    % access_log(websocket, State),
    Req = {Mthd, Uri, Head, []},
+   #socket{so = SOpt} = Socket,
    {Msg, Upgrade} = knet_ws:ioctl({upgrade, Req, SOpt}, undefined),
    pipe:a(Pipe, Msg),
    Upgrade;
@@ -434,7 +416,6 @@ state_new(#fsm{socket = #socket{so = Opts} = Socket}) ->
       socket  = Socket
      ,queue   = q:new()
      ,trace   = opts:val(trace, undefined, Opts)
-     ,so      = Opts
    }.
 
 %%%------------------------------------------------------------------
@@ -572,11 +553,6 @@ http_request_trace(Http) ->
 uri_at_req({request, {_Mthd, Path, Head}}) ->
    Authority = lens:get(lens:pair('Host'), Head),
    uri:path(Path, uri:authority(Authority, uri:new(http))).
-
-qmap(_, ?NULL) ->
-   ?NULL;
-qmap(Fun, {q, N, Tail, Head}) ->
-   {q, N, lists:map(Fun, Tail), lists:map(Fun, Head)}.
 
 %%
 %%

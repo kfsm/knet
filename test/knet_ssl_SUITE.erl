@@ -309,5 +309,7 @@ knet_echo({ssl, _Sock,  <<$-, Pckt/binary>>}) ->
    {a, <<$+, Pckt/binary>>};
 
 knet_echo({ssl, _Sock, _}) ->
-   ok.
+   ok;
 
+knet_echo({sidedown, _, _}) ->
+   ok.
