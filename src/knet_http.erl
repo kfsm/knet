@@ -383,7 +383,9 @@ up_link_upgrade(Upgrade, _, _) ->
 
 %%
 %%
-stream_reset(_Pipe, #fsm{queue = {}} = State) ->
+stream_reset(Pipe, #fsm{queue = {}} = State) ->
+   %% @todo: Reason
+   pipe:b(Pipe, {http, self(), {terminated, normal}}),
    state_new(State);
 
 stream_reset(Pipe,  #fsm{socket = #socket{in = Stream}, queue = Queue} = State) ->
@@ -394,6 +396,7 @@ stream_reset(Pipe,  #fsm{socket = #socket{in = Stream}, queue = Queue} = State) 
       _       ->
          send_503_to_side(Pipe, Queue)
    end,
+   pipe:b(Pipe, {http, self(), {terminated, normal}}),
    state_new(State).
 
 send_eof_to_side(Pipe, _) ->
