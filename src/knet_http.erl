@@ -286,7 +286,7 @@ down_link_egress(Pipe, #http{pack = Pckt} = Http) ->
 %%
 %%
 down_link_return(Pipe, #http{is = eoh, state = State}) ->
-   %% htstream has a feature of "eoh event". 
+   %% htstream has a feature of "eoh event".
    down_link([], Pipe, State);
 
 down_link_return(_Pipe, #http{state = State}) ->
@@ -477,12 +477,12 @@ http_request_deq(Http) ->
 
 %%
 %%
-http_request_log(#http{is = eof, http = {response, _}, state = #fsm{queue = Q} = State} = Http) ->
+http_request_log(#http{is = eof, http = {response, _}} = Http) ->
    #req{
       http = {_, {Mthd,  Url, HeadA}}, 
       code = {_, {Code, _Msg, HeadB}}, 
       treq = T
-   } = deq:head(Q),
+   } = lens:get(lens_http_queue(), Http),
    ?access_http(#{
       req  => {Mthd, Code}
      ,peer => lens:get(lens_http_socket_peername(), Http)
@@ -527,7 +527,7 @@ http_request_trace(#http{is = eoh, http = {response, {Code, _, _}}, state = #fsm
    #req{
       http = Ht,
       treq = T
-   } = lens:get(lens_qhd(), Q0),
+   } = lens:get(lens_http_queue(), Http),
    Uri = uri_at_req(Ht),
    knet_log:trace(Pid, {http, {code, Uri},  Code}),
    knet_log:trace(Pid, {http, {ttfb, Uri}, tempus:diff(T)}),
@@ -559,6 +559,14 @@ lens_socket_peername() ->
 lens_http_socket_peername() ->
    lens:c([lens:tuple(#http.state), lens_socket_peername()]).
 
+lens_http_queue() ->
+   lens:c([lens:tuple(#http.state), lens:tuple(#fsm.queue), lens_qhead()]).
+
+lens_qhead() ->
+   fun(Fun, Queue) ->
+      lens:fmap(fun(_) -> Queue end, Fun(q:head(Queue)))
+   end.
+
 
 
 %%
@@ -574,6 +582,7 @@ lens_qhd() ->
    fun(Fun, Queue) ->
       lens:fmap(fun(X) -> deq:poke(X, deq:tail(Queue)) end, Fun(deq:head(Queue)))      
    end.
+
 
 
 %%
