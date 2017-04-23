@@ -45,8 +45,7 @@
 -record(fsm, {
    socket = undefined :: #socket{}       %% http i/o streams
   ,queue  = undefined :: datum:q()       %% queue of in-flight request
-  ,peer  = undefined :: uri:uri()        %% identity of remote peer
-  ,trace     = undefined :: pid()        %% knet stats function
+  ,trace  = undefined :: pid()        %% knet stats function
 }).
 
 %%
@@ -160,10 +159,13 @@ ioctl(_, _) ->
 
 %%
 %% peer connection
-'STREAM'({Prot, _, {established, Peer}}, _Pipe, #fsm{queue = Queue0} = State)
- when ?is_transport(Prot) ->
-   Queue1 = q:map(fun(Req) -> Req#req{treq = os:timestamp()} end, Queue0),
-   {next_state, 'STREAM', State#fsm{peer = Peer, queue = Queue1}};
+'STREAM'({Prot, _, {established, Peer}}, _Pipe, #fsm{} = State)
+ when ?is_transport(Prot) ->   
+   [$. ||
+      lens:apply(lens:tuple(#fsm.queue), fun queue_config_treq/1, State),
+      lens:put(lens_socket_peername(), Peer, _),
+      fmap({next_state, 'STREAM', _})
+   ];
 
 'STREAM'({Prot, _, {terminated, _}}, Pipe, #fsm{} = State)
  when ?is_transport(Prot) ->
@@ -318,8 +320,8 @@ up_link(Msg, Pipe, State) ->
 
 %%
 %%
-up_link_decode(Data, #fsm{socket = Socket0, peer = Peer} = State) ->
-   {Pckt, #socket{in = Stream} = Socket1} = gen_http_recv(Socket0, Data),
+up_link_decode(Data, #fsm{socket = Socket0} = State) ->
+   {Pckt, #socket{in = Stream, peername = Peer} = Socket1} = gen_http_recv(Socket0, Data),
    http_set_state(Stream, Socket1, #http{pack = up_link_message(Pckt, Peer), state = State}).
 
 
@@ -480,7 +482,7 @@ http_request_deq(Http) ->
 
 %%
 %%
-http_request_log(#http{is = eof, http = {response, _}, state = #fsm{queue = Q, peer = Peer}} = Http) ->
+http_request_log(#http{is = eof, http = {response, _}, state = #fsm{queue = Q}} = Http) ->
    #req{
       http = {_, {Mthd,  Url, HeadA}}, 
       code = {_, {Code, _Msg, HeadB}}, 
@@ -488,18 +490,20 @@ http_request_log(#http{is = eof, http = {response, _}, state = #fsm{queue = Q, p
    } = deq:head(Q),
    ?access_http(#{
       req  => {Mthd, Code}
-     ,peer => Peer
+     % ,peer => Peer
+     ,peer => undefined
      ,addr => request_url(Url, HeadA)
      ,ua   => opts:val('User-Agent', opts:val('Server', undefined, HeadB), HeadA)
      ,time => tempus:diff(T)
    }),
    Http;
 
-http_request_log(#http{is = upgrade, http = {_, {_, Url, Head}}, state = #fsm{peer = Peer}} = Http) ->
+http_request_log(#http{is = upgrade, http = {_, {_, Url, Head}}} = Http) ->
    Upgrade = lens:get(lens:pair('Upgrade'), Head),
    ?access_http(#{
       req  => {upgrade, Upgrade}
-     ,peer => Peer
+     % ,peer => Peer
+     ,peer => undefined
      ,addr => request_url(Url, Head)
      ,ua   => opts:val('User-Agent', undefined, Head)
    }),
@@ -555,6 +559,12 @@ uri_at_req({request, {_Mthd, Path, Head}}) ->
    uri:path(Path, uri:authority(Authority, uri:new(http))).
 
 %%
+%% lenses
+lens_socket_peername() ->
+   lens:c([lens:tuple(#fsm.socket), lens:tuple(#socket.peername)]).
+
+
+%%
 %%
 lens_http_state_queue() ->
    lens:c([lens:tuple(#http.state), lens:tuple(#fsm.queue)]).
@@ -569,7 +579,10 @@ lens_qhd() ->
    end.
 
 
-
+%%
+%% 
+queue_config_treq(Queue) ->
+   q:map(fun(Req) -> Req#req{treq = os:timestamp()} end, Queue).
 
 %%%------------------------------------------------------------------
 %%%
