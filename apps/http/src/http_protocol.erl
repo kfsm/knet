@@ -57,8 +57,10 @@ handle({http, _Sock, {Method, Url, Head, _Env}}, Pipe, Sock) ->
 
 handle({http, _Sock, eof}, Pipe, Sock) ->
 	pipe:a(Pipe, eof),
-   % {stop, normal, Sock};
 	{next_state, handle, Sock};
+
+handle({http, _Sock, {terminated, _}}, _Pipe, Sock) ->
+   {stop, normal, Sock};
 
 handle({http, _Sock, Msg}, Pipe, Sock) ->
 	pipe:a(Pipe, Msg),
