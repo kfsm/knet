@@ -43,9 +43,10 @@
 %%
 %%
 -record(fsm, {
-   socket = undefined :: #socket{}    %% http i/o streams
-  ,queue  = undefined :: datum:q()    %% queue of in-flight request
-  ,trace  = undefined :: pid()        %% knet stats function
+   socket   = undefined :: #socket{}    %% http i/o streams
+  ,queue    = undefined :: datum:q()    %% queue of in-flight request
+  ,trace    = undefined :: pid()        %% knet stats function
+  ,shutdown = false     :: false | true %%  
 }).
 
 %%
@@ -114,7 +115,7 @@ ioctl(_, _) ->
 
 'IDLE'({accept,  Uri}, Pipe, State) ->
    pipe:b(Pipe, {accept, Uri}),
-   {next_state, 'STREAM', State};
+   {next_state, 'STREAM', State#fsm{shutdown = true}};
 
 'IDLE'({connect, Uri}, Pipe, State) ->
    % connect is compatibility wrapper for knet socket interface (translated to http GET request)
@@ -161,6 +162,10 @@ ioctl(_, _) ->
       lens:put(lens_socket_peername(), Peer, _),
       fmap({next_state, 'STREAM', _})
    ];
+
+'STREAM'({Prot, _, {terminated, _}}, Pipe, #fsm{shutdown = true} = State)
+ when ?is_transport(Prot) ->
+   {stop, normal, stream_reset(Pipe, State)};
 
 'STREAM'({Prot, _, {terminated, _}}, Pipe, #fsm{} = State)
  when ?is_transport(Prot) ->

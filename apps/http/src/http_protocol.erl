@@ -59,12 +59,12 @@ handle({http, _Sock, eof}, Pipe, Sock) ->
 	pipe:a(Pipe, eof),
 	{next_state, handle, Sock};
 
-handle({http, _Sock, {terminated, _}}, _Pipe, Sock) ->
-   {stop, normal, Sock};
-
 handle({http, _Sock, Msg}, Pipe, Sock) ->
 	pipe:a(Pipe, Msg),
-	{next_state, handle, Sock}.
+	{next_state, handle, Sock};
+
+handle({sidedown, _, _}, _Pipe, Sock) ->
+   {stop, normal, Sock}.
 
 %%
 %% return http connection type 
