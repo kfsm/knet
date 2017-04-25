@@ -177,7 +177,7 @@ ioctl(_, _) ->
 'STREAM'({Prot, _, Pckt}, Pipe, State0)
  when ?is_transport(Prot), is_binary(Pckt) ->
    try
-      case up_link(Pckt, Pipe, State0) of
+      case http_recv(Pckt, Pipe, State0) of
          {upgrade, _, _} = Upgrade ->
             Upgrade;
          State1 ->
@@ -216,32 +216,6 @@ ioctl(_, _) ->
 %%%------------------------------------------------------------------
 
 %%
-%% make environment
-%% @todo: handle cookie and request as PHP $_REQUEST
-make_env(_Head, Peer) -> 
-   [
-      % {peer, uri:authority(Peer, uri:new(http))}
-      {peer, Peer}
-   ].
-
-
-%%
-%% make server headers
-% make_head() ->
-%    [
-%       {'Server', ?HTTP_SERVER}
-%      ,{'Date',   scalar:s(tempus:encode(?HTTP_DATE, os:timestamp()))}
-%    ].
-
-
-
-%%%------------------------------------------------------------------
-%%%
-%%% down-link
-%%%
-%%%------------------------------------------------------------------
-
-%%
 %% send http message
 -spec http_send(_, pipe:pipe(), #fsm{}) -> #fsm{}.
 
@@ -259,7 +233,7 @@ http_send(Msg, Pipe, State) ->
 %%
 %% 
 http_encode_packet(Data, #fsm{socket = Socket0} = State) ->
-   {Pckt, #socket{eg = Stream} = Socket1} = gen_http_send(Socket0, gen_http_encode(Data)),
+   {Pckt, #socket{eg = Stream} = Socket1} = gen_http_send(Socket0, gen_http_encode(Socket0, Data)),
    http_set_state(Stream, Socket1, #http{pack = Pckt, state = State}).
 
 %%
@@ -277,50 +251,31 @@ http_send_return(Pipe, #http{is = eoh, state = State}) ->
 http_send_return(_Pipe, #http{state = State}) ->
    State.
 
-%%%------------------------------------------------------------------
-%%%
-%%% up-link
-%%%
-%%%------------------------------------------------------------------
 
 %%
 %% handle up-link message (http ingress)
--spec up_link(_, pipe:pipe(), #fsm{}) -> #fsm{}.
+-spec http_recv(_, pipe:pipe(), #fsm{}) -> #fsm{}.
 
-up_link(Msg, Pipe, State) ->
+http_recv(Msg, Pipe, State) ->
    [$. ||
-      up_link_decode(Msg, State),
+      http_decode_packet(Msg, State),
       q_enq_http_req(_),
-      up_link_ingress(Pipe, _),
+      http_ingress(Pipe, _),
       tracelog(_),
       accesslog(_),
       q_deq_http_req(_),
-      up_link_return(Pipe, _)
+      http_recv_return(Pipe, _)
    ].   
 
 %%
 %%
-up_link_decode(Data, #fsm{socket = Socket0} = State) ->
-   {Pckt, #socket{in = Stream, peername = Peer} = Socket1} = gen_http_recv(Socket0, Data),
-   http_set_state(Stream, Socket1, #http{pack = up_link_message(Pckt, Peer), state = State}).
-
-
-up_link_message({Mthd, Url, Head}, Peer) 
- when ?is_method(Mthd) ->
-   Uri = request_url(Url, Head),
-   Env = make_env(Head, Peer),
-   [{Mthd, Uri, Head, Env}];
-
-up_link_message({Code, Msg, Head}, Peer)
- when ?is_status(Code) ->
-   [{Code, Msg, Head, make_env(Head, Peer)}];
-
-up_link_message(Chunk, _Peer) ->
-   [X || X <- Chunk, X =/= <<>>].
+http_decode_packet(Data, #fsm{socket = Socket0} = State) ->
+   {Pckt, #socket{in = Stream} = Socket1} = gen_http_recv(Socket0, Data),
+   http_set_state(Stream, Socket1, #http{pack = gen_http_decode(Socket1, Pckt), state = State}).
 
 %%
 %%
-up_link_ingress(Pipe, #http{is = upgrade, http = {_, {_, _, Head}}, pack = Pack} = Http) ->
+http_ingress(Pipe, #http{is = upgrade, http = {_, {_, _, Head}}, pack = Pack} = Http) ->
    Prot = case lens:get(lens:pair('Upgrade'), Head) of
       <<"websocket">> -> ws;
       _               -> http
@@ -328,30 +283,30 @@ up_link_ingress(Pipe, #http{is = upgrade, http = {_, {_, _, Head}}, pack = Pack}
    lists:foreach(fun(X) -> pipe:b(Pipe, {Prot, self(), X}) end, Pack),
    Http;
 
-up_link_ingress(Pipe, #http{pack = Pack} = Http) ->
+http_ingress(Pipe, #http{pack = Pack} = Http) ->
    % ?DEBUG("knet [http] ~p: recv ~p~n~p", [self(), Sock#stream.peer, Pckt]),
    lists:foreach(fun(X) -> pipe:b(Pipe, {http, self(), X}) end, Pack),
    Http.
 
 %%
 %%
-up_link_return(Pipe, #http{is = eof, state = State}) ->
+http_recv_return(Pipe, #http{is = eof, state = State}) ->
    pipe:b(Pipe, {http, self(), eof}),
    State;
 
-up_link_return(Pipe, #http{is = eoh, state = State}) ->
+http_recv_return(Pipe, #http{is = eoh, state = State}) ->
    %% htstream has a feature on eoh event, 
-   up_link(<<>>, Pipe, State);
+   http_recv(<<>>, Pipe, State);
 
-up_link_return(Pipe, #http{is = upgrade, http = {_, {_, _, Head}}} = Http) ->
+http_recv_return(Pipe, #http{is = upgrade, http = {_, {_, _, Head}}} = Http) ->
    % server_upgrade(Pipe, State#fsm{stream=Stream});
-   up_link_upgrade(lens:get(lens:pair('Upgrade'), Head), Pipe, Http);
+   http_recv_upgrade(lens:get(lens:pair('Upgrade'), Head), Pipe, Http);
 
-up_link_return(_Pipe, #http{state = State}) ->
+http_recv_return(_Pipe, #http{state = State}) ->
    State.
 
 
-up_link_upgrade(<<"websocket">>, Pipe, #http{http = {_, {Mthd, Uri, Head}}, state = #fsm{socket = Socket}}) ->
+http_recv_upgrade(<<"websocket">>, Pipe, #http{http = {_, {Mthd, Uri, Head}}, state = #fsm{socket = Socket}}) ->
    %% @todo: upgrade requires better design 
    %%  - new protocol needs to run state-less init code
    %%  - it shall emit message
@@ -363,14 +318,13 @@ up_link_upgrade(<<"websocket">>, Pipe, #http{http = {_, {Mthd, Uri, Head}}, stat
    pipe:a(Pipe, Msg),
    Upgrade;
 
-up_link_upgrade(Upgrade, _, _) ->
+http_recv_upgrade(Upgrade, _, _) ->
    throw({not_implemented, Upgrade}).
+
 
 %%
 %%
-stream_reset(Pipe, #fsm{queue = {}} = State) ->
-   %% @todo: Reason
-   pipe:b(Pipe, {http, self(), {terminated, normal}}),
+stream_reset(_Pipe, #fsm{queue = {}} = State) ->
    state_new(State);
 
 stream_reset(Pipe,  #fsm{socket = #socket{in = Stream}, queue = Queue} = State) ->
@@ -378,10 +332,9 @@ stream_reset(Pipe,  #fsm{socket = #socket{in = Stream}, queue = Queue} = State) 
       payload ->
          send_eof_to_side(Pipe, q:head(Queue)),
          send_503_to_side(Pipe, q:tail(Queue));
-      X       ->
+      _       ->
          send_503_to_side(Pipe, Queue)
    end,
-   pipe:b(Pipe, {http, self(), {terminated, normal}}),
    state_new(State).
 
 send_eof_to_side(Pipe, _) ->
@@ -403,11 +356,6 @@ state_new(#fsm{socket = #socket{so = Opts} = Socket}) ->
      ,trace   = opts:val(trace, undefined, Opts)
    }.
 
-%%%------------------------------------------------------------------
-%%%
-%%% private
-%%%
-%%%------------------------------------------------------------------
 
 %%
 %%
@@ -421,14 +369,11 @@ http_set_state(Stream, Socket, #http{state = State} = Http) ->
    }.
 
 
-
-
-
 %%
 %% enqueue references of http requests
 -spec q_enq_http_req(#http{}) -> #http{}.
 
-q_enq_http_req(#http{is = eof, http = {request,  _} = Ht, state = State} = Http) ->
+q_enq_http_req(#http{is = eof, http = {request,  _} = Ht} = Http) ->
    lens:apply(
       lens_http_state_queue(),
       fun(Q) -> q:enq(q_http_req(Ht), Q) end, 
@@ -467,43 +412,10 @@ q_http_req({request,  _} = Req) ->
    }.
 
 
-
-
-%%
-%% make request uri
-request_url({uri, _, _}=Url, Head) ->
-   case uri:authority(Url) of
-      undefined ->
-         uri:authority(opts:val('Host', Head), uri:schema(http, Url));
-      _ ->
-         uri:schema(http, Url)
-   end;
-request_url(Url, Head) ->
-   request_url(uri:new(Url), Head).
-
-
-
-
-
 %%
 %% lenses
 lens_socket_peername() ->
    lens:c([lens:tuple(#fsm.socket), lens:tuple(#socket.peername)]).
-
-
-lens_http_socket_peername() ->
-   lens:c([lens:tuple(#http.state), lens_socket_peername()]).
-
-
-lens_http_queue() ->
-   lens:c([lens:tuple(#http.state), lens:tuple(#fsm.queue), lens_qhead()]).
-
-lens_qhead() ->
-   fun(Fun, Queue) ->
-      lens:fmap(fun(_) -> Queue end, Fun(q:head(Queue)))
-   end.
-
-
 
 %%
 %%
@@ -542,7 +454,7 @@ accesslog(#http{is = eof, http = {response, _}, state = State} = Http) ->
    ?access_http(#{
       req  => {Mthd, Code}
      ,peer => Peer
-     ,addr => request_url(Url, HeadA)
+     ,addr => gen_http_decode_url(Url, HeadA)
      ,ua   => opts:val('User-Agent', opts:val('Server', undefined, HeadB), HeadA)
      ,time => tempus:diff(T)
    }),
@@ -554,7 +466,7 @@ accesslog(#http{is = upgrade, http = {_, {_, Url, Head}}, state = State} = Http)
    ?access_http(#{
       req  => {upgrade, Upgrade}
      ,peer => Peer
-     ,addr => request_url(Url, Head)
+     ,addr => gen_http_decode_url(Url, Head)
      ,ua   => opts:val('User-Agent', undefined, Head)
    }),
    Http;
@@ -606,8 +518,6 @@ tracelog_uri({request, {_Mthd, Path, Head}}) ->
    uri:path(Path, uri:authority(Authority, uri:new(http))).
 
 
-
-
 %%%------------------------------------------------------------------
 %%%
 %%% http socket
@@ -627,10 +537,10 @@ gen_http_socket(SOpt) ->
 
 %%
 %%
--spec gen_http_close(#socket{}) -> #socket{}.
-
-gen_http_close(#socket{so = SOpt}) ->
-   gen_http_socket(SOpt).
+% -spec gen_http_close(#socket{}) -> #socket{}.
+%
+% gen_http_close(#socket{so = SOpt}) ->
+%    gen_http_socket(SOpt).
 
 %%
 %%
@@ -650,24 +560,67 @@ gen_http_recv(#socket{in = Stream0} = Socket, Data) ->
 
 %%
 %% encode client message to htstream format
--spec gen_http_encode(_) -> _.
+-spec gen_http_encode(#socket{}, _) -> _.
 
-gen_http_encode({Mthd, {uri, _, _}=Uri, Head}) ->
+gen_http_encode(_Socket, {Mthd, {uri, _, _}=Uri, Head}) ->
    {Mthd, gen_http_encode_uri(Uri), gen_http_encode_head(Uri, Head)};
 
-gen_http_encode({Mthd, {uri, _, _}=Uri, Head, Payload}) ->
+gen_http_encode(_Socket, {Mthd, {uri, _, _}=Uri, Head, Payload}) ->
    {Mthd, gen_http_encode_uri(Uri), gen_http_encode_head(Uri, Head), Payload};
 
-gen_http_encode(Payload) ->
+gen_http_encode(_Socket, Payload) ->
    Payload.
 
-
+%%
 gen_http_encode_uri(Uri) ->
    case uri:suburi(Uri) of
       undefined -> <<$/>>;
       Path      -> Path
    end.
 
+%%
 gen_http_encode_head(Uri, Head) ->
    [{'Host', uri:authority(Uri)} | Head].
+   % @todo: inject system wide header
+   %    [
+   %       {'Server', ?HTTP_SERVER}
+   %      ,{'Date',   scalar:s(tempus:encode(?HTTP_DATE, os:timestamp()))}
+   %    ].
+
+
+
+%%
+%% decode htstream message to client format
+-spec gen_http_decode(#socket{}, _) -> _.
+
+
+gen_http_decode(#socket{peername = Peer}, {Mthd, Url, Head})
+ when ?is_method(Mthd) ->
+   [{Mthd, gen_http_decode_url(Url, Head), Head, gen_http_decode_env(Peer, Head)}];
+
+
+gen_http_decode(#socket{peername = Peer}, {Code, Msg, Head})
+ when ?is_status(Code) ->
+   [{Code, Msg, Head, gen_http_decode_env(Peer, Head)}];
+
+gen_http_decode(_Socket, Chunk) ->
+   [X || X <- Chunk, X =/= <<>>].
+
+
+%%
+gen_http_decode_env(Peer, _Head) ->
+   [{peer, Peer}].
+
+
+%%
+gen_http_decode_url({uri, _, _} = Url, Head) ->
+   case uri:authority(Url) of
+      undefined ->
+         uri:authority(opts:val('Host', Head), uri:schema(http, Url));
+      _ ->
+         uri:schema(http, Url)
+   end;
+
+gen_http_decode_url(Url, Head) ->
+   gen_http_decode_url(uri:new(Url), Head).
 

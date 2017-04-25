@@ -86,6 +86,9 @@ end_per_group(_, _Config) ->
 
 knet_cli_get(_) ->
    Sock = knet:connect(uri:path(<<"/get">>, uri:new(?URI))),
+   %% http interface do have require explicit eof
+   %% {'GET', ...}
+   %% eof
    {ioctl, b, Sock} = knet:recv(Sock),
    {http, Sock, {200, <<"OK">>, _, _}} = knet:recv(Sock),
    {http, Sock,   _} = knet:recv(Sock),
