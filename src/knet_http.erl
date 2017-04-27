@@ -356,7 +356,7 @@ send_503_to_side(Pipe, Queue) ->
 
 state_new(#fsm{socket = #socket{so = Opts} = Socket}) ->
    #fsm{
-      socket  = Socket
+      socket  = gen_http_close(Socket)
      ,queue   = q:new()
      ,trace   = opts:val(trace, undefined, Opts)
    }.
@@ -542,10 +542,10 @@ gen_http_socket(SOpt) ->
 
 %%
 %%
-% -spec gen_http_close(#socket{}) -> #socket{}.
-%
-% gen_http_close(#socket{so = SOpt}) ->
-%    gen_http_socket(SOpt).
+-spec gen_http_close(#socket{}) -> #socket{}.
+
+gen_http_close(#socket{so = SOpt}) ->
+   gen_http_socket(SOpt).
 
 %%
 %%
