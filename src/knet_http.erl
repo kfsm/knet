@@ -348,7 +348,7 @@ send_eof_to_side(Pipe, _) ->
 send_503_to_side(Pipe, Queue) ->
    lists:map(
       fun(_) -> 
-         pipe:b(Pipe, {http, self(), {503, <<"Service Unavailable">>, []}}),
+         pipe:b(Pipe, {http, self(), {503, <<"Service Unavailable">>, [], []}}),
          pipe:b(Pipe, {http, self(), eof})
       end,
       q:list(Queue)
