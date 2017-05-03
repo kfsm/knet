@@ -162,7 +162,11 @@ ioctl(socket, #state{socket = Sock}) ->
    {next_state, 'IDLE', State0};
 
 'IDLE'({ttp, _}, _Pipe, State0) ->
+   {next_state, 'IDLE', State0};
+
+'IDLE'(_, _Pipe, State0) ->
    {next_state, 'IDLE', State0}.
+
 
 
 %%%------------------------------------------------------------------
