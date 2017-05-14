@@ -41,7 +41,7 @@ socket(SOpt) ->
 close(#socket{sock = undefined} = Socket) ->
    {ok, Socket};
 
-close(#socket{sock = Sock, so = SOpt} = Socket) ->
+close(#socket{sock = Sock, so = SOpt}) ->
    [$^||
       ssl:close(Sock),
       socket(SOpt)
@@ -172,11 +172,13 @@ accept(Uri, #socket{sock = LSock} = Socket) ->
 
 handshake(#socket{sock = {tcp, Sock}, so = SOpt} = Socket) ->
    [$^ ||
-      ssl:connect(Sock, so_ssl(SOpt), so_ttc(SOpt)),
+      peername(Socket),
+      fmap({server_name_indication, scalar:c(uri:host(_))}),
+      ssl:connect(Sock, [_ | so_ssl(SOpt)], so_ttc(SOpt)),
       fmap(Socket#socket{sock = _})
    ];
 
-handshake(#socket{sock = Sock, so = SOpt} = Socket) ->
+handshake(#socket{sock = Sock} = Socket) ->
    [$^ ||
       ssl:ssl_accept(Sock),
       fmap(Socket)
