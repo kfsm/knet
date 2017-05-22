@@ -46,6 +46,7 @@
    socket   = undefined :: #socket{}    %% http i/o streams
   ,queue    = undefined :: datum:q()    %% queue of in-flight request
   ,trace    = undefined :: pid()        %% knet stats function
+  ,label    = undefined :: _            %% custom label for knet stats  
   ,shutdown = false     :: false | true %%  
 }).
 
@@ -90,6 +91,7 @@ init(Opts) ->
          socket  = gen_http_socket(Opts)
         ,queue   = q:new()
         ,trace   = opts:val(trace, undefined, Opts)
+        ,label   = opts:val(label, undefined, Opts)
       }
    }.
 
@@ -490,13 +492,14 @@ tracelog(#http{state = #fsm{trace = undefined}} = Http) ->
 tracelog(#http{is = eoh, http = {response, {Code, _, _}}, state = State} = Http) ->
    #fsm{
       trace = Pid,
+      label = Label,
       queue = Queue0
    } = State,
    #req{
       http = Ht,
       treq = T
    } = q:head(Queue0),
-   Uri = tracelog_uri(Ht),
+   Uri = tracelog_uri(Label, Ht),
    knet_log:trace(Pid, {http, {code, Uri}, Code}),
    knet_log:trace(Pid, {http, {ttfb, Uri}, tempus:diff(T)}),
    Queue1 = lens:put(lens_qhd(), lens:tuple(#req.teoh), os:timestamp(), Queue0),
@@ -505,23 +508,26 @@ tracelog(#http{is = eoh, http = {response, {Code, _, _}}, state = State} = Http)
 tracelog(#http{is = eof, http = {response, _}, state = State} = Http) ->
    #fsm{
       trace = Pid,
+      label = Label, 
       queue = Queue0
    } = State,
    #req{
       http = Ht,
       teoh = T
    }   = q:head(Queue0),
-   Uri = tracelog_uri(Ht),
+   Uri = tracelog_uri(Label, Ht),
    knet_log:trace(Pid, {http, {ttmr, Uri}, tempus:diff(T)}),
    Http;
 
 tracelog(Http) ->
    Http.
 
-tracelog_uri({request, {_Mthd, Path, Head}}) ->
+tracelog_uri(undefined, {request, {_Mthd, Path, Head}}) ->
    Authority = lens:get(lens:pair('Host'), Head),
-   uri:path(Path, uri:authority(Authority, uri:new(http))).
+   uri:path(Path, uri:authority(Authority, uri:new(http)));
 
+tracelog_uri(Label, _) ->
+   uri:schema(http, uri:new(Label)).
 
 %%%------------------------------------------------------------------
 %%%

@@ -73,7 +73,7 @@ new(Uri) ->
 
 new(Uri, SOpt) ->
    fun(State0) ->
-      Id = scalar:s(Uri),
+      Id = scalar:s(opts:val(label, Uri, SOpt)),
       [Id|lens:put(so(), SOpt, lens:put(uri(), uri:new(Uri), lens:put(id(), Id, State0)))]
    end.
 
