@@ -16,8 +16,8 @@
 %%   limitations under the License.
 %%
 %% @description
-%%   example tcp/ip application
--module(tcp_protocol).
+%%   example http application
+-module(http_protocol).
 -behaviour(pipe).
 
 -export([
@@ -27,7 +27,6 @@
 	ioctl/2,
 	handle/3
 ]).
-
 
 %%
 %%
@@ -46,12 +45,31 @@ ioctl(_, _) ->
 
 %%
 %%
-handle({tcp, _, {established, _Peer}}, _Pipe, Sock) ->
+handle({http, _Sock, {Method, Url, Head, _Env}}, Pipe, Sock) ->
+   _ = pipe:a(Pipe, {ok, [
+      {'Server', <<"knet">>},
+      {'Transfer-Encoding', <<"chunked">>},
+      {'Connection', connection(Head)}
+   ]}),
+   {Msg, _} = htstream:encode({Method, uri:get(path, Url), Head}, htstream:new()),
+   pipe:a(Pipe, iolist_to_binary(Msg)),
 	{next_state, handle, Sock};
-   
-handle({tcp, _, Msg}, Pipe, Sock) ->
+
+handle({http, _Sock, eof}, Pipe, Sock) ->
+	pipe:a(Pipe, eof),
+	{next_state, handle, Sock};
+
+handle({http, _Sock, Msg}, Pipe, Sock) ->
 	pipe:a(Pipe, Msg),
-	{next_state, handle, Sock}.
+	{next_state, handle, Sock};
 
+handle({sidedown, _, _}, _Pipe, Sock) ->
+   {stop, normal, Sock}.
 
-
+%%
+%% return http connection type 
+connection(Heads) ->
+	case lists:keyfind('Connection', 1, Heads) of
+      false    -> <<"keep-alive">>;
+      {_, Val} -> Val
+   end.

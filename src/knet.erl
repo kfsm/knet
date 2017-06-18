@@ -15,11 +15,6 @@
 %%   See the License for the specific language governing permissions and
 %%   limitations under the License.
 %%
-%% @todo
-%%   huge leaked of processes - acceptor process is not terminated when socket is closed 
-%% @todo: 
-%%   * socket/ -> return empty (idle) socket
-%%   * monitor socket (link)
 -module(knet).
 -include("knet.hrl").
 
@@ -213,4 +208,3 @@ recv(Sock, Timeout, Opts) ->
 
 send(Sock, Pckt) ->
    pipe:send(Sock, Pckt).
-

@@ -153,7 +153,7 @@ knet_cli_io(Opts) ->
 %%
 knet_cli_timeout(Opts) ->
    {ok, Sock} = knet_connect(?config(uri, Opts), [
-      {timeout, [{ttl, 500}, {tth, 100}]}
+      {timeout, [{ttp, 500}, {tth, 100}]}
    ]),
    <<">123456">> = knet:send(Sock, <<">123456">>),
    {tcp, Sock, <<"<123456">>} = knet:recv(Sock),
@@ -181,7 +181,7 @@ knet_srv_io(Opts) ->
 
 knet_srv_timeout(Opts) ->
    {ok, LSock} = knet_listen(?config(uri, Opts), [
-      {timeout,  [{ttl, 500}, {tth, 100}]}
+      {timeout,  [{ttp, 500}, {tth, 100}]}
    ]),
    {ok, Sock} = gen_tcp:connect(?HOST, ?PORT, [binary, {active, false}]),
    {ok, <<"hello">>} = gen_tcp:recv(Sock, 0),
@@ -295,6 +295,7 @@ knet_echo({tcp, _Sock,  <<$-, Pckt/binary>>}) ->
    {a, <<$+, Pckt/binary>>};
 
 knet_echo({tcp, _Sock, _}) ->
+   ok;
+
+knet_echo({sidedown, _, _}) ->
    ok.
-
-

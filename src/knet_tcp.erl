@@ -19,6 +19,8 @@
 %%   tcp/ip protocol konduit
 -module(knet_tcp).
 -behaviour(pipe).
+-compile({parse_transform, category}).
+-compile({parse_transform, monad}).
 
 -include("knet.hrl").
 
@@ -33,14 +35,14 @@
    'HIBERNATE'/3
 ]).
 
+%%
 %% internal state
--record(fsm, {
-   stream   = undefined :: #stream{}  %% tcp packet stream
-  ,sock     = undefined :: port()     %% tcp/ip socket
-  ,active   = true      :: once | true | false  %% socket activity (pipe internally uses active once)
-  ,backlog  = 0         :: integer()  %% length of acceptor pool
-  ,trace    = undefined :: pid()      %% trace process
-  ,so       = undefined :: any()      %% socket options
+-record(state, {
+   socket   = undefined :: #socket{}
+  ,flowctl  = true      :: once | false | true | integer()  %% flow control strategy
+  ,trace    = undefined :: _
+  ,timeout  = undefined :: [_]
+  ,so       = undefined :: [_]
 }).
 
 %%%------------------------------------------------------------------
@@ -53,106 +55,125 @@ start_link(Opts) ->
    pipe:start_link(?MODULE, Opts ++ ?SO_TCP, []).
 
 %%
-init(Opts) ->
-   {ok, 'IDLE',
-      #fsm{
-         stream  = io_new(Opts)
-        ,backlog = opts:val(backlog, 5, Opts)
-        ,active  = opts:val(active, Opts)
-        ,trace   = opts:val(trace, undefined, Opts)
-        ,so      = Opts
-      }
-   }.
+init(SOpt) ->
+   [either ||
+      knet_gen_tcp:socket(SOpt),
+      fmap('IDLE',
+         #state{
+            socket  = _
+           ,flowctl = opts:val(active, SOpt)
+           ,timeout = opts:val(timeout, [], SOpt)
+           ,trace   = opts:val(trace, undefined, SOpt)
+           ,so      = SOpt
+         }
+      )
+   ].
 
 %%
-free(Reason, #fsm{stream=Stream, sock=Sock}) ->
-   ?access_tcp(#{
-      req  => {fin, Reason}
-     ,peer => Stream#stream.peer 
-     ,addr => Stream#stream.addr
-     ,byte => pstream:octets(Stream#stream.recv) + pstream:octets(Stream#stream.send)
-     ,pack => pstream:packets(Stream#stream.recv) + pstream:packets(Stream#stream.send)
-     ,time => tempus:diff(Stream#stream.ts)
-   }),
-   (catch gen_tcp:close(Sock)),
-   ok. 
+free(_Reason, _State) ->
+   ok.
 
 %% 
-ioctl(socket,  #fsm{sock = Sock}) -> 
+ioctl(socket, #state{socket = Sock}) -> 
    Sock.
 
 %%%------------------------------------------------------------------
 %%%
 %%% IDLE
 %%%
+%%%   This is the default state that each connection starts in before 
+%%%   the process of establishing it begins. This state is fictional.
+%%%   It represents the situation where there is no connection between
+%%%   peers either hasn't been created yet, or has just been destroyed.
+%%%
 %%%------------------------------------------------------------------   
 
 %%
 %%
-'IDLE'({listen, Uri}, Pipe, State) ->
-   case tcp_listen(Uri, State) of
-      {ok, Sock} ->
-         ?access_tcp(#{req => listen, addr => Uri}),
-         create_acceptor_pool(Uri, State),
-         pipe:a(Pipe, {tcp, self(), {listen, Uri}}),
-         {next_state, 'LISTEN', State#fsm{sock = Sock}};
-
+'IDLE'({connect, Uri}, Pipe, #state{} = State0) ->
+   case 
+      [either ||
+         connect(Uri, State0),
+         time_to_live(_),
+         time_to_hibernate(_),
+         time_to_packet(0, _),
+         pipe_to_side_a(Pipe, established, _),
+         stream_flow_ctrl(_)
+      ]
+   of
+      {ok, State1} ->
+         {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
-         ?access_tcp(#{req => {listen, Reason}, addr => Uri}),
-         pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),
-         {stop, Reason, State}
+         pipe_to_side_a(Pipe, terminated, Reason, State0),
+         errorlog({syn, Reason}, Uri, State0),
+         {next_state, 'IDLE', State0}
    end;
 
 %%
 %%
-'IDLE'({connect, Uri}, Pipe, #fsm{stream = Stream0, trace = Pid} = State) ->
-   T    = os:timestamp(),
-   case tcp_connect(Uri, State) of
-      {ok, Sock} ->
-         #stream{addr = Addr, peer = Peer} = Stream1 = 
-            io_ttl(io_tth(io_connect(Sock, Stream0))),
-         ?trace(Pid, {tcp, connect, tempus:diff(T)}),
-         ?access_tcp(#{req => {syn, sack}, peer => Peer, addr => Addr, time => tempus:diff(T)}),
-         pipe:a(Pipe, {tcp, self(), {established, Peer}}),
-         {next_state, 'ESTABLISHED', 
-            tcp_ioctl(State#fsm{stream=Stream1, sock=Sock})};
-
+'IDLE'({listen, Uri}, Pipe, State0) ->
+   case
+      [either ||
+         listen(Uri, State0),
+         spawn_acceptor_pool(Uri, _),
+         pipe_to_side_a(Pipe, listen, _)
+      ]
+   of
+      {ok, State1} ->
+         {next_state, 'LISTEN', State1};
       {error, Reason} ->
-         ?access_tcp(#{req => {syn, Reason}, addr => Uri}),
-         pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),
-         {stop, Reason, State}
+         pipe_to_side_a(Pipe, terminated, Reason, State0),
+         errorlog({listen, Reason}, Uri, State0),
+         {next_state, 'IDLE', State0}
    end;
 
 %%
 %%
-'IDLE'({accept, Uri}, Pipe, #fsm{stream = Stream0, trace = Pid} = State) ->
-   T     = os:timestamp(),   
-   case tcp_accept(Uri, State) of
-      {ok, Sock} ->
-         create_acceptor(Uri, State),
-         #stream{addr = Addr, peer = Peer} = Stream1 = 
-            io_ttl(io_tth(io_connect(Sock, Stream0))),
-         ?trace(Pid, {tcp, connect, tempus:diff(T)}),
-         ?access_tcp(#{req => {syn, sack}, peer => Peer, addr => Addr, time => tempus:diff(T)}),
-         pipe:a(Pipe, {tcp, self(), {established, Peer}}),
-         {next_state, 'ESTABLISHED', 
-            tcp_ioctl(State#fsm{stream=Stream1, sock=Sock})};
-
-      %% listen socket is closed
+'IDLE'({accept, Uri}, Pipe, #state{} = State0) ->
+   case
+      [either ||
+         accept(Uri, State0),
+         spawn_acceptor(Uri, _),
+         time_to_live(_),
+         time_to_hibernate(_),
+         time_to_packet(0, _),
+         pipe_to_side_a(Pipe, established, _),
+         stream_flow_ctrl(_)
+      ]
+   of
+      {ok, State1} ->
+         {next_state, 'ESTABLISHED', State1};
       {error, closed} ->
-         {stop, normal, State};
-
-      %% unable to accept connection  
+         {stop, normal, State0};
       {error, Reason} ->
-         create_acceptor(Uri, State),
-         ?access_tcp(#{req => {syn, Reason}, addr => Uri}),
-         pipe:a(Pipe, {tcp, self(), {terminated, Reason}}),      
-         {stop, Reason, State}
-   end.
+         spawn_acceptor(Uri, State0),
+         pipe_to_side_a(Pipe, terminated, Reason, State0),
+         errorlog({syn, Reason}, Uri, State0),
+         {stop, Reason, State0}
+   end;
+
+'IDLE'({sidedown, a, _}, _Pipe, State0) ->
+   {stop, normal, State0};
+
+'IDLE'(tth, _Pipe, State0) ->
+   {next_state, 'IDLE', State0};
+
+'IDLE'(ttl, _Pipe, State0) ->
+   {next_state, 'IDLE', State0};
+
+'IDLE'({ttp, _}, _Pipe, State0) ->
+   {next_state, 'IDLE', State0};
+
+'IDLE'(_, _Pipe, State0) ->
+   {next_state, 'IDLE', State0}.
+
+
 
 %%%------------------------------------------------------------------
 %%%
 %%% LISTEN
+%%%
+%%%   A peer is waiting to receive a connection request (syn)
 %%%
 %%%------------------------------------------------------------------   
 
@@ -164,66 +185,97 @@ ioctl(socket,  #fsm{sock = Sock}) ->
 %%%
 %%% ESTABLISHED
 %%%
+%%%   The steady state of an open TCP connection. Peers can exchange 
+%%%   data. It will continue until the connection is closed for one 
+%%%   reason or another.
+%%%
 %%%------------------------------------------------------------------   
 
-'ESTABLISHED'({tcp_error, _, Reason}, Pipe, State) ->
-   pipe:b(Pipe, {tcp, self(), {terminated, Reason}}),   
-   {stop, Reason, State};
-   
-'ESTABLISHED'({tcp_closed, _}, Pipe, State) ->
-   pipe:b(Pipe, {tcp, self(), {terminated, normal}}),
-   {stop, normal, State};
+'ESTABLISHED'({sidedown, a, _}, _Pipe, State0) ->
+   {stop, normal, State0};
+
+'ESTABLISHED'({tcp_error, _, Error}, Pipe, #state{} = State0) ->
+   case
+      [either ||
+         close(Error, State0),
+         pipe_to_side_b(Pipe, terminated, Error, _)
+      ]
+   of
+      {ok, State1} -> 
+         {next_state, 'IDLE', State1};
+      {error, Reason} -> 
+         {stop, Reason, State0}
+   end;
+
+'ESTABLISHED'({tcp_closed, Port}, Pipe, #state{} = State) ->
+   'ESTABLISHED'({tcp_error, Port, normal}, Pipe, State);
 
 %%
 %%
-'ESTABLISHED'({tcp_passive, _}, _Pipe, #fsm{active = once} = State) ->
-   {next_state, 'ESTABLISHED', tcp_ioctl(State)};
-
-'ESTABLISHED'({tcp_passive, _}, _Pipe, #fsm{active = true} = State) ->
-   {next_state, 'ESTABLISHED', tcp_ioctl(State)};
-
-'ESTABLISHED'({tcp_passive, _}, Pipe, State) ->
+'ESTABLISHED'({tcp_passive, _}, Pipe, #state{flowctl = false} = State) ->
    pipe:b(Pipe, {tcp, self(), passive}),
    {next_state, 'ESTABLISHED', State};
 
-'ESTABLISHED'(active, _Pipe, State) ->
-   {next_state, 'ESTABLISHED', tcp_ioctl(State)};
+'ESTABLISHED'({tcp_passive, Port}, Pipe, #state{} = State0) ->
+   case stream_flow_ctrl(State0) of
+      {ok, State1} ->
+         {next_state, 'ESTABLISHED', State1};
+      {error, Reason} ->
+         'ESTABLISHED'({tcp_error, Port, Reason}, Pipe, State0)
+   end;
 
-'ESTABLISHED'({active, N}, _Pipe, State) ->
-   {next_state, 'ESTABLISHED', tcp_ioctl(State#fsm{active = N})};
+'ESTABLISHED'(active, Pipe, #state{} = State0) ->
+   case stream_flow_ctrl(State0) of
+      {ok, State1} ->
+         {next_state, 'ESTABLISHED', State1};
+      {error, Reason} ->
+         %% @todo: spawn pipe so that b is client
+         'ESTABLISHED'({tcp_error, undefined, Reason}, Pipe, State0)
+   end;
+
+'ESTABLISHED'({active, N}, Pipe, #state{} = State0) ->
+   case stream_flow_ctrl(State0#state{flowctl = N}) of
+      {ok, State1} ->
+         {next_state, 'ESTABLISHED', State1};
+      {error, Reason} ->
+         %% @todo: spawn pipe so that b is client
+         'ESTABLISHED'({tcp_error, undefined, Reason}, Pipe, State0)
+   end;
 
 %%
 %%
-'ESTABLISHED'({tcp, _, Pckt}, Pipe, #fsm{stream = Stream0, trace = Pid} = State) ->
+'ESTABLISHED'({tcp, Port, Pckt}, Pipe, #state{} = State0) ->
    %% What one can do is to combine {active, once} with gen_tcp:recv().
    %% Essentially, you will be served the first message, then read as many as you 
    %% wish from the socket. When the socket is empty, you can again enable {active, once}. 
    %% Note: release 17.x and later supports {active, n()}
-   {_, Stream1} = io_recv(Pckt, Pipe, Stream0),
-   ?trace(Pid, {tcp, packet, byte_size(Pckt)}),
-   {next_state, 'ESTABLISHED', State#fsm{stream = Stream1}};
-
-'ESTABLISHED'({ttl, Pack}, Pipe, State) ->
-   case io_ttl(Pack, State#fsm.stream) of
-      {eof, Stream} ->
-         pipe:b(Pipe, {tcp, self(), {terminated, timeout}}),
-         {stop, normal, State#fsm{stream=Stream}};
-      {_,   Stream} ->
-         {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
+   case stream_recv(Pipe, Pckt, State0) of
+      {ok, State1} ->
+         {next_state, 'ESTABLISHED', State1};
+      {error, Reason} ->
+         'ESTABLISHED'({tcp_error, Port, Reason}, Pipe, State0)
    end;
 
-'ESTABLISHED'(hibernate, _, State) ->
-   ?DEBUG("knet [tcp]: suspend ~p", [(State#fsm.stream)#stream.peer]),
+
+'ESTABLISHED'({ttp, Pack}, Pipe, #state{} = State0) ->
+   case time_to_packet(Pack, State0) of
+      {ok, State1} ->
+         {next_state, 'ESTABLISHED', State1};
+      {error, Reason} ->
+         'ESTABLISHED'({tcp_error, undefined, Reason}, Pipe, State0)
+   end;
+
+'ESTABLISHED'(tth, _, State) ->
    {next_state, 'HIBERNATE', State, hibernate};
 
-'ESTABLISHED'(Msg, Pipe, #fsm{sock = Sock, stream = Stream0} = State)
- when ?is_iolist(Msg) ->
-   try
-      {_, Stream1} = io_send(Msg, Sock, Stream0),
-      {next_state, 'ESTABLISHED', State#fsm{stream = Stream1}}
-   catch _:{badmatch, {error, Reason}} ->
-      pipe:b(Pipe, {tcp, self(), {terminated, Reason}}),
-      {stop, Reason, State}
+'ESTABLISHED'(Pckt, Pipe, #state{} = State0)
+ when ?is_iolist(Pckt) ->
+   case stream_send(Pipe, Pckt, State0) of
+      {ok, State1} ->
+         {next_state, 'ESTABLISHED', State1};
+      {error, Reason} ->
+         %% @todo: spawn pipe so that b is client
+         'ESTABLISHED'({tcp_error, undefined, Reason}, Pipe, State0)
    end.
 
 %%%------------------------------------------------------------------
@@ -232,9 +284,10 @@ ioctl(socket,  #fsm{sock = Sock}) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'HIBERNATE'(Msg, Pipe, #fsm{stream = Stream} = State) ->
-   ?DEBUG("knet [tcp]: resume ~p",[Stream#stream.peer]),
-   'ESTABLISHED'(Msg, Pipe, State#fsm{stream=io_tth(Stream)}).
+'HIBERNATE'(Msg, Pipe, #state{} = State0) ->
+   % ?DEBUG("knet [tcp]: resume ~p",[Stream#stream.peer]),
+   {ok, State1} = time_to_hibernate(State0),
+   'ESTABLISHED'(Msg, Pipe, State1).
 
 %%%------------------------------------------------------------------
 %%%
@@ -243,114 +296,162 @@ ioctl(socket,  #fsm{sock = Sock}) ->
 %%%------------------------------------------------------------------   
 
 %%
-%% new socket stream
-io_new(SOpt) ->
-   #stream{
-      send = pstream:new(opts:val(pack, raw, SOpt))
-     ,recv = pstream:new(opts:val(pack, raw, SOpt))
-     ,ttl  = pair:lookup([timeout, ttl], ?SO_TTL, SOpt)
-     ,tth  = pair:lookup([timeout, tth], ?SO_TTH, SOpt)
-     ,ts   = os:timestamp()
-   }.
+%% 
+connect(Uri, #state{socket = Sock} = State) ->
+   T = os:timestamp(),
+   [either ||
+      knet_gen_tcp:connect(Uri, Sock),
+      fmap(State#state{socket = _}),
+      tracelog(connect, tempus:diff(T), _),
+      accesslog({syn, sack}, tempus:diff(T), _)
+   ].
+
+listen(Uri, #state{socket = Sock} = State) ->
+   [either ||
+      knet_gen_tcp:listen(Uri, Sock),
+      fmap(State#state{socket = _}),
+      accesslog(listen, undefined, _)
+   ].
+
+accept(Uri, #state{so = SOpt} = State) ->
+   T    = os:timestamp(),
+   %% Note: this is a design decision to inject listen socket via socket options
+   Sock = pipe:ioctl(opts:val(listen, SOpt), socket),
+   [either ||
+      knet_gen_tcp:accept(Uri, Sock),
+      fmap(State#state{socket = _}),
+      tracelog(connect, tempus:diff(T), _),
+      accesslog({syn, sack}, tempus:diff(T), _)
+   ].
+
+close(Reason, #state{} = State) ->
+   [either ||
+      accesslog({fin, Reason}, undefined, State),
+      knet_gen_tcp:close(_#state.socket),
+      fmap(State#state{socket = _})
+   ].
 
 %%
-%% socket connected
-io_connect(Port, #stream{}=Sock) ->
-   {ok, Peer} = inet:peername(Port),
-   {ok, Addr} = inet:sockname(Port),
-   Sock#stream{peer = Peer, addr = Addr, tss = os:timestamp(), ts = os:timestamp()}.
+%% socket timeout
+time_to_live(#state{timeout = SOpt} = State) ->
+   [option || 
+      opts:val(ttl, undefined, SOpt), 
+      tempus:timer(_, ttl)
+   ],
+   {ok, State}.
 
-%%
-%% set hibernate timeout
-io_tth(#stream{}=Sock) ->
-   Sock#stream{
-      tth = tempus:timer(Sock#stream.tth, hibernate)
-   }.
+time_to_hibernate(#state{timeout = SOpt} = State) ->
+   [option || 
+      opts:val(tth, undefined, SOpt), 
+      tempus:timer(_, tth)
+   ],
+   {ok, State}.
 
-%%
-%% set time-to-live timeout
-io_ttl(#stream{}=Sock) ->
-   erlang:element(2, io_ttl(-1, Sock)). 
-
-io_ttl(N, #stream{}=Sock) ->
-   case pstream:packets(Sock#stream.recv) + pstream:packets(Sock#stream.send) of
-      %% stream activity
-      X when X > N ->
-         {active, Sock#stream{ttl = tempus:timer(Sock#stream.ttl, {ttl, X})}};
-      %% no stream activity
+time_to_packet(N, #state{socket = Sock, timeout = SOpt} = State) ->
+   case knet_gen_tcp:getstat(Sock, packet) of
+      X when X > N orelse N =:= 0 ->
+         [option ||
+            opts:val(ttp, undefined, SOpt),
+            tempus:timer(_, {ttp, X})
+         ],
+         {ok, State};
       _ ->
-         {eof, Sock}
+         {error, timeout}
    end.
 
 %%
-%% recv packet
-io_recv(Pckt, Pipe, #stream{}=Sock) ->
-   ?DEBUG("knet [tcp] ~p: recv ~p~n~p", [self(), Sock#stream.peer, Pckt]),
-   {Msg, Recv} = pstream:decode(Pckt, Sock#stream.recv),
-   lists:foreach(fun(X) -> pipe:b(Pipe, {tcp, self(), X}) end, Msg),
-   {active, Sock#stream{recv=Recv}}.
-
-%%
-%% send packet
-io_send(Msg, Pipe, #stream{}=Sock) ->
-   ?DEBUG("knet [tcp] ~p: send ~p~n~p", [self(), Sock#stream.peer, Msg]),
-   {Pckt, Send} = pstream:encode(Msg, Sock#stream.send),
-   lists:foreach(fun(X) -> ok = gen_tcp:send(Pipe, X) end, Pckt),
-   {active, Sock#stream{send=Send}}.
-
-%%
-%% set socket i/o control flags
-tcp_ioctl(#fsm{sock = Sock, active = true} = State) ->
-   inet:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
-   State;
-tcp_ioctl(#fsm{sock = Sock, active = once} = State) ->
-   inet:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
-   State;
-tcp_ioctl(#fsm{sock = Sock, active = N} = State) ->
-   inet:setopts(Sock, [{active, N}]),
-   State.
-
-%%
-%% creates tcp listen socket
-%% note: socket opts for listener socket requires {active, false}
-tcp_listen(Uri, #fsm{so = SOpt0}) ->
-   Port = uri:port(Uri),
-   SOpt = opts:filter(?SO_TCP_ALLOWED, SOpt0),
-   gen_tcp:listen(Port, [
-      {active,   false}
-     ,{reuseaddr, true} 
-     |lists:keydelete(active, 1, SOpt)
-   ]).
+%% socket up/down link i/o
+stream_flow_ctrl(#state{flowctl = true, socket = Sock} = State) ->
+   %% we need to ignore any error for i/o setup
+   %% it will crash the process while data reside in mailbox
+   knet_gen_tcp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
+   {ok, State};
+stream_flow_ctrl(#state{flowctl = once, socket = Sock} = State) ->
+   knet_gen_tcp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
+   {ok, State};
+stream_flow_ctrl(#state{flowctl = _N, socket = Sock} = State) ->
+   knet_gen_tcp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
+   {ok, State}.
 
 %%
 %%
-tcp_connect(Uri, #fsm{so = SOpt0}) ->
-   Host = scalar:c(uri:host(Uri)),
-   Port = uri:port(Uri),
-   SOpt = opts:filter(?SO_TCP_ALLOWED, SOpt0),
-   Tout = pair:lookup([timeout, ttc], ?SO_TIMEOUT, SOpt0),
-   gen_tcp:connect(Host, Port, SOpt, Tout).
+pipe_to_side_a(Pipe, Event, #state{socket = Sock} = State) ->
+   [either ||
+      knet_gen_tcp:peername(Sock),
+      fmap(pipe:a(Pipe, {tcp, self(), {Event, _}})),
+      fmap(State)
+   ].
+
+pipe_to_side_a(Pipe, Event, Reason, #state{} = State) ->
+   pipe:a(Pipe, {tcp, self(), {Event, Reason}}),
+   {ok, State}.
+
+pipe_to_side_b(Pipe, Event, Reason, #state{} = State) ->
+   pipe:b(Pipe, {tcp, self(), {Event, Reason}}),
+   {ok, State}.
+
+%%
+stream_send(_Pipe, Pckt, #state{socket = Sock} = State) ->
+   [either ||
+      knet_gen_tcp:send(Sock, Pckt),
+      fmap(State#state{socket = _})
+   ].
+
+%%
+stream_recv(Pipe, Pckt, #state{socket = Sock} = State) ->
+   [either ||
+      knet_gen_tcp:recv(Sock, Pckt),
+      stream_uplink(Pipe, _, _),
+      fmap(State#state{socket = _}),
+      tracelog(packet, byte_size(Pckt), _)     
+   ].
+
+stream_uplink(Pipe, Pckt, Socket) ->
+   lists:foreach(fun(X) -> pipe:b(Pipe, {tcp, self(), X}) end, Pckt),
+   {ok, Socket}.
+
+
+%%
+%% socket logging 
+errorlog(Reason, Peer, #state{} = State) ->
+   ?access_tcp(#{req => Reason, addr => Peer}),
+   {ok, State}.
+
+accesslog(Req, T, #state{socket = Sock} = State) ->
+   Peer = maybeT(knet_gen_tcp:peername(Sock)),
+   Addr = maybeT(knet_gen_tcp:sockname(Sock)),
+   ?access_tcp(#{req => Req, peer => Peer, addr => Addr, time => T}),
+   {ok, State}.
+
+tracelog(_Key, _Val, #state{trace = undefined} = State) ->
+   {ok, State};
+tracelog(Key, Val, #state{trace = Pid, socket = Sock} = State) ->
+   [either ||
+      knet_gen_tcp:peername(Sock),
+      knet_log:trace(Pid, {tcp, {Key, _}, Val}),
+      fmap(State)
+   ].
 
 %%
 %%
-tcp_accept(_Uri, #fsm{so = SOpt0}) ->
-   LPipe = opts:val(listen, SOpt0),
-   LSock = pipe:ioctl(LPipe, socket),
-   gen_tcp:accept(LSock).
+spawn_acceptor(Uri, #state{so = SOpt} = State) ->
+   Sup = opts:val(acceptor,  SOpt), 
+   {ok, _} = supervisor:start_child(Sup, [Uri, SOpt]),
+   {ok, State}.
 
-
-%%
-%% create app acceptor pool
-create_acceptor_pool(Uri, #fsm{so = SOpt0, backlog = Backlog}) ->
-   Sup  = opts:val(acceptor,  SOpt0), 
-   SOpt = [{listen, self()} | SOpt0],
+spawn_acceptor_pool(Uri, #state{so = SOpt} = State) ->
+   Sup  = opts:val(acceptor,  SOpt), 
+   Opts = [{listen, self()} | SOpt],
    lists:foreach(
       fun(_) ->
-         {ok, _} = supervisor:start_child(Sup, [Uri, SOpt])
+         {ok, _} = supervisor:start_child(Sup, [Uri, Opts])
       end,
-      lists:seq(1, Backlog)
-   ).
+      lists:seq(1, opts:val(backlog, 5, SOpt))
+   ),
+   {ok, State}.
 
-create_acceptor(Uri, #fsm{so = SOpt0}) ->
-   Sup = opts:val(acceptor,  SOpt0), 
-   {ok, _} = supervisor:start_child(Sup, [Uri, SOpt0]).
+%%
+%%
+maybeT({ok, X}) -> X;
+maybeT(_) -> undefined.
+

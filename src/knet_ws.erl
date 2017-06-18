@@ -129,7 +129,7 @@ ioctl(_, _) ->
    % connect is compatibility wrapper for knet socket interface (translated to http GET request)
    % TODO: htstream support HTTP/1.2 (see http://www.jmarshall.com/easy/http/)
    pipe:b(Pipe, {connect, Uri}),
-   Hash = base64:encode(crypto:hash(md5, scalar:s(random:uniform(16#ffff)))),
+   Hash = base64:encode(crypto:hash(md5, scalar:s(rand:uniform(16#ffff)))),
    Req  = {'GET', Uri, [
       {'Connection',      <<"Upgrade">>}
      ,{'Upgrade',       <<"websocket">>}
@@ -137,7 +137,10 @@ ioctl(_, _) ->
      ,{<<"Sec-WebSocket-Key">>,     Hash}
      ,{<<"Sec-WebSocket-Version">>, ?VSN}
    ]},
-  'CLIENT'(Req, Pipe, State#fsm{stream = ht_new(Uri, State#fsm.so)}).
+  'CLIENT'(Req, Pipe, State#fsm{stream = ht_new(Uri, State#fsm.so)});
+
+'IDLE'({sidedown, _, _}, _, State) ->
+   {stop, normal, State}.
 
 
 %%%------------------------------------------------------------------
@@ -154,6 +157,9 @@ ioctl(_, _) ->
 %%% SERVER
 %%%
 %%%------------------------------------------------------------------   
+
+'SERVER'({sidedown, _, _}, _, State) ->
+   {stop, normal, State};
 
 'SERVER'({Prot, _Sock, established}, _Pipe, State)
  when ?is_transport(Prot) ->
@@ -186,6 +192,8 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------   
 
+'CLIENT'({sidedown, _, _}, _, State) ->
+   {stop, normal, State};
 
 %%
 %% protocol signaling
@@ -242,6 +250,9 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------   
 
+'ESTABLISHED'({sidedown, _, _}, _, State) ->
+   {stop, normal, State};
+
 'ESTABLISHED'({Prot, _, {terminated, Reason}}, Pipe, State)
  when ?is_transport(Prot) ->
    pipe:b(Pipe, {ws, self(), {terminated, Reason}}),
@@ -270,7 +281,7 @@ ioctl(_, _) ->
          {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
    end;
 
-'ESTABLISHED'(hibernate, Pipe, State) ->
+'ESTABLISHED'(hibernate, _Pipe, State) ->
    {next_state, 'ESTABLISHED', State}.
 
 %%%------------------------------------------------------------------
