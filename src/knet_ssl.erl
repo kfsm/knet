@@ -40,7 +40,7 @@
 %% internal state
 -record(state, {
    socket   = undefined :: #socket{}
-  ,flowctl  = true      :: once | false | true | integer()  %% flow control strategy
+  ,flowctl  = true      :: once | true | integer()  %% flow control strategy
   ,trace    = undefined :: _
   ,timeout  = undefined :: [_]
   ,so       = undefined :: [_]
@@ -101,7 +101,7 @@ ioctl(socket,  #state{socket = Sock}) ->
          time_to_hibernate(_),
          time_to_packet(0, _),
          pipe_to_side_a(Pipe, established, _),
-         stream_flow_ctrl(_)
+         config_flow_ctrl(_)
       ]
    of
       {ok, State1} ->
@@ -384,19 +384,39 @@ time_to_packet(N, #state{socket = Sock, timeout = SOpt} = State) ->
          {error, timeout}
    end.
 
+%%
+%%
+config_flow_ctrl(#state{flowctl = true, socket =Sock} = State) ->
+   knet_gen_ssl:setopts(Sock, [{active, true}]),
+   {ok, State};
+config_flow_ctrl(#state{flowctl = once, socket =Sock} = State) ->
+   knet_gen_ssl:setopts(Sock, [{active, once}]),
+   {ok, State};
+config_flow_ctrl(#state{flowctl = N, socket =Sock} = State) ->
+   %% Note: ssl accepts only true | false | once.
+   %% {active, N} needs to be faked for ssl 
+   knet_gen_ssl:setopts(Sock, [{active, once}]),
+   {ok, State#state{flowctl = {N, N}}}.
 
 %%
 %% socket up/down link i/o
 stream_flow_ctrl(#state{flowctl = true, socket = Sock} = State) ->
+   ?DEBUG("[tcp] flow control = ~p", [true]),
    %% we need to ignore any error for i/o setup
    %% it will crash the process while data reside in mailbox
    knet_gen_ssl:setopts(Sock, [{active, once}]),
    {ok, State};
 stream_flow_ctrl(#state{flowctl = once, socket = Sock} = State) ->
-   knet_gen_ssl:setopts(Sock, [{active, once}]),
+   ?DEBUG("[tcp] flow control = ~p", [once]),
+   % knet_gen_ssl:setopts(Sock, [{active, once}]),
    {ok, State};
-stream_flow_ctrl(State) ->
-   {ok, State}.
+stream_flow_ctrl(#state{flowctl = {0, _N}, socket = Sock} = State) ->
+   ?DEBUG("[tcp] flow control = ~p", [_N]),
+   {ok, State};
+
+stream_flow_ctrl(#state{flowctl = {Credit, N}, socket = Sock} = State) ->
+   knet_gen_ssl:setopts(Sock, [{active, once}]),
+   {ok, State#state{flowctl = {Credit - 1, N}}}.
 
 %%
 %%

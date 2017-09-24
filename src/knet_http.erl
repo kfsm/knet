@@ -169,8 +169,9 @@ ioctl(_, _) ->
  when ?is_transport(Prot) ->
    {stop, normal, stream_reset(Pipe, State)};
 
-'STREAM'({Prot, _, {terminated, _}}, Pipe, #fsm{} = State)
+'STREAM'({Prot, _, {terminated, _}} = X, Pipe, #fsm{} = State)
  when ?is_transport(Prot) ->
+   io:format("=[ reset ]=> ~p~n", [X]),
    {next_state, 'IDLE', stream_reset(Pipe, State)};
 
 %%

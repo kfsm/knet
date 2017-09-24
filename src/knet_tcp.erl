@@ -39,7 +39,7 @@
 %% internal state
 -record(state, {
    socket   = undefined :: #socket{}
-  ,flowctl  = true      :: once | false | true | integer()  %% flow control strategy
+  ,flowctl  = true      :: once | true | integer()  %% flow control strategy
   ,trace    = undefined :: _
   ,timeout  = undefined :: [_]
   ,so       = undefined :: [_]
@@ -362,15 +362,18 @@ time_to_packet(N, #state{socket = Sock, timeout = SOpt} = State) ->
 %%
 %% socket up/down link i/o
 stream_flow_ctrl(#state{flowctl = true, socket = Sock} = State) ->
-   %% we need to ignore any error for i/o setup
+   ?DEBUG("[tcp] flow control = ~p", [true]),
+   %% we need to ignore any error for i/o setup, otherwise
    %% it will crash the process while data reside in mailbox
    knet_gen_tcp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
    {ok, State};
 stream_flow_ctrl(#state{flowctl = once, socket = Sock} = State) ->
-   knet_gen_tcp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
+   ?DEBUG("[tcp] flow control = ~p", [once]),
+   % knet_gen_tcp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
    {ok, State};
 stream_flow_ctrl(#state{flowctl = _N, socket = Sock} = State) ->
-   knet_gen_tcp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
+   ?DEBUG("[tcp] flow control = ~p", [_N]),
+   % knet_gen_tcp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
    {ok, State}.
 
 %%

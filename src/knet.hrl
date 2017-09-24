@@ -6,7 +6,7 @@
 
 %%
 %% default i/o credit
--define(CONFIG_IO_CREDIT, 100).
+-define(CONFIG_IO_CREDIT, 1024).
 
 
 %%-----------------------------------------------------------------------------
@@ -17,7 +17,7 @@
 -define(SO_TCP,  
    [
       binary
-     ,{active,  once}
+     ,{active,  1024}
      ,{nodelay, true}
    ]
 ). 
