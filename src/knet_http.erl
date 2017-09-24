@@ -158,7 +158,7 @@ ioctl(_, _) ->
 %%
 %% peer connection
 'STREAM'({Prot, _, {established, Peer}}, _Pipe, #fsm{} = State)
- when ?is_transport(Prot) ->   
+ when ?is_transport(Prot) ->
    [$. ||
       lens:apply(lens:tuple(#fsm.queue), fun queue_config_treq/1, State),
       lens:put(lens_socket_peername(), Peer, _),

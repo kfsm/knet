@@ -16,7 +16,10 @@
 %%   limitations under the License.
 %%
 -module(knet).
+
+-compile({parse_transform, category}).
 -include("knet.hrl").
+
 
 -export([start/0]).
 -export([
@@ -34,6 +37,11 @@
   ,recv/3
   ,send/2
 ]).
+
+%%
+%% types
+-type uri()    :: uri:uri() | binary() | list().
+-type opts()   :: [_]. 
 
 %%%------------------------------------------------------------------
 %%%
@@ -56,47 +64,39 @@ start() ->
 %%  Options tcp
 %%    {backlog, integer()} - defines length of acceptor pool (see also tcp backlog)
 %%
--spec socket(any()) -> pid().
--spec socket(any(), any()) -> pid().
+-spec socket(uri()) -> datum:either(pid()).
+-spec socket(uri(), opts()) -> datum:either(pid()).
 
-socket({uri, udp,  _}, Opts) ->
-   {ok, A} = supervisor:start_child(knet_udp_sup,  [Opts]),
-   create([A], Opts);
-socket({uri, tcp,  _}, Opts) ->
-   {ok, A} = supervisor:start_child(knet_tcp_sup,  [Opts]),
-   create([A], Opts);
-socket({uri, ssl,  _}, Opts) ->
-   {ok, A} = supervisor:start_child(knet_ssl_sup,  [Opts]),
-   create([A], Opts);
-socket({uri, http, _}, Opts) ->
-   {ok, A} = supervisor:start_child(knet_tcp_sup,  [Opts]),
-   {ok, B} = supervisor:start_child(knet_http_sup, [Opts]),
-   create([B, A], Opts);
-socket({uri, https,_}, Opts) ->
-   {ok, A} = supervisor:start_child(knet_ssl_sup,  [Opts]),
-   {ok, B} = supervisor:start_child(knet_http_sup, [Opts]),
-   create([B, A], Opts);
-socket({uri, ws, _}, Opts) ->
-   {ok, A} = supervisor:start_child(knet_tcp_sup,  [Opts]),
-   {ok, B} = supervisor:start_child(knet_ws_sup,   [Opts]),
-   create([B, A], Opts);
-socket({uri, wss,_}, Opts) ->
-   {ok, A} = supervisor:start_child(knet_ssl_sup,  [Opts]),
-   {ok, B} = supervisor:start_child(knet_ws_sup,   [Opts]),
-   create([B, A], Opts);
+socket({uri, Schema, _}, Opts) ->
+   [either ||
+      category:sequence([
+         supervisor:start_child(X, [Opts]) || X <- stack(Schema)]),
+      create(_, Opts)
+   ];
+
 socket(Url, Opts) ->
    socket(uri:new(Url), Opts).
 
 socket(Url) ->
    socket(uri:new(Url), []).
 
+%%
+stack(udp)   -> [knet_udp_sup];
+stack(tcp)   -> [knet_tcp_sup];
+stack(ssl)   -> [knet_ssl_sup];
+stack(http)  -> [knet_http_sup, knet_tcp_sup];
+stack(https) -> [knet_http_sup, knet_ssl_sup];
+stack(ws)    -> [knet_ws_sup, knet_tcp_sup];
+stack(wss)   -> [knet_ws_sup, knet_ssl_sup].
+
+%%
 create(Stack, Opts) ->
    case opts:get(nopipe, false, Opts) of
       nopipe ->
-         pipe:make(Stack);
+         {ok, pipe:make(Stack)};
       _      ->
          pipe:make([self()|Stack]),
-         hd(Stack)
+         {ok, hd(Stack)}
    end.
 
 %%
@@ -104,7 +104,7 @@ create(Stack, Opts) ->
 %%
 %% Options:
 %%   {acceptor,      atom() | pid()} - acceptor module/factory
--spec listen(any(), any()) -> pid().
+-spec listen(uri(), opts()) -> datum:either(pid()).
 
 listen({uri, _, _}=Uri, Opts)
  when is_list(Opts) ->
@@ -120,9 +120,9 @@ listen({uri, _, _}=Uri, Opts)
       _ ->
          Opts
    end,
-   Sock = socket(Uri, SOpt),
+   {ok, Sock} = socket(Uri, SOpt),
    _    = pipe:send(Sock, {listen, Uri}),
-   Sock;
+   {ok, Sock};
 
 listen({uri, _, _}=Uri, Fun)
  when is_function(Fun, 1) ->
@@ -147,13 +147,13 @@ acceptor(Fun, Uri, Opts) ->
 %% 
 %% Options:
 %%    nopipe 
--spec bind(any()) -> pid().
--spec bind(any(), any()) -> pid().
+-spec bind(uri()) -> datum:either(pid()).
+-spec bind(uri(), opts()) -> datum:either(pid()).
 
 bind({uri, _, _}=Uri, Opts) ->
-   Sock = socket(Uri, [X || X <- Opts, X /= nopipe]),
+   {ok, Sock} = socket(Uri, [X || X <- Opts, X /= nopipe]),
    _    = pipe:send(Sock, {accept, Uri}),
-   Sock;
+   {ok, Sock};
 
 bind(Url, Opts) ->
    bind(uri:new(Url), Opts).
@@ -165,13 +165,13 @@ bind(Url) ->
 %%
 %% connect socket to remote peer
 %%  Options
--spec connect(any()) -> {ok, pid()} | {error, any()}.
--spec connect(any(), any()) -> {ok, pid()} | {error, any()}.
+-spec connect(uri()) -> datum:either(pid()).
+-spec connect(uri(), opts()) -> datum:either(pid()).
 
 connect({uri, _, _}=Uri, Opts) ->
-   Sock = socket(Uri, Opts),
+   {ok, Sock} = socket(Uri, Opts),
    _ = pipe:send(Sock, {connect, Uri}),
-   Sock;
+   {ok, Sock};
 
 connect(Url, Opts) ->
    connect(uri:new(Url), Opts).

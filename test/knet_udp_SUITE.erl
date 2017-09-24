@@ -171,7 +171,7 @@ knet_connect(Uri) ->
    knet_connect(Uri, []).
 
 knet_connect(Uri, Opts) ->
-   Sock = knet:connect(Uri, Opts),
+   {ok, Sock} = knet:connect(Uri, Opts),
    {ioctl, b, Sock} = knet:recv(Sock),
    case knet:recv(Sock) of
       {udp, Sock, {listen, _}} ->
@@ -181,7 +181,7 @@ knet_connect(Uri, Opts) ->
    end.
 
 knet_listen(Uri, Type) ->
-   Sock = knet:listen(Uri, [
+   {ok, Sock} = knet:listen(Uri, [
       {backlog,  2},
       {acceptor, fun knet_echo/1},
       {dispatch, Type}

@@ -173,7 +173,9 @@ accept(Uri, #socket{sock = LSock} = Socket) ->
 handshake(#socket{sock = {tcp, Sock}, so = SOpt} = Socket) ->
    [$^ ||
       peername(Socket),
-      fmap({server_name_indication, scalar:c(uri:host(_))}),
+      % Server Name Indication requires a host name 
+      % fmap({server_name_indication, scalar:c(uri:host(_))}),
+      fmap({server_name_indication, disable}),
       ssl:connect(Sock, [_ | so_ssl(SOpt)], so_ttc(SOpt)),
       fmap(Socket#socket{sock = _})
    ];

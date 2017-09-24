@@ -208,7 +208,7 @@ knet_connect(Uri) ->
    knet_connect(Uri, []).
 
 knet_connect(Uri, Opts) ->
-   Sock = knet:connect(Uri, Opts),
+   {ok, Sock} = knet:connect(Uri, Opts),
    {ioctl, b, Sock} = knet:recv(Sock),
    case knet:recv(Sock) of
       {ssl, Sock, {established, _}} ->
@@ -224,7 +224,7 @@ knet_listen(Uri) ->
    knet_listen(Uri, []).
 
 knet_listen(Uri, Opts) -> 
-   Sock = knet:listen(Uri, [
+   {ok, Sock} = knet:listen(Uri, [
       {backlog,  2}
      ,{acceptor, fun knet_echo/1}
      ,{certfile,   filename:join([code:priv_dir(knet), "server.crt"])}
