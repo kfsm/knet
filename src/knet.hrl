@@ -60,7 +60,7 @@
      ,send_timeout 
      ,sndbuf 
      ,binary 
-     ,active 
+     % ,active 
      ,backlog
      ,priority
      ,tos

@@ -156,6 +156,13 @@ ioctl(_, _) ->
    {stop, normal, State};
 
 %%
+%%
+'STREAM'({active, _} = FlowCtrl, Pipe, State) ->
+   pipe:b(Pipe, FlowCtrl),
+   pipe:a(Pipe, ok),
+   {next_state, 'STREAM', State};
+
+%%
 %% peer connection
 'STREAM'({Prot, _, {established, Peer}}, _Pipe, #fsm{} = State)
  when ?is_transport(Prot) ->
@@ -169,9 +176,8 @@ ioctl(_, _) ->
  when ?is_transport(Prot) ->
    {stop, normal, stream_reset(Pipe, State)};
 
-'STREAM'({Prot, _, {terminated, _}} = X, Pipe, #fsm{} = State)
+'STREAM'({Prot, _, {terminated, _}}, Pipe, #fsm{} = State)
  when ?is_transport(Prot) ->
-   io:format("=[ reset ]=> ~p~n", [X]),
    {next_state, 'IDLE', stream_reset(Pipe, State)};
 
 %%
@@ -197,13 +203,33 @@ ioctl(_, _) ->
    end;
 
 %%
+%%
+'STREAM'(ok, Pipe, State) ->
+   %% @todo: do not ack at pipe (?)
+   {next_state, 'STREAM', State};
+
+%%
 %% egress message
-'STREAM'(Msg, Pipe, State) ->
+'STREAM'({_, {uri, _, _}, _} = Msg, Pipe, State0) ->
    try
-      {next_state, 'STREAM', http_send(Msg, Pipe, State)}
+      State1 = http_send(Msg, Pipe, State0),
+      pipe:ack(Pipe, ok),
+      {next_state, 'STREAM', State1}
    catch _:Reason ->
       ?NOTICE("knet [http]: egress failure ~p ~p", [Reason, erlang:get_stacktrace()]),
-      {next_state, 'IDLE', stream_reset(Pipe, State)}
+      pipe:ack(Pipe, {error, Reason}),
+      {next_state, 'IDLE', stream_reset(Pipe, State0)}
+   end;
+
+'STREAM'({packet, Msg}, Pipe, State0) ->
+   try
+      State1 = http_send(Msg, Pipe, State0),
+      pipe:ack(Pipe, ok),
+      {next_state, 'STREAM', State1}
+   catch _:Reason ->
+      ?NOTICE("knet [http]: egress failure ~p ~p", [Reason, erlang:get_stacktrace()]),
+      pipe:ack(Pipe, {error, Reason}),
+      {next_state, 'IDLE', stream_reset(Pipe, State0)}
    end.
 
 %%%------------------------------------------------------------------
@@ -247,7 +273,7 @@ http_encode_packet(Data, #fsm{socket = Socket0} = State) ->
 %%
 %%
 http_egress(Pipe, #http{pack = Pckt} = Http) -> 
-   lists:foreach(fun(X) -> pipe:b(Pipe, X) end, Pckt),
+   lists:foreach(fun(X) -> pipe:b(Pipe, {packet, X}) end, Pckt),
    Http.
 
 %%

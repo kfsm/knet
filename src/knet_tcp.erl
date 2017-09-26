@@ -98,7 +98,7 @@ ioctl(socket, #state{socket = Sock}) ->
          time_to_hibernate(_),
          time_to_packet(0, _),
          pipe_to_side_a(Pipe, established, _),
-         stream_flow_ctrl(_)
+         config_flow_ctrl(_)
       ]
    of
       {ok, State1} ->
@@ -138,7 +138,7 @@ ioctl(socket, #state{socket = Sock}) ->
          time_to_hibernate(_),
          time_to_packet(0, _),
          pipe_to_side_a(Pipe, established, _),
-         stream_flow_ctrl(_)
+         config_flow_ctrl(_)
       ]
    of
       {ok, State1} ->
@@ -224,17 +224,19 @@ ioctl(socket, #state{socket = Sock}) ->
          'ESTABLISHED'({tcp_error, Port, Reason}, Pipe, State0)
    end;
 
-'ESTABLISHED'(active, Pipe, #state{} = State0) ->
-   case stream_flow_ctrl(State0) of
-      {ok, State1} ->
-         {next_state, 'ESTABLISHED', State1};
-      {error, Reason} ->
-         %% @todo: spawn pipe so that b is client
-         'ESTABLISHED'({tcp_error, undefined, Reason}, Pipe, State0)
-   end;
+%%
+%% flow control events
+% 'ESTABLISHED'(active, Pipe, #state{} = State0) ->
+%    case stream_flow_ctrl(State0) of
+%       {ok, State1} ->
+%          {next_state, 'ESTABLISHED', State1};
+%       {error, Reason} ->
+%          %% @todo: spawn pipe so that b is client
+%          'ESTABLISHED'({tcp_error, undefined, Reason}, Pipe, State0)
+%    end;
 
 'ESTABLISHED'({active, N}, Pipe, #state{} = State0) ->
-   case stream_flow_ctrl(State0#state{flowctl = N}) of
+   case config_flow_ctrl(State0#state{flowctl = N}) of
       {ok, State1} ->
          {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
@@ -268,12 +270,13 @@ ioctl(socket, #state{socket = Sock}) ->
 'ESTABLISHED'(tth, _, State) ->
    {next_state, 'HIBERNATE', State, hibernate};
 
-'ESTABLISHED'(Pckt, Pipe, #state{} = State0)
- when ?is_iolist(Pckt) ->
+'ESTABLISHED'({packet, Pckt}, Pipe, #state{} = State0) ->
    case stream_send(Pipe, Pckt, State0) of
       {ok, State1} ->
+         pipe:ack(Pipe, ok),
          {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
+         pipe:ack(Pipe, {error, Reason}),
          %% @todo: spawn pipe so that b is client
          'ESTABLISHED'({tcp_error, undefined, Reason}, Pipe, State0)
    end.
@@ -360,6 +363,18 @@ time_to_packet(N, #state{socket = Sock, timeout = SOpt} = State) ->
    end.
 
 %%
+%%
+config_flow_ctrl(#state{flowctl = true, socket =Sock} = State) ->
+   knet_gen_tcp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
+   {ok, State};
+config_flow_ctrl(#state{flowctl = once, socket =Sock} = State) ->
+   knet_gen_tcp:setopts(Sock, [{active, once}]),
+   {ok, State};
+config_flow_ctrl(#state{flowctl = N, socket =Sock} = State) ->
+   knet_gen_tcp:setopts(Sock, [{active, N}]),
+   {ok, State#state{flowctl = N}}.
+
+%%
 %% socket up/down link i/o
 stream_flow_ctrl(#state{flowctl = true, socket = Sock} = State) ->
    ?DEBUG("[tcp] flow control = ~p", [true]),
@@ -369,11 +384,11 @@ stream_flow_ctrl(#state{flowctl = true, socket = Sock} = State) ->
    {ok, State};
 stream_flow_ctrl(#state{flowctl = once, socket = Sock} = State) ->
    ?DEBUG("[tcp] flow control = ~p", [once]),
-   % knet_gen_tcp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
+   %% do nothing, client must send flow control message 
    {ok, State};
 stream_flow_ctrl(#state{flowctl = _N, socket = Sock} = State) ->
    ?DEBUG("[tcp] flow control = ~p", [_N]),
-   % knet_gen_tcp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
+   %% do nothing, client must send flow control message 
    {ok, State}.
 
 %%

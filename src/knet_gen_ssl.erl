@@ -135,7 +135,8 @@ connect(Uri, #socket{so = SOpt} = Socket) ->
    {Host, Port} = uri:authority(Uri),
    Opts  = lists:keydelete(active, 1, so_tcp(SOpt)),
    [$^ ||
-      % gen_tcp:connect(scalar:c(Host), Port, so_tcp(SOpt), so_ttc(SOpt)),
+      %% Note: ssl crashes with {option, {active, 1024}} if tcp is open with {active, 1024}
+      %%       this version uses once for flow control
       gen_tcp:connect(scalar:c(Host), Port, [{active, once} | Opts], so_ttc(SOpt)),
       fmap(Socket#socket{sock = {tcp, _}}),
       peername(Uri, _)

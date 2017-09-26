@@ -32,6 +32,7 @@
   ,connect/1 
   ,connect/2 
   ,close/1
+  ,ioctl/2
   ,recv/1
   ,recv/2
   ,recv/3
@@ -188,6 +189,13 @@ close(Sock) ->
    pipe:free(Sock).
 
 %%
+%%
+-spec ioctl(pid(), _) -> ok.
+
+ioctl(Sock, SOpt) ->
+   pipe:call(Sock, SOpt, infinity).
+
+%%
 %% receive data from socket
 -spec recv(pid()) -> {atom(), pid(), any()}.
 -spec recv(pid(), timeout()) -> {atom(), pid(), any()}.
@@ -206,5 +214,10 @@ recv(Sock, Timeout, Opts) ->
 %% send data to socket
 -spec send(pid(), binary()) -> ok.
 
+send(Sock, Pckt)
+ when is_binary(Pckt) ->
+   send(Sock, {packet, Pckt});
+
 send(Sock, Pckt) ->
-   pipe:send(Sock, Pckt).
+   pipe:call(Sock, Pckt, infinity).
+

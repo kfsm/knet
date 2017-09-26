@@ -41,6 +41,7 @@
 -record(state, {
    socket   = undefined :: #socket{}
   ,flowctl  = true      :: once | true | integer()  %% flow control strategy
+  ,flowcrd  = undefined :: _                        %% flow control credicts
   ,trace    = undefined :: _
   ,timeout  = undefined :: [_]
   ,so       = undefined :: [_]
@@ -143,7 +144,7 @@ ioctl(socket,  #state{socket = Sock}) ->
          time_to_hibernate(_),
          time_to_packet(0, _),
          pipe_to_side_a(Pipe, established, _),
-         stream_flow_ctrl(_)
+         config_flow_ctrl(_)
       ]
    of
       {ok, State1} ->
@@ -216,6 +217,29 @@ ioctl(socket,  #state{socket = Sock}) ->
 'ESTABLISHED'({ssl_closed, Port}, Pipe, State) ->
    'ESTABLISHED'({ssl_error, Port, normal}, Pipe, State);
 
+%%
+%% flow control events
+% 'ESTABLISHED'(active, Pipe, #state{} = State0) ->
+%    case stream_flow_ctrl(State0) of
+%       {ok, State1} ->
+%          pipe:a(Pipe, ok),
+%          {next_state, 'ESTABLISHED', State1};
+%       {error, Reason} ->
+%          %% @todo: spawn pipe so that b is client
+%          'ESTABLISHED'({ssl_error, undefined, Reason}, Pipe, State0)
+%    end;
+
+'ESTABLISHED'({active, N}, Pipe, #state{} = State0) ->
+   case config_flow_ctrl(State0#state{flowctl = N}) of
+      {ok, State1} ->
+         pipe:ack(Pipe, ok),
+         {next_state, 'ESTABLISHED', State1};
+      {error, Reason} ->
+         pipe:ack(Pipe, {error, Reason}),
+         %% @todo: spawn pipe so that b is client
+         'ESTABLISHED'({ssl_error, undefined, Reason}, Pipe, State0)
+   end;
+
 'ESTABLISHED'({ssl, Port, Pckt}, Pipe, #state{} = State0) ->
    %% What one can do is to combine {active, once} with gen_tcp:recv().
    %% Essentially, you will be served the first message, then read as many as you 
@@ -280,12 +304,13 @@ ioctl(socket,  #state{socket = Sock}) ->
 % -- CLIP --
 %
 
-'ESTABLISHED'(Pckt, Pipe, #state{} = State0)
- when ?is_iolist(Pckt) ->
+'ESTABLISHED'({packet, Pckt}, Pipe, #state{} = State0) ->
    case stream_send(Pipe, Pckt, State0) of
       {ok, State1} ->
+         pipe:ack(Pipe, ok),
          {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
+         pipe:ack(Pipe, {error, Reason}),
          'ESTABLISHED'({ssl_error, undefined, Reason}, Pipe, State0)
    end.
 
@@ -396,7 +421,7 @@ config_flow_ctrl(#state{flowctl = N, socket =Sock} = State) ->
    %% Note: ssl accepts only true | false | once.
    %% {active, N} needs to be faked for ssl 
    knet_gen_ssl:setopts(Sock, [{active, once}]),
-   {ok, State#state{flowctl = {N, N}}}.
+   {ok, State#state{flowctl = N, flowcrd = N}}.
 
 %%
 %% socket up/down link i/o
@@ -408,15 +433,15 @@ stream_flow_ctrl(#state{flowctl = true, socket = Sock} = State) ->
    {ok, State};
 stream_flow_ctrl(#state{flowctl = once, socket = Sock} = State) ->
    ?DEBUG("[tcp] flow control = ~p", [once]),
-   % knet_gen_ssl:setopts(Sock, [{active, once}]),
+   %% do nothing, client must send flow control message
    {ok, State};
-stream_flow_ctrl(#state{flowctl = {0, _N}, socket = Sock} = State) ->
+stream_flow_ctrl(#state{flowcrd = 0, flowctl = _N, socket = Sock} = State) ->
    ?DEBUG("[tcp] flow control = ~p", [_N]),
+   %% do nothing, client must send flow control message
    {ok, State};
-
-stream_flow_ctrl(#state{flowctl = {Credit, N}, socket = Sock} = State) ->
+stream_flow_ctrl(#state{flowcrd = N, socket = Sock} = State) ->
    knet_gen_ssl:setopts(Sock, [{active, once}]),
-   {ok, State#state{flowctl = {Credit - 1, N}}}.
+   {ok, State#state{flowcrd = N - 1}}.
 
 %%
 %%
