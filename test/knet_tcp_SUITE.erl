@@ -26,9 +26,15 @@
   ,end_per_suite/1
   ,init_per_group/2
   ,end_per_group/2
+  ,init_per_testcase/2
+  ,end_per_testcase/2
 ]).
 -export([
-   knet_cli_connect/1
+   socket/1
+  ,connect/1
+  ,econnrefused/1
+
+  ,knet_cli_connect/1
   ,knet_cli_refused/1
   ,knet_cli_io/1
   ,knet_cli_timeout/1
@@ -51,28 +57,33 @@
 
 all() ->
    [
-      {group, client}
-     ,{group, server}
-     ,{group, knet}
+     %  {group, client}
+     % ,{group, server}
+     % ,{group, knet}
+     {group, socket}
    ].
 
 groups() ->
    [
-      {client, [], [
-         knet_cli_refused,
-         knet_cli_connect,
-         knet_cli_io,
-         knet_cli_timeout
+      {socket, [], [
+         socket, connect, econnrefused
       ]}
 
-     ,{server,  [], [
-         knet_srv_listen,
-         knet_srv_io,
-         knet_srv_timeout
-      ]}
+     %  {client, [], [
+     %     knet_cli_refused,
+     %     knet_cli_connect,
+     %     knet_cli_io,
+     %     knet_cli_timeout
+     %  ]}
 
-      ,{knet, [], [{group, knet_io}]}
-      ,{knet_io,  [parallel, {repeat, 10}], [knet_io]}
+     % ,{server,  [], [
+     %     knet_srv_listen,
+     %     knet_srv_io,
+     %     knet_srv_timeout
+     %  ]}
+
+     %  ,{knet, [], [{group, knet_io}]}
+     %  ,{knet_io,  [parallel, {repeat, 10}], [knet_io]}
    ].
 
 %%%----------------------------------------------------------------------------   
@@ -91,17 +102,20 @@ end_per_suite(_Config) ->
 
 %%   
 %%
-init_per_group(client, Config) ->
-   Uri = uri:port(?PORT, uri:host(?HOST, uri:new(tcp))),
-   [{server, tcp_echo_listen()}, {uri, Uri} | Config];
+% init_per_group(socket, Config) ->
+%    Config;
 
-init_per_group(server, Config) ->
-   Uri = uri:port(?PORT, uri:host(?HOST, uri:new(tcp))),
-   [{uri, Uri} | Config];
+% init_per_group(client, Config) ->
+%    Uri = uri:port(?PORT, uri:host(?HOST, uri:new(tcp))),
+%    [{server, tcp_echo_listen()}, {uri, Uri} | Config];
 
-init_per_group(knet,   Config) ->
-   Uri = uri:port(?PORT, uri:host(?HOST, uri:new(tcp))),
-   [{server, knet_echo_listen()}, {uri, Uri} | Config];
+% init_per_group(server, Config) ->
+%    Uri = uri:port(?PORT, uri:host(?HOST, uri:new(tcp))),
+%    [{uri, Uri} | Config];
+
+% init_per_group(knet,   Config) ->
+%    Uri = uri:port(?PORT, uri:host(?HOST, uri:new(tcp))),
+%    [{server, knet_echo_listen()}, {uri, Uri} | Config];
 
 init_per_group(_, Config) ->
    Config.
@@ -109,22 +123,81 @@ init_per_group(_, Config) ->
 
 %%
 %%
-end_per_group(client, Config) ->
-   erlang:exit(?config(server, Config), kill),
-   ok;
+% end_per_group(socket, Config) ->
+%    ok;
 
-end_per_group(knet,   Config) ->
-   erlang:exit(?config(server, Config), kill),
-   ok; 
+% end_per_group(client, Config) ->
+%    erlang:exit(?config(server, Config), kill),
+%    ok;
 
+% end_per_group(knet,   Config) ->
+%    erlang:exit(?config(server, Config), kill),
+%    ok; 
 end_per_group(_, _Config) ->
    ok.
+
+init_per_testcase(_, Config) ->
+   meck:new(inet, [unstick, passthrough]),
+   meck:new(gen_tcp, [unstick, passthrough]),
+   Config.
+
+end_per_testcase(_, _Config) ->
+   meck:unload(gen_tcp),
+   meck:unload(inet),
+   ok. 
 
 %%%----------------------------------------------------------------------------   
 %%%
 %%% unit test
 %%%
 %%%----------------------------------------------------------------------------   
+
+%%
+%%
+socket(_Config) ->
+   {ok, A} = knet:socket("tcp://example.com:80"),
+   {ioctl, b, A} = knet:recv(A),
+   ok = knet:close(A),
+
+   {ok, B} = knet:socket("tcp://example.com:80", [nopipe]),
+   {error, _} = knet:recv(B, 100, [noexit]),
+   ok = knet:close(B),
+
+   {ok, C} = knet:socket("tcp://*:80"),
+   {ioctl, b, C} = knet:recv(C),
+   ok = knet:close(C).
+
+   
+connect(_Config) ->
+   meck:expect(gen_tcp, connect, 
+      fun(Host, Port, _Opts, _Timeout) -> 
+         {ok, #{peer => {Host, Port}, sock => {{127,0,0,1}, 65536}}}
+      end
+   ),
+   meck:expect(inet, setopts,  fun(_, _) -> ok end),
+   meck:expect(inet, peername, fun(#{peer := Peer}) -> {ok, Peer} end),
+   meck:expect(inet, sockname, fun(#{sock := Sock}) -> {ok, Sock} end),
+
+   {ok, Sock} = knet:connect("tcp://example.com:80"),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   {tcp, Sock, {established, Uri}} = knet:recv(Sock),
+   {<<"example.com">>, 80} = uri:authority(Uri),
+
+   true = meck:validate(gen_tcp),
+   true = meck:validate(inet).
+
+econnrefused(_Config) ->
+   meck:expect(gen_tcp, connect, 
+      fun(_Host, _Port, _Opts, _Timeout) -> {error, econnrefused} end
+   ),
+
+   {ok, Sock} = knet:connect("tcp://example.com:80"),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   {tcp, Sock, {error, econnrefused}} = knet:recv(Sock),
+   
+   true = meck:validate(gen_tcp).
+
+
 
 %%
 %%

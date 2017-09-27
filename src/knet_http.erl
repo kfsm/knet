@@ -203,25 +203,23 @@ ioctl(_, _) ->
    end;
 
 %%
-%%
-'STREAM'(ok, Pipe, State) ->
-   %% @todo: do not ack at pipe (?)
-   {next_state, 'STREAM', State};
-
-%%
 %% egress message
-'STREAM'({_, {uri, _, _}, _} = Msg, Pipe, State0) ->
-   try
-      State1 = http_send(Msg, Pipe, State0),
-      pipe:ack(Pipe, ok),
-      {next_state, 'STREAM', State1}
-   catch _:Reason ->
-      ?NOTICE("knet [http]: egress failure ~p ~p", [Reason, erlang:get_stacktrace()]),
-      pipe:ack(Pipe, {error, Reason}),
-      {next_state, 'IDLE', stream_reset(Pipe, State0)}
-   end;
+'STREAM'({Mthd, _, _} = Request, Pipe, State)
+ when is_binary(Mthd) ->
+   http_stream_send(Request, Pipe, State);
 
-'STREAM'({packet, Msg}, Pipe, State0) ->
+'STREAM'({Code, _, _} = Response, Pipe, State)
+ when is_integer(Code) ->
+   http_stream_send(Response, Pipe, State);
+
+'STREAM'(eof, Pipe, State) ->
+   http_stream_send(eof, Pipe, State);
+
+'STREAM'({packet, Pckt}, Pipe, State) ->
+   http_stream_send(Pckt, Pipe, State).
+
+%%
+http_stream_send(Msg, Pipe, State0) ->
    try
       State1 = http_send(Msg, Pipe, State0),
       pipe:ack(Pipe, ok),

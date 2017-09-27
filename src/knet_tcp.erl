@@ -104,7 +104,8 @@ ioctl(socket, #state{socket = Sock}) ->
       {ok, State1} ->
          {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
-         pipe_to_side_a(Pipe, terminated, Reason, State0),
+         error_to_side_a(Pipe, Reason, State0),
+         % pipe_to_side_a(Pipe, terminated, Reason, State0),
          errorlog({syn, Reason}, Uri, State0),
          {next_state, 'IDLE', State0}
    end;
@@ -122,7 +123,8 @@ ioctl(socket, #state{socket = Sock}) ->
       {ok, State1} ->
          {next_state, 'LISTEN', State1};
       {error, Reason} ->
-         pipe_to_side_a(Pipe, terminated, Reason, State0),
+         error_to_side_a(Pipe, Reason, State0),
+         % pipe_to_side_a(Pipe, terminated, Reason, State0),
          errorlog({listen, Reason}, Uri, State0),
          {next_state, 'IDLE', State0}
    end;
@@ -194,11 +196,12 @@ ioctl(socket, #state{socket = Sock}) ->
 'ESTABLISHED'({sidedown, a, _}, _Pipe, State0) ->
    {stop, normal, State0};
 
-'ESTABLISHED'({tcp_error, _, Error}, Pipe, #state{} = State0) ->
+'ESTABLISHED'({tcp_error, _, Reason}, Pipe, #state{} = State0) ->
    case
       [either ||
-         close(Error, State0),
-         pipe_to_side_b(Pipe, terminated, Error, _)
+         close(Reason, State0),
+         error_to_side_b(Pipe, Reason, _)
+         % pipe_to_side_b(Pipe, terminated, Error, _)
       ]
    of
       {ok, State1} -> 
@@ -212,28 +215,13 @@ ioctl(socket, #state{socket = Sock}) ->
 
 %%
 %%
-'ESTABLISHED'({tcp_passive, _}, Pipe, #state{flowctl = false} = State) ->
-   pipe:b(Pipe, {tcp, self(), passive}),
-   {next_state, 'ESTABLISHED', State};
-
 'ESTABLISHED'({tcp_passive, Port}, Pipe, #state{} = State0) ->
-   case stream_flow_ctrl(State0) of
+   case stream_flow_ctrl(Pipe, State0) of
       {ok, State1} ->
          {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
          'ESTABLISHED'({tcp_error, Port, Reason}, Pipe, State0)
    end;
-
-%%
-%% flow control events
-% 'ESTABLISHED'(active, Pipe, #state{} = State0) ->
-%    case stream_flow_ctrl(State0) of
-%       {ok, State1} ->
-%          {next_state, 'ESTABLISHED', State1};
-%       {error, Reason} ->
-%          %% @todo: spawn pipe so that b is client
-%          'ESTABLISHED'({tcp_error, undefined, Reason}, Pipe, State0)
-%    end;
 
 'ESTABLISHED'({active, N}, Pipe, #state{} = State0) ->
    case config_flow_ctrl(State0#state{flowctl = N}) of
@@ -376,19 +364,21 @@ config_flow_ctrl(#state{flowctl = N, socket =Sock} = State) ->
 
 %%
 %% socket up/down link i/o
-stream_flow_ctrl(#state{flowctl = true, socket = Sock} = State) ->
+stream_flow_ctrl(_Pipe, #state{flowctl = true, socket = Sock} = State) ->
    ?DEBUG("[tcp] flow control = ~p", [true]),
    %% we need to ignore any error for i/o setup, otherwise
    %% it will crash the process while data reside in mailbox
    knet_gen_tcp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
    {ok, State};
-stream_flow_ctrl(#state{flowctl = once, socket = Sock} = State) ->
+stream_flow_ctrl(Pipe, #state{flowctl = once, socket = Sock} = State) ->
    ?DEBUG("[tcp] flow control = ~p", [once]),
    %% do nothing, client must send flow control message 
+   pipe:b(Pipe, {tcp, self(), passive}),
    {ok, State};
-stream_flow_ctrl(#state{flowctl = _N, socket = Sock} = State) ->
+stream_flow_ctrl(Pipe, #state{flowctl = _N, socket = Sock} = State) ->
    ?DEBUG("[tcp] flow control = ~p", [_N]),
-   %% do nothing, client must send flow control message 
+   %% do nothing, client must send flow control message
+   pipe:b(Pipe, {tcp, self(), passive}),
    {ok, State}.
 
 %%
@@ -407,6 +397,25 @@ pipe_to_side_a(Pipe, Event, Reason, #state{} = State) ->
 pipe_to_side_b(Pipe, Event, Reason, #state{} = State) ->
    pipe:b(Pipe, {tcp, self(), {Event, Reason}}),
    {ok, State}.
+
+%%
+%%
+error_to_side_a(Pipe, normal, #state{} = State) ->
+   pipe:a(Pipe, {tcp, self(), eof}),
+
+   {ok, State};
+error_to_side_a(Pipe, Reason, #state{} = State) ->
+   pipe:a(Pipe, {tcp, self(), {error, Reason}}),
+   {ok, State}.
+
+error_to_side_b(Pipe, normal, #state{} = State) ->
+   pipe:b(Pipe, {tcp, self(), eof}),
+
+   {ok, State};
+error_to_side_b(Pipe, Reason, #state{} = State) ->
+   pipe:b(Pipe, {tcp, self(), {error, Reason}}),
+   {ok, State}.
+
 
 %%
 stream_send(_Pipe, Pckt, #state{socket = Sock} = State) ->

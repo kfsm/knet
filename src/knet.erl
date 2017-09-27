@@ -32,15 +32,15 @@
   ,connect/1 
   ,connect/2 
   ,close/1
-  ,ioctl/2
   ,recv/1
   ,recv/2
   ,recv/3
   ,send/2
+  ,ioctl/2
 ]).
 
 %%
-%% types
+%% common types
 -type uri()    :: uri:uri() | binary() | list().
 -type opts()   :: [_]. 
 
@@ -138,7 +138,7 @@ listen(Uri, Opts)
 -spec acceptor(function(), uri:uri(), list()) -> {ok, pid()} | {error, any()}.
 
 acceptor(Fun, Uri, Opts) ->
-   Fun1 = fun(bind) -> bind(Uri, Opts), Fun end,
+   Fun1 = fun(bind) -> {ok, _} = bind(Uri, Opts), Fun end,
    Pid  = pipe:spawn_link(Fun1),
    pipe:send(Pid, bind),
    {ok, Pid}.
@@ -170,9 +170,13 @@ bind(Url) ->
 -spec connect(uri(), opts()) -> datum:either(pid()).
 
 connect({uri, _, _}=Uri, Opts) ->
-   {ok, Sock} = socket(Uri, Opts),
-   _ = pipe:send(Sock, {connect, Uri}),
-   {ok, Sock};
+   [either ||
+      socket(Uri, Opts),
+      knet:ioctl(_, {connect, Uri})
+   ];
+   % {ok, Sock} = ,
+   % _ = pipe:send(Sock, ),
+   % {ok, Sock};
 
 connect(Url, Opts) ->
    connect(uri:new(Url), Opts).
@@ -188,12 +192,6 @@ connect(Url) ->
 close(Sock) ->
    pipe:free(Sock).
 
-%%
-%%
--spec ioctl(pid(), _) -> ok.
-
-ioctl(Sock, SOpt) ->
-   pipe:call(Sock, SOpt, infinity).
 
 %%
 %% receive data from socket
@@ -211,8 +209,8 @@ recv(Sock, Timeout, Opts) ->
    pipe:recv(Sock, Timeout, Opts).
 
 %%
-%% send data to socket
--spec send(pid(), binary()) -> ok.
+%% send data to socket (synchronous)
+-spec send(pid(), _) -> datum:either(pid()).
 
 send(Sock, Pckt)
  when is_binary(Pckt) ->
@@ -220,4 +218,12 @@ send(Sock, Pckt)
 
 send(Sock, Pckt) ->
    pipe:call(Sock, Pckt, infinity).
+
+%%
+%% send control message to socket (asynchronous)
+-spec ioctl(pid(), _) -> datum:either(pid()).
+
+ioctl(Sock, Msg) ->
+   _ = pipe:send(Sock, Msg),
+   {ok, Sock}.
 
