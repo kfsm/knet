@@ -137,7 +137,7 @@ listen(Uri, #socket{so = SOpt} = Socket) ->
       gen_tcp:listen(Port, [{active, false}, {reuseaddr, true} | Opts]),
       fmap(Socket#socket{sock = _}),
       sockname(Uri, _),
-      peername(Uri, _)  %% @todo: ???
+      peername(Uri, _)  %% peername = sockname in-case of listen socket
    ].
 
 %%

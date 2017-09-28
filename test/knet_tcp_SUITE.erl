@@ -35,7 +35,8 @@
   ,econnrefused/1
   ,send_recv/1
   ,send_recv_timeout/1
-
+  ,listen/1
+  ,eaddrinuse/1
 
   % ,knet_cli_connect/1
   % ,knet_cli_refused/1
@@ -69,7 +70,8 @@ all() ->
 groups() ->
    [
       {socket, [], [
-         socket, connect, econnrefused, send_recv, send_recv_timeout
+         socket, connect, econnrefused, send_recv, send_recv_timeout,
+         listen, eaddrinuse
       ]}
 
      %  {client, [], [
@@ -256,7 +258,40 @@ send_recv_timeout(_Config) ->
    true = meck:validate(inet).
 
 
+%%
+%%
+listen(_Config) ->
+   meck:expect(gen_tcp, listen,
+      fun(Port, _) -> {ok, #{peer => {}}} end
+   ),
 
+   {ok, Sock} = knet:listen("tcp://*:8080", [
+      {backlog, 0}, 
+      {acceptor, fun(_) -> ok end}
+   ]),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   {tcp, Sock, {listen, Uri}} = knet:recv(Sock),
+   {<<"*">>, 8080} = uri:authority(Uri),
+   ok = knet:close(Sock),
+
+   true = meck:validate(gen_tcp).
+
+%%
+%%
+eaddrinuse(_Config) ->
+   meck:expect(gen_tcp, listen,
+      fun(Port, _) -> {error, eaddrinuse} end
+   ),
+
+   {ok, Sock} = knet:listen("tcp://*:8080", [
+      {backlog, 0}, 
+      {acceptor, fun(_) -> ok end}
+   ]),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   {tcp, Sock, {error, eaddrinuse}} = knet:recv(Sock),
+   ok = knet:close(Sock),
+
+   true = meck:validate(gen_tcp).
 
 
 

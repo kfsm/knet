@@ -11,6 +11,12 @@
 
 use message {active, true | once | integer()}
 
+**acceptor** function
+
+```erlang
+-spec fun(_) -> ok | {a | b, _}
+```
+
 ## Messaging
 
 **tcp** / **ssl**
