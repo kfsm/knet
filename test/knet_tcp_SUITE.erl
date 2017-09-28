@@ -33,11 +33,14 @@
    socket/1
   ,connect/1
   ,econnrefused/1
+  ,send_recv/1
+  ,send_recv_timeout/1
 
-  ,knet_cli_connect/1
-  ,knet_cli_refused/1
-  ,knet_cli_io/1
-  ,knet_cli_timeout/1
+
+  % ,knet_cli_connect/1
+  % ,knet_cli_refused/1
+  % ,knet_cli_io/1
+  % ,knet_cli_timeout/1
 
   ,knet_srv_listen/1
   ,knet_srv_io/1
@@ -66,7 +69,7 @@ all() ->
 groups() ->
    [
       {socket, [], [
-         socket, connect, econnrefused
+         socket, connect, econnrefused, send_recv, send_recv_timeout
       ]}
 
      %  {client, [], [
@@ -158,25 +161,29 @@ socket(_Config) ->
    {ok, A} = knet:socket("tcp://example.com:80"),
    {ioctl, b, A} = knet:recv(A),
    ok = knet:close(A),
+   %% Note: knet:free message acks that sockets starts shutdown but process is still running
+   %%       we need to give a few milliseconds to VM to shutdown the process.
+   %%       This test ensures that socket is get killed eventually
+   timer:sleep(50),
+   false = erlang:is_process_alive(A),
 
    {ok, B} = knet:socket("tcp://example.com:80", [nopipe]),
    {error, _} = knet:recv(B, 100, [noexit]),
    ok = knet:close(B),
+   timer:sleep(50),
+   false = erlang:is_process_alive(B),
 
    {ok, C} = knet:socket("tcp://*:80"),
    {ioctl, b, C} = knet:recv(C),
-   ok = knet:close(C).
+   ok = knet:close(C),
+   timer:sleep(50),
+   false = erlang:is_process_alive(C).
 
-   
+
+%%
+%%   
 connect(_Config) ->
-   meck:expect(gen_tcp, connect, 
-      fun(Host, Port, _Opts, _Timeout) -> 
-         {ok, #{peer => {Host, Port}, sock => {{127,0,0,1}, 65536}}}
-      end
-   ),
-   meck:expect(inet, setopts,  fun(_, _) -> ok end),
-   meck:expect(inet, peername, fun(#{peer := Peer}) -> {ok, Peer} end),
-   meck:expect(inet, sockname, fun(#{sock := Sock}) -> {ok, Sock} end),
+   meck_gen_tcp_connect(),
 
    {ok, Sock} = knet:connect("tcp://example.com:80"),
    {ioctl, b, Sock} = knet:recv(Sock),
@@ -186,53 +193,129 @@ connect(_Config) ->
    true = meck:validate(gen_tcp),
    true = meck:validate(inet).
 
+%%
+%%
 econnrefused(_Config) ->
    meck:expect(gen_tcp, connect, 
       fun(_Host, _Port, _Opts, _Timeout) -> {error, econnrefused} end
    ),
 
-   {ok, Sock} = knet:connect("tcp://example.com:80"),
+   {ok, Sock} = knet:connect("tcp://example.com:80", []),
    {ioctl, b, Sock} = knet:recv(Sock),
    {tcp, Sock, {error, econnrefused}} = knet:recv(Sock),
-   
+
    true = meck:validate(gen_tcp).
 
+%%
+%%
+send_recv(_Config) ->
+   meck_gen_tcp_connect(),
+   meck:expect(gen_tcp, send,
+      fun(_Sock, Packet) -> 
+         self() ! {tcp, undefined, Packet},
+         self() ! {tcp_closed, undefined},
+         ok 
+      end
+   ),
+
+   {ok, Sock} = knet:connect("tcp://example.com:80"),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   {tcp, Sock, {established, _}} = knet:recv(Sock),
+   ok = knet:send(Sock, <<"abcdefgh">>),
+   {tcp, Sock, <<"abcdefgh">>} = knet:recv(Sock),
+   {tcp, Sock, eof} = knet:recv(Sock),
+   ok = knet:close(Sock),
+
+   true = meck:validate(gen_tcp),
+   true = meck:validate(inet).
 
 
 %%
 %%
-knet_cli_refused(Opts) ->
-   {error, econnrefused} = knet_connect(
-      uri:port(1234, uri:host(?HOST, uri:new(tcp)))
-   ).
+send_recv_timeout(_Config) ->
+   meck_gen_tcp_connect(),
+   meck:expect(gen_tcp, send,
+      fun(_Sock, Packet) -> 
+         self() ! {tcp, undefined, Packet},
+         ok 
+      end
+   ),
+
+   {ok, Sock} = knet:connect("tcp://example.com:80", [
+      {timeout, [{ttp, 500}, {tth, 100}]}
+   ]),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   {tcp, Sock, {established, _}} = knet:recv(Sock),
+   ok = knet:send(Sock, <<"abcdefgh">>),
+   {tcp, Sock, <<"abcdefgh">>} = knet:recv(Sock),
+   timer:sleep(1100),
+   {tcp, Sock, {error, timeout}} = knet:recv(Sock),
+   ok = knet:close(Sock),
+
+   true = meck:validate(gen_tcp),
+   true = meck:validate(inet).
+
+
+
+
+
+
+
+%%%----------------------------------------------------------------------------   
+%%%
+%%% utility
+%%%
+%%%----------------------------------------------------------------------------   
+
+meck_gen_tcp_connect() ->
+   meck:expect(gen_tcp, connect, 
+      fun(Host, Port, _Opts, _Timeout) -> 
+         {ok, #{peer => {Host, Port}, sock => {{127,0,0,1}, 65536}}}
+      end
+   ),
+   meck:expect(gen_tcp, close,  fun(_) -> ok end),
+   meck:expect(inet, setopts,  fun(_, _) -> ok end),
+   meck:expect(inet, peername, fun(#{peer := Peer}) -> {ok, Peer} end),
+   meck:expect(inet, sockname, fun(#{sock := Sock}) -> {ok, Sock} end).
+
+
+
+
 
 %%
 %%
-knet_cli_connect(Opts) ->
-   {ok, Sock} = knet_connect(?config(uri, Opts)),
-   ok         = knet:close(Sock),
-   {error, _} = knet:recv(Sock, 1000, [noexit]).
+% knet_cli_refused(Opts) ->
+%    {error, econnrefused} = knet_connect(
+%       uri:port(1234, uri:host(?HOST, uri:new(tcp)))
+%    ).
 
 %%
 %%
-knet_cli_io(Opts) ->
-   {ok, Sock} = knet_connect(?config(uri, Opts)),
-   <<">123456">> = knet:send(Sock, <<">123456">>),
-   {tcp, Sock, <<"<123456">>} = knet:recv(Sock), 
-   ok      = knet:close(Sock),
-   {error, _} = knet:recv(Sock, 1000, [noexit]).
+% knet_cli_connect(Opts) ->
+%    {ok, Sock} = knet_connect(?config(uri, Opts)),
+%    ok         = knet:close(Sock),
+%    {error, _} = knet:recv(Sock, 1000, [noexit]).
+
+%%
+%%
+% knet_cli_io(Opts) ->
+%    {ok, Sock} = knet_connect(?config(uri, Opts)),
+%    <<">123456">> = knet:send(Sock, <<">123456">>),
+%    {tcp, Sock, <<"<123456">>} = knet:recv(Sock), 
+%    ok      = knet:close(Sock),
+%    {error, _} = knet:recv(Sock, 1000, [noexit]).
    
 %%
 %%
-knet_cli_timeout(Opts) ->
-   {ok, Sock} = knet_connect(?config(uri, Opts), [
-      {timeout, [{ttp, 500}, {tth, 100}]}
-   ]),
-   <<">123456">> = knet:send(Sock, <<">123456">>),
-   {tcp, Sock, <<"<123456">>} = knet:recv(Sock),
-   timer:sleep(1100),
-   {tcp, Sock, {terminated, timeout}} = knet:recv(Sock),
-   {error, _} = knet:recv(Sock, 1000, [noexit]).
+% knet_cli_timeout(Opts) ->
+%    {ok, Sock} = knet_connect(?config(uri, Opts), [
+%       {timeout, [{ttp, 500}, {tth, 100}]}
+%    ]),
+%    <<">123456">> = knet:send(Sock, <<">123456">>),
+%    {tcp, Sock, <<"<123456">>} = knet:recv(Sock),
+%    timer:sleep(1100),
+%    {tcp, Sock, {terminated, timeout}} = knet:recv(Sock),
+%    {error, _} = knet:recv(Sock, 1000, [noexit]).
 
 
 %%
