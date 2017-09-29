@@ -105,7 +105,6 @@ ioctl(socket, #state{socket = Sock}) ->
          {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
          error_to_side_a(Pipe, Reason, State0),
-         % pipe_to_side_a(Pipe, terminated, Reason, State0),
          errorlog({syn, Reason}, Uri, State0),
          {next_state, 'IDLE', State0}
    end;
@@ -124,7 +123,6 @@ ioctl(socket, #state{socket = Sock}) ->
          {next_state, 'LISTEN', State1};
       {error, Reason} ->
          error_to_side_a(Pipe, Reason, State0),
-         % pipe_to_side_a(Pipe, terminated, Reason, State0),
          errorlog({listen, Reason}, Uri, State0),
          {next_state, 'IDLE', State0}
    end;
@@ -149,7 +147,7 @@ ioctl(socket, #state{socket = Sock}) ->
          {stop, normal, State0};
       {error, Reason} ->
          spawn_acceptor(Uri, State0),
-         pipe_to_side_a(Pipe, terminated, Reason, State0),
+         error_to_side_a(Pipe, Reason, State0),
          errorlog({syn, Reason}, Uri, State0),
          {stop, Reason, State0}
    end;
@@ -201,7 +199,6 @@ ioctl(socket, #state{socket = Sock}) ->
       [either ||
          close(Reason, State0),
          error_to_side_b(Pipe, Reason, _)
-         % pipe_to_side_b(Pipe, terminated, Error, _)
       ]
    of
       {ok, State1} -> 
@@ -309,6 +306,7 @@ accept(Uri, #state{so = SOpt} = State) ->
    %% Note: this is a design decision to inject listen socket via socket options
    Sock = pipe:ioctl(opts:val(listen, SOpt), socket),
    [either ||
+      % lsocket(SOpt),
       knet_gen_tcp:accept(Uri, Sock),
       fmap(State#state{socket = _}),
       tracelog(connect, tempus:diff(T), _),
@@ -370,12 +368,12 @@ stream_flow_ctrl(_Pipe, #state{flowctl = true, socket = Sock} = State) ->
    %% it will crash the process while data reside in mailbox
    knet_gen_tcp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
    {ok, State};
-stream_flow_ctrl(Pipe, #state{flowctl = once, socket = Sock} = State) ->
+stream_flow_ctrl(Pipe, #state{flowctl = once} = State) ->
    ?DEBUG("[tcp] flow control = ~p", [once]),
    %% do nothing, client must send flow control message 
    pipe:b(Pipe, {tcp, self(), passive}),
    {ok, State};
-stream_flow_ctrl(Pipe, #state{flowctl = _N, socket = Sock} = State) ->
+stream_flow_ctrl(Pipe, #state{flowctl = _N} = State) ->
    ?DEBUG("[tcp] flow control = ~p", [_N]),
    %% do nothing, client must send flow control message
    pipe:b(Pipe, {tcp, self(), passive}),
@@ -390,19 +388,10 @@ pipe_to_side_a(Pipe, Event, #state{socket = Sock} = State) ->
       fmap(State)
    ].
 
-pipe_to_side_a(Pipe, Event, Reason, #state{} = State) ->
-   pipe:a(Pipe, {tcp, self(), {Event, Reason}}),
-   {ok, State}.
-
-pipe_to_side_b(Pipe, Event, Reason, #state{} = State) ->
-   pipe:b(Pipe, {tcp, self(), {Event, Reason}}),
-   {ok, State}.
-
 %%
 %%
 error_to_side_a(Pipe, normal, #state{} = State) ->
    pipe:a(Pipe, {tcp, self(), eof}),
-
    {ok, State};
 error_to_side_a(Pipe, Reason, #state{} = State) ->
    pipe:a(Pipe, {tcp, self(), {error, Reason}}),
@@ -410,7 +399,6 @@ error_to_side_a(Pipe, Reason, #state{} = State) ->
 
 error_to_side_b(Pipe, normal, #state{} = State) ->
    pipe:b(Pipe, {tcp, self(), eof}),
-
    {ok, State};
 error_to_side_b(Pipe, Reason, #state{} = State) ->
    pipe:b(Pipe, {tcp, self(), {error, Reason}}),

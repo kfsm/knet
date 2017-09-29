@@ -32,22 +32,26 @@
 -export([
    socket/1
   ,connect/1
-  ,econnrefused/1
+  ,connect_econnrefused/1
   ,send_recv/1
   ,send_recv_timeout/1
   ,listen/1
-  ,eaddrinuse/1
+  ,listen_eaddrinuse/1
+  ,accept/1
+  ,accept_enoent/1
+  ,knet_server/1
+  ,knet_client/1
 
   % ,knet_cli_connect/1
   % ,knet_cli_refused/1
   % ,knet_cli_io/1
   % ,knet_cli_timeout/1
 
-  ,knet_srv_listen/1
-  ,knet_srv_io/1
-  ,knet_srv_timeout/1
+  % ,knet_srv_listen/1
+  % ,knet_srv_io/1
+  % ,knet_srv_timeout/1
 
-  ,knet_io/1
+  % ,knet_io/1
 ]).
 
 -define(HOST, "127.0.0.1").
@@ -70,8 +74,9 @@ all() ->
 groups() ->
    [
       {socket, [], [
-         socket, connect, econnrefused, send_recv, send_recv_timeout,
-         listen, eaddrinuse
+         socket, connect, connect_econnrefused, send_recv, send_recv_timeout,
+         listen, listen_eaddrinuse, accept, accept_enoent,
+         knet_server, knet_client
       ]}
 
      %  {client, [], [
@@ -197,7 +202,7 @@ connect(_Config) ->
 
 %%
 %%
-econnrefused(_Config) ->
+connect_econnrefused(_Config) ->
    meck:expect(gen_tcp, connect, 
       fun(_Host, _Port, _Opts, _Timeout) -> {error, econnrefused} end
    ),
@@ -261,9 +266,7 @@ send_recv_timeout(_Config) ->
 %%
 %%
 listen(_Config) ->
-   meck:expect(gen_tcp, listen,
-      fun(Port, _) -> {ok, #{peer => {}}} end
-   ),
+   meck_gen_tcp_listen(),
 
    {ok, Sock} = knet:listen("tcp://*:8080", [
       {backlog, 0}, 
@@ -278,7 +281,7 @@ listen(_Config) ->
 
 %%
 %%
-eaddrinuse(_Config) ->
+listen_eaddrinuse(_Config) ->
    meck:expect(gen_tcp, listen,
       fun(Port, _) -> {error, eaddrinuse} end
    ),
@@ -293,7 +296,95 @@ eaddrinuse(_Config) ->
 
    true = meck:validate(gen_tcp).
 
+%%
+%%
+accept(_Config) ->
+   meck_gen_tcp_listen(),
+   meck:expect(gen_tcp, accept, 
+      fun(#{peer := {_, Port}}) ->
+         meck:expect(gen_tcp, accept, fun(_) -> timer:sleep(100000) end),
+         {ok, #{peer => {{127,0,0,1}, 65536}, sock => {{127,0,0,1}, Port}}}
+      end
+   ),
 
+   Test = self(),
+   {ok, Sock} = knet:listen("tcp://*:8080", [
+      {backlog, 1},
+      {acceptor, 
+         fun(Tcp) -> 
+            Test ! Tcp, 
+            stop 
+         end
+      }
+   ]),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   {tcp, Sock, {listen, _}} = knet:recv(Sock),
+   {tcp, _,  {established, Uri}} = receive X -> X end,
+   {<<"127.0.0.1">>, 65536} = uri:authority(Uri),
+   %% Use timeout to allow accept spawn before LSocket is closed 
+   %% This is needed to reduce number of crashes at test logs
+   timer:sleep(100),
+   ok = knet:close(Sock),
+
+   true = meck:validate(gen_tcp),
+   true = meck:validate(inet).
+
+%%
+%%
+accept_enoent(_Config) ->
+   meck_gen_tcp_listen(),
+
+   meck:expect(gen_tcp, accept, 
+      fun(_) ->  
+         meck:expect(gen_tcp, accept, fun(_) -> timer:sleep(100000) end),
+         {error, enoent}
+      end
+   ),
+
+   Test = self(),
+   {ok, Sock} = knet:listen("tcp://*:8080", [
+      {backlog, 1},
+      {acceptor, 
+         fun(Tcp) -> 
+            Test ! Tcp, 
+            stop 
+         end
+      }
+   ]),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   {tcp, Sock, {listen, _}} = knet:recv(Sock),
+   {tcp, _,  {error, enoent}} = receive X -> X end,
+   %% Use timeout to allow accept spawn before LSocket is closed 
+   %% This is needed to reduce number of crashes at test logs
+   timer:sleep(100),
+   ok = knet:close(Sock),
+
+   true = meck:validate(gen_tcp),
+   true = meck:validate(inet).
+
+%%
+%%
+knet_server(_Config) ->
+   {ok, LSock} = knet:listen("tcp://*:8888", [{backlog, 1}, {acceptor, fun knet_echo/1}]),
+   {ok,  Sock} = gen_tcp:connect("127.0.0.1", 8888, [binary, {active, false}]),
+   {ok, <<"hello">>} = gen_tcp:recv(Sock, 0),
+   ok = gen_tcp:send(Sock, <<"-123456">>),
+   {ok, <<"+123456">>} = gen_tcp:recv(Sock, 0),
+   gen_tcp:close(Sock),
+   knet:close(LSock).
+
+%%
+%%
+knet_client(_Config) ->
+   {ok, LSock} = knet:listen("tcp://*:8888", [{backlog, 1}, {acceptor, fun knet_echo/1}]),
+   {ok, Sock}  = knet:connect("tcp://127.0.0.1:8888"),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   {tcp, Sock, {established, _}} = knet:recv(Sock),
+   {tcp, Sock, <<"hello">>} = knet:recv(Sock),
+   ok = knet:send(Sock, <<"-123456">>),
+   {tcp, Sock, <<"+123456">>} = knet:recv(Sock),
+   knet:close(Sock),
+   knet:close(LSock).
 
 
 %%%----------------------------------------------------------------------------   
@@ -302,6 +393,8 @@ eaddrinuse(_Config) ->
 %%%
 %%%----------------------------------------------------------------------------   
 
+%%
+%%
 meck_gen_tcp_connect() ->
    meck:expect(gen_tcp, connect, 
       fun(Host, Port, _Opts, _Timeout) -> 
@@ -312,6 +405,42 @@ meck_gen_tcp_connect() ->
    meck:expect(inet, setopts,  fun(_, _) -> ok end),
    meck:expect(inet, peername, fun(#{peer := Peer}) -> {ok, Peer} end),
    meck:expect(inet, sockname, fun(#{sock := Sock}) -> {ok, Sock} end).
+
+%%
+%%
+meck_gen_tcp_listen() ->
+   meck:expect(gen_tcp, listen,
+      fun(Port, _) -> {ok, #{peer => {<<"*">>, Port}}} end
+   ),
+   meck:expect(gen_tcp, close,  fun(_) -> ok end),
+   meck:expect(inet, setopts,  fun(_, _) -> ok end),
+   meck:expect(inet, peername, fun(#{peer := Peer}) -> {ok, Peer} end),
+   meck:expect(inet, sockname, fun(#{sock := Sock}) -> {ok, Sock} end).
+
+%%
+%%
+knet_echo({tcp, _Sock, {established, _Uri}}) ->
+   % ct:pal("[echo] ~p established ~s", [_Sock, uri:s(_Uri)]),
+   {a, {packet, <<"hello">>}};
+
+knet_echo({tcp, _Sock, eof}) ->
+   % ct:pal("[echo] ~p eof", [_Sock]),
+   stop;
+
+knet_echo({tcp, _Sock, {error, _Reason}}) ->
+   % ct:pal("[echo] ~p error", [_Reason]),
+   stop;
+
+knet_echo({tcp, _Sock,  <<$-, Pckt/binary>>}) ->
+   % ct:pal("[echo] ~p recv ~p", [_Sock, Pckt]),
+   {a, {packet, <<$+, Pckt/binary>>}};
+
+knet_echo({tcp, _Sock, _}) ->
+   ok;
+
+knet_echo({sidedown, _Side, _Reason}) ->
+   % ct:pal("[echo] ~p sidedown ~p", [_Side, _Reason]),
+   stop.
 
 
 
@@ -355,77 +484,77 @@ meck_gen_tcp_connect() ->
 
 %%
 %%
-knet_srv_listen(Opts) ->
-   {ok, LSock} = knet_listen(?config(uri, Opts)),
-   {ok,  Sock} = gen_tcp:connect(?HOST, 8888, [binary, {active, false}]),
-   knet:close(LSock).
+% knet_srv_listen(Opts) ->
+%    {ok, LSock} = knet_listen(?config(uri, Opts)),
+%    {ok,  Sock} = gen_tcp:connect(?HOST, 8888, [binary, {active, false}]),
+%    knet:close(LSock).
 
 
-knet_srv_io(Opts) ->
-   {ok, LSock} = knet_listen(?config(uri, Opts)),
-   {ok,  Sock} = gen_tcp:connect(?HOST, 8888, [binary, {active, false}]),
-   {ok, <<"hello">>} = gen_tcp:recv(Sock, 0),
-   ok = gen_tcp:send(Sock, "-123456"),
-   {ok, <<"+123456">>} = gen_tcp:recv(Sock, 0),
-   gen_tcp:close(Sock),
-   knet:close(LSock).
+% knet_srv_io(Opts) ->
+%    {ok, LSock} = knet_listen(?config(uri, Opts)),
+%    {ok,  Sock} = gen_tcp:connect(?HOST, 8888, [binary, {active, false}]),
+%    {ok, <<"hello">>} = gen_tcp:recv(Sock, 0),
+%    ok = gen_tcp:send(Sock, "-123456"),
+%    {ok, <<"+123456">>} = gen_tcp:recv(Sock, 0),
+%    gen_tcp:close(Sock),
+%    knet:close(LSock).
 
-knet_srv_timeout(Opts) ->
-   {ok, LSock} = knet_listen(?config(uri, Opts), [
-      {timeout,  [{ttp, 500}, {tth, 100}]}
-   ]),
-   {ok, Sock} = gen_tcp:connect(?HOST, ?PORT, [binary, {active, false}]),
-   {ok, <<"hello">>} = gen_tcp:recv(Sock, 0),
-   ok = gen_tcp:send(Sock, "-123456"),
-   {ok, <<"+123456">>} = gen_tcp:recv(Sock, 0),
-   timer:sleep(1100),
-   {error,closed} = gen_tcp:recv(Sock, 0),
-   gen_tcp:close(Sock),
-   knet:close(LSock).
+% knet_srv_timeout(Opts) ->
+%    {ok, LSock} = knet_listen(?config(uri, Opts), [
+%       {timeout,  [{ttp, 500}, {tth, 100}]}
+%    ]),
+%    {ok, Sock} = gen_tcp:connect(?HOST, ?PORT, [binary, {active, false}]),
+%    {ok, <<"hello">>} = gen_tcp:recv(Sock, 0),
+%    ok = gen_tcp:send(Sock, "-123456"),
+%    {ok, <<"+123456">>} = gen_tcp:recv(Sock, 0),
+%    timer:sleep(1100),
+%    {error,closed} = gen_tcp:recv(Sock, 0),
+%    gen_tcp:close(Sock),
+%    knet:close(LSock).
 
 
-knet_io(Opts) ->
-   {ok, Sock} = knet_connect(?config(uri, Opts)),
-   {tcp, Sock, <<"hello">>} = knet:recv(Sock),
-   <<"-123456">> = knet:send(Sock, <<"-123456">>),
-   {tcp, Sock, <<"+123456">>} = knet:recv(Sock),
-   knet:close(Sock).
-
-%%
-%%
-knet_connect(Uri) ->
-   knet_connect(Uri, []).
-
-knet_connect(Uri, Opts) ->
-   {ok, Sock} = knet:connect(Uri, Opts),
-   {ioctl, b, Sock} = knet:recv(Sock),
-   case knet:recv(Sock) of
-      {tcp, Sock, {established, _}} ->
-         {ok, Sock};
-
-      {tcp, Sock, {terminated, Reason}} ->
-         {error, Reason}
-   end.
+% knet_io(Opts) ->
+%    {ok, Sock} = knet_connect(?config(uri, Opts)),
+%    {tcp, Sock, <<"hello">>} = knet:recv(Sock),
+%    <<"-123456">> = knet:send(Sock, <<"-123456">>),
+%    {tcp, Sock, <<"+123456">>} = knet:recv(Sock),
+%    knet:close(Sock).
 
 %%
 %%
-knet_listen(Uri) -> 
-   knet_listen(Uri, []).
+% knet_connect(Uri) ->
+%    knet_connect(Uri, []).
 
-knet_listen(Uri, Opts) -> 
-   {ok, Sock} = knet:listen(Uri, [
-      {backlog,  2}
-     ,{acceptor, fun knet_echo/1}
-     |Opts
-   ]),
-   {ioctl, b, Sock} = knet:recv(Sock),
-   case knet:recv(Sock) of
-      {tcp, Sock, {listen, _}} ->
-         {ok, Sock};
+% knet_connect(Uri, Opts) ->
+%    {ok, Sock} = knet:connect(Uri, Opts),
+%    {ioctl, b, Sock} = knet:recv(Sock),
+%    case knet:recv(Sock) of
+%       {tcp, Sock, {established, _}} ->
+%          {ok, Sock};
 
-      {tcp, Sock, {terminated, Reason}} ->
-         {error, Reason}
-   end.
+%       {tcp, Sock, {terminated, Reason}} ->
+%          {error, Reason}
+%    end.
+
+%%
+%%
+% knet_listen(Uri) -> 
+%    knet_listen(Uri, []).
+
+% knet_listen(Uri, Opts) -> 
+%    {ok, Sock} = knet:listen(Uri, [
+%       {backlog,  2}
+%      ,{acceptor, fun knet_echo/1}
+%      |Opts
+%    ]),
+%    {ioctl, b, Sock} = knet:recv(Sock),
+%    case knet:recv(Sock) of
+%       {tcp, Sock, {listen, _}} ->
+%          {ok, Sock};
+
+%       {tcp, Sock, {terminated, Reason}} ->
+%          {error, Reason}
+%    end.
 
 %%%----------------------------------------------------------------------------   
 %%%
@@ -435,58 +564,47 @@ knet_listen(Uri, Opts) ->
 
 %%
 %% tcp echo
-tcp_echo_listen() ->
-   spawn(
-      fun() ->
-         {ok, LSock} = gen_tcp:listen(?PORT, [binary, {active, false}, {reuseaddr, true}]),
-         ok = lists:foreach(
-            fun(_) ->
-               tcp_echo_accept(LSock)
-            end,
-            lists:seq(1, 100)
-         ),
-         timer:sleep(60000)
-      end
-   ).
+% tcp_echo_listen() ->
+%    spawn(
+%       fun() ->
+%          {ok, LSock} = gen_tcp:listen(?PORT, [binary, {active, false}, {reuseaddr, true}]),
+%          ok = lists:foreach(
+%             fun(_) ->
+%                tcp_echo_accept(LSock)
+%             end,
+%             lists:seq(1, 100)
+%          ),
+%          timer:sleep(60000)
+%       end
+%    ).
 
-tcp_echo_accept(LSock) ->
-   {ok, Sock} = gen_tcp:accept(LSock),
-   tcp_echo_loop(Sock).
+% tcp_echo_accept(LSock) ->
+%    {ok, Sock} = gen_tcp:accept(LSock),
+%    tcp_echo_loop(Sock).
 
-tcp_echo_loop(Sock) ->
-   case gen_tcp:recv(Sock, 0) of
-      {ok, <<$>, Pckt/binary>>} ->
-         ok = gen_tcp:send(Sock, <<$<, Pckt/binary>>),
-         tcp_echo_loop(Sock);
+% tcp_echo_loop(Sock) ->
+%    case gen_tcp:recv(Sock, 0) of
+%       {ok, <<$>, Pckt/binary>>} ->
+%          ok = gen_tcp:send(Sock, <<$<, Pckt/binary>>),
+%          tcp_echo_loop(Sock);
 
-      {ok, _} ->
-         tcp_echo_loop(Sock);
+%       {ok, _} ->
+%          tcp_echo_loop(Sock);
 
-      {error, _} ->
-         gen_tcp:close(Sock)
-   end.
+%       {error, _} ->
+%          gen_tcp:close(Sock)
+%    end.
 
-%%
-%%
-knet_echo_listen() ->
-   spawn(
-      fun() ->
-         knet:listen(uri:port(?PORT, uri:new("tcp://*")), [
-            {backlog,  2},
-            {acceptor, fun knet_echo/1}
-         ]),
-         timer:sleep(60000)
-      end
-   ).
+% %%
+% %%
+% knet_echo_listen() ->
+%    spawn(
+%       fun() ->
+%          knet:listen(uri:port(?PORT, uri:new("tcp://*")), [
+%             {backlog,  2},
+%             {acceptor, fun knet_echo/1}
+%          ]),
+%          timer:sleep(60000)
+%       end
+%    ).
 
-knet_echo({tcp, _Sock, {established, _}}) ->
-   {a, <<"hello">>};
-
-knet_echo({tcp, _Sock,  <<$-, Pckt/binary>>}) ->
-   {a, <<$+, Pckt/binary>>};
-
-knet_echo({tcp, _Sock, _}) ->
-   ok;
-
-knet_echo({sidedown, _, _}) ->
-   ok.

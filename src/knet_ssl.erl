@@ -108,7 +108,7 @@ ioctl(socket,  #state{socket = Sock}) ->
       {ok, State1} ->
          {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
-         pipe_to_side_a(Pipe, terminated, Reason, State0),
+         error_to_side_a(Pipe, Reason, State0),
          errorlog({syn, Reason}, Uri, State0),
          {next_state, 'IDLE', State0}
    end;
@@ -127,7 +127,7 @@ ioctl(socket,  #state{socket = Sock}) ->
       {ok, State1} ->
          {next_state, 'LISTEN', State1};
       {error, Reason} ->
-         pipe_to_side_a(Pipe, terminated, Reason, State0),
+         error_to_side_a(Pipe, Reason, State0),
          errorlog({listen, Reason}, Uri, State0),
          {next_state, 'IDLE', State0}
    end;
@@ -153,7 +153,7 @@ ioctl(socket,  #state{socket = Sock}) ->
          {stop, normal, State0};
       {error, Reason} ->
          spawn_acceptor(Uri, State0),
-         pipe_to_side_a(Pipe, terminated, Reason, State0),
+         error_to_side_a(Pipe, Reason, State0),
          errorlog({syn, Reason}, Uri, State0),
          {stop, Reason, State0}
    end;
@@ -205,7 +205,7 @@ ioctl(socket,  #state{socket = Sock}) ->
    case
       [either ||
          close(Error, State0),
-         pipe_to_side_b(Pipe, terminated, Error, _)
+         error_to_side_b(Pipe, Error, _)
       ]
    of
       {ok, State1} -> 
@@ -431,11 +431,11 @@ stream_flow_ctrl(#state{flowctl = true, socket = Sock} = State) ->
    %% it will crash the process while data reside in mailbox
    knet_gen_ssl:setopts(Sock, [{active, once}]),
    {ok, State};
-stream_flow_ctrl(#state{flowctl = once, socket = Sock} = State) ->
+stream_flow_ctrl(#state{flowctl = once} = State) ->
    ?DEBUG("[tcp] flow control = ~p", [once]),
    %% do nothing, client must send flow control message
    {ok, State};
-stream_flow_ctrl(#state{flowcrd = 0, flowctl = _N, socket = Sock} = State) ->
+stream_flow_ctrl(#state{flowcrd = 0, flowctl = _N} = State) ->
    ?DEBUG("[tcp] flow control = ~p", [_N]),
    %% do nothing, client must send flow control message
    {ok, State};
@@ -452,13 +452,29 @@ pipe_to_side_a(Pipe, Event, #state{socket = Sock} = State) ->
       fmap(State)
    ].
 
-pipe_to_side_a(Pipe, Event, Reason, #state{} = State) ->
-   pipe:a(Pipe, {ssl, self(), {Event, Reason}}),
+%%
+%%
+error_to_side_a(Pipe, normal, #state{} = State) ->
+   pipe:a(Pipe, {ssl, self(), eof}),
+   {ok, State};
+error_to_side_a(Pipe, Reason, #state{} = State) ->
+   pipe:a(Pipe, {ssl, self(), {error, Reason}}),
    {ok, State}.
 
-pipe_to_side_b(Pipe, Event, Reason, #state{} = State) ->
-   pipe:b(Pipe, {ssl, self(), {Event, Reason}}),
+error_to_side_b(Pipe, normal, #state{} = State) ->
+   pipe:b(Pipe, {ssl, self(), eof}),
+   {ok, State};
+error_to_side_b(Pipe, Reason, #state{} = State) ->
+   pipe:b(Pipe, {ssl, self(), {error, Reason}}),
    {ok, State}.
+
+% pipe_to_side_a(Pipe, Event, Reason, #state{} = State) ->
+%    pipe:a(Pipe, {ssl, self(), {Event, Reason}}),
+%    {ok, State}.
+
+% pipe_to_side_b(Pipe, Event, Reason, #state{} = State) ->
+%    pipe:b(Pipe, {ssl, self(), {Event, Reason}}),
+%    {ok, State}.
 
 %%
 stream_send(_Pipe, Pckt, #state{socket = Sock} = State) ->

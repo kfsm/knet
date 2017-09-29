@@ -36,7 +36,7 @@ socket(SOpt) ->
 close(#socket{sock = undefined} = Socket) ->
    {ok, Socket};
 
-close(#socket{sock = Sock, so = SOpt} = Socket) ->
+close(#socket{sock = Sock, so = SOpt}) ->
    [$^||
       gen_udp:close(Sock),
       socket(SOpt)
@@ -88,14 +88,14 @@ sockname(#socket{sockname = Sockname}) ->
 
 %%
 %%
--spec sockname(uri:uri(), #socket{}) -> {ok, #socket{}} | {error, _}.
-
-sockname(Uri, #socket{} = Socket) ->
-   {ok, [$. ||
-      uri:authority(Uri),
-      uri:authority(_, uri:new(udp)),
-      fmap(Socket#socket{sockname = _})
-   ]}.
+% -spec sockname(uri:uri(), #socket{}) -> {ok, #socket{}} | {error, _}.
+%
+% sockname(Uri, #socket{} = Socket) ->
+%    {ok, [$. ||
+%       uri:authority(Uri),
+%       uri:authority(_, uri:new(udp)),
+%       fmap(Socket#socket{sockname = _})
+%    ]}.
 
 
 %%
