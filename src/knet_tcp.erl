@@ -164,6 +164,10 @@ ioctl(socket, #state{socket = Sock}) ->
 'IDLE'({ttp, _}, _Pipe, State0) ->
    {next_state, 'IDLE', State0};
 
+'IDLE'({packet, _}, Pipe, State0) ->
+   pipe:ack(Pipe, {error, ecomm}),
+   {next_state, 'IDLE', State0};
+
 'IDLE'(_, _Pipe, State0) ->
    {next_state, 'IDLE', State0}.
 
