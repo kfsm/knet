@@ -128,9 +128,9 @@ ioctl(_, _) ->
    pipe:b(Pipe, {connect, Uri}),
    'STREAM'(Req, Pipe, State);
 
-'IDLE'({_Mthd, {uri, _, _}=Uri, _Head, _Msg}=Req, Pipe, State) ->
-   pipe:b(Pipe, {connect, Uri}),
-   'STREAM'(Req, Pipe, State);
+% 'IDLE'({_Mthd, {uri, _, _}=Uri, _Head, _Msg}=Req, Pipe, State) ->
+%    pipe:b(Pipe, {connect, Uri}),
+%    'STREAM'(Req, Pipe, State);
 
 'IDLE'({sidedown, _, _}, _, State) ->
    {stop, normal, State}.
@@ -172,11 +172,19 @@ ioctl(_, _) ->
       fmap({next_state, 'STREAM', _})
    ];
 
-'STREAM'({Prot, _, {terminated, _}}, Pipe, #fsm{shutdown = true} = State)
+'STREAM'({Prot, _, eof}, Pipe, #fsm{shutdown = true} = State)
  when ?is_transport(Prot) ->
    {stop, normal, stream_reset(Pipe, State)};
 
-'STREAM'({Prot, _, {terminated, _}}, Pipe, #fsm{} = State)
+'STREAM'({Prot, _, eof}, Pipe, #fsm{} = State)
+ when ?is_transport(Prot) ->
+   {next_state, 'IDLE', stream_reset(Pipe, State)};
+
+'STREAM'({Prot, _, {error, _}}, Pipe, #fsm{shutdown = true} = State)
+ when ?is_transport(Prot) ->
+   {stop, normal, stream_reset(Pipe, State)};
+
+'STREAM'({Prot, _, {error, _}}, Pipe, #fsm{} = State)
  when ?is_transport(Prot) ->
    {next_state, 'IDLE', stream_reset(Pipe, State)};
 
@@ -205,7 +213,7 @@ ioctl(_, _) ->
 %%
 %% egress message
 'STREAM'({Mthd, _, _} = Request, Pipe, State)
- when is_binary(Mthd) ->
+ when is_atom(Mthd) ->
    http_stream_send(Request, Pipe, State);
 
 'STREAM'({Code, _, _} = Response, Pipe, State)
@@ -278,7 +286,7 @@ http_egress(Pipe, #http{pack = Pckt} = Http) ->
 %% #http{} category -> #fsm{}
 http_send_return(Pipe, #http{is = eoh, state = State}) ->
    %% htstream has a feature of "eoh event".
-   http_send([], Pipe, State);
+   http_send(undefined, Pipe, State);
 
 http_send_return(_Pipe, #http{state = State}) ->
    State.
@@ -328,7 +336,7 @@ http_recv_return(Pipe, #http{is = eof, state = State}) ->
 
 http_recv_return(Pipe, #http{is = eoh, state = State}) ->
    %% htstream has a feature on eoh event, 
-   http_recv(<<>>, Pipe, State);
+   http_recv(undefined, Pipe, State);
 
 http_recv_return(Pipe, #http{is = upgrade, http = {_, {_, _, Head}}} = Http) ->
    % server_upgrade(Pipe, State#fsm{stream=Stream});
@@ -616,7 +624,8 @@ gen_http_encode_uri(Uri) ->
 
 %%
 gen_http_encode_head(Uri, Head) ->
-   [{'Host', uri:authority(Uri)} | Head].
+   {Host, Port} = uri:authority(Uri),
+   [{<<"Host">>, <<Host/binary, $:, (scalar:s(Port))/binary>>} | Head].
    % @todo: inject system wide header
    %    [
    %       {'Server', ?HTTP_SERVER}
@@ -652,7 +661,7 @@ gen_http_decode_env(Peer, _Head) ->
 gen_http_decode_url({uri, _, _} = Url, Head) ->
    case uri:authority(Url) of
       undefined ->
-         uri:authority(opts:val('Host', Head), uri:schema(http, Url));
+         uri:authority(opts:val(<<"Host">>, Head), uri:schema(http, Url));
       _ ->
          uri:schema(http, Url)
    end;

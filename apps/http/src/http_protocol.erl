@@ -37,8 +37,9 @@ init([Uri, Opts]) ->
    {ok, Sock} = knet:bind(Uri, Opts),
    {ok, handle, Sock}.
 
-free(_, Sock) ->
-   knet:close(Sock).
+free(_, _Sock) ->
+   %% acceptor pool free resource automatically
+   ok.
 
 %%
 ioctl(_, _) ->
@@ -46,11 +47,12 @@ ioctl(_, _) ->
 
 %%
 %%
-handle({http, _Sock, {Method, Url, Head, _Env}}, Pipe, Sock) ->
+% handle({http, _Sock, {Method, Url, Head, _Env}}, Pipe, Sock) ->
+handle({http, _Sock, {Method, Url, Head}}, Pipe, Sock) ->
    _ = pipe:a(Pipe, {200, <<"OK">>, [
-      {'Server', <<"knet">>},
-      {'Transfer-Encoding', <<"chunked">>},
-      {'Connection', connection(Head)}
+      {<<"Server">>, <<"knet">>},
+      {<<"Transfer-Encoding">>, <<"chunked">>},
+      {<<"Connection">>, connection(Head)}
    ]}),
    {Msg, _} = htstream:encode({Method, uri:get(path, Url), Head}, htstream:new()),
    pipe:a(Pipe, {packet, iolist_to_binary(Msg)}),
@@ -70,7 +72,8 @@ handle({sidedown, _, _}, _Pipe, Sock) ->
 %%
 %% return http connection type 
 connection(Heads) ->
-   case lists:keyfind('Connection', 1, Heads) of
-      false    -> <<"keep-alive">>;
-      {_, Val} -> Val
-   end.
+   lens:get(lens:pair(<<"Connection">>, <<"keep-alive">>), Heads).
+   % case lists:keyfind(<<"Connection">>, 1, Heads) of
+   %    false    -> <<"keep-alive">>;
+   %    {_, Val} -> Val
+   % end.
