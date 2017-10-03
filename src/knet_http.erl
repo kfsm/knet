@@ -122,7 +122,7 @@ ioctl(_, _) ->
 'IDLE'({connect, Uri}, Pipe, State) ->
    % connect is compatibility wrapper for knet socket interface (translated to http GET request)
    % @todo: htstream support HTTP/1.2 (see http://www.jmarshall.com/easy/http/)
-   'IDLE'({'GET', Uri, [{'Connection', <<"keep-alive">>}]}, Pipe, State);
+   'IDLE'({'GET', Uri, [{<<"Connection">>, <<"keep-alive">>}]}, Pipe, State);
 
 'IDLE'({_Mthd, {uri, _, _}=Uri, _Head}=Req, Pipe, State) ->
    pipe:b(Pipe, {connect, Uri}),
@@ -168,7 +168,7 @@ ioctl(_, _) ->
  when ?is_transport(Prot) ->
    [$. ||
       lens:apply(lens:tuple(#fsm.queue), fun queue_config_treq/1, State),
-      lens:put(lens_socket_peername(), Peer, _),
+      lens:put(lens_socket_peername(), uri:s(Peer), _),
       fmap({next_state, 'STREAM', _})
    ];
 
@@ -495,19 +495,19 @@ accesslog(#http{is = eof, http = {response, _}, state = State} = Http) ->
       req  => {Mthd, Code}
      ,peer => Peer
      ,addr => gen_http_decode_url(Url, HeadA)
-     ,ua   => opts:val('User-Agent', opts:val('Server', undefined, HeadB), HeadA)
+     ,ua   => opts:val(<<"User-Agent">>, opts:val(<<"Server">>, undefined, HeadB), HeadA)
      ,time => tempus:diff(T)
    }),
    Http;
 
 accesslog(#http{is = upgrade, http = {_, {_, Url, Head}}, state = State} = Http) ->
    #fsm{socket = #socket{peername = Peer}} = State,
-   Upgrade = lens:get(lens:pair('Upgrade'), Head),
+   Upgrade = lens:get(lens:pair(<<"Upgrade">>), Head),
    ?access_http(#{
       req  => {upgrade, Upgrade}
      ,peer => Peer
      ,addr => gen_http_decode_url(Url, Head)
-     ,ua   => opts:val('User-Agent', undefined, Head)
+     ,ua   => opts:val(<<"User-Agent">>, undefined, Head)
    }),
    Http;
 
@@ -638,23 +638,19 @@ gen_http_encode_head(Uri, Head) ->
 %% decode htstream message to client format
 -spec gen_http_decode(#socket{}, _) -> _.
 
+gen_http_decode(Socket, Packets) ->
+   [gen_http_decode_packet(Socket, X) || X <- Packets].
 
-gen_http_decode(#socket{peername = Peer}, {Mthd, Url, Head})
- when ?is_method(Mthd) ->
-   [{Mthd, gen_http_decode_url(Url, Head), Head, gen_http_decode_env(Peer, Head)}];
+gen_http_decode_packet(#socket{peername = Peer}, {Mthd, Url, Head})
+ when is_atom(Mthd) ->
+   {Mthd, gen_http_decode_url(Url, Head), [{<<"X-Knet-Peer">>, Peer} | Head]};
 
+gen_http_decode_packet(#socket{peername = Peer}, {Code, Msg, Head})
+ when is_integer(Code) ->
+   [{Code, Msg, [{<<"X-Knet-Peer">>, Peer} | Head]}];
 
-gen_http_decode(#socket{peername = Peer}, {Code, Msg, Head})
- when ?is_status(Code) ->
-   [{Code, Msg, Head, gen_http_decode_env(Peer, Head)}];
-
-gen_http_decode(_Socket, Chunk) ->
+gen_http_decode_packet(_Socket, Chunk) ->
    [X || X <- Chunk, X =/= <<>>].
-
-
-%%
-gen_http_decode_env(Peer, _Head) ->
-   [{peer, Peer}].
 
 
 %%
