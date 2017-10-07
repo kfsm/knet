@@ -63,7 +63,7 @@ setopts(#socket{sock = Sock} = Socket, Opts) ->
 %% socket options
 so_tcp(SOpt) -> opts:filter(?SO_TCP_ALLOWED, SOpt).
 so_ssl(SOpt) -> opts:filter(?SO_SSL_ALLOWED, SOpt).
-so_ttc(SOpt) -> lens:get(lens:pair(timeout, []), lens:pair(ttc, ?SO_TIMEOUT), SOpt).
+so_ttc(SOpt) -> lens:get(lens:c(lens:pair(timeout, []), lens:pair(ttc, ?SO_TIMEOUT)), SOpt).
 
 %%
 %%
