@@ -639,7 +639,7 @@ gen_http_encode_head(Uri, Head) ->
 -spec gen_http_decode(#socket{}, _) -> _.
 
 gen_http_decode(Socket, Packets) ->
-   [gen_http_decode_packet(Socket, X) || X <- Packets].
+   [gen_http_decode_packet(Socket, X) || X <- Packets, X =/= <<>>].
 
 gen_http_decode_packet(#socket{peername = Peer}, {Mthd, Url, Head})
  when is_atom(Mthd) ->
@@ -650,7 +650,7 @@ gen_http_decode_packet(#socket{peername = Peer}, {Code, Msg, Head})
    [{Code, Msg, [{<<"X-Knet-Peer">>, Peer} | Head]}];
 
 gen_http_decode_packet(_Socket, Chunk) ->
-   [X || X <- Chunk, X =/= <<>>].
+   Chunk.
 
 
 %%
