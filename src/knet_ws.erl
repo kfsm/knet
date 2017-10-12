@@ -62,11 +62,11 @@ start_link(Req, Opts) ->
    pipe:start_link(?MODULE, [Req, Opts], []).
 
 %%
-init([{_Mthd, Url, _Head, Env}, Opts]) ->
+init([{_Mthd, Url, Head}, Opts]) ->
    %% protocol fsm is created by protocol upgrade
    {ok, 'ESTABLISHED',
       #fsm{
-         stream  = ws_new(server, Url, Env, Opts)
+         stream  = ws_new(server, Url, Head, Opts)
       }
    };
 
@@ -83,24 +83,23 @@ free(_, _) ->
    ok.
 
 %%
-ioctl({upgrade, {_Mthd, _Uri, Head, _Env}=Req, SOpt}, undefined) ->
+ioctl({upgrade, {_Mthd, _Uri, Head}=Req, SOpt}, undefined) ->
    %% web socket upgrade request
-   <<"Upgrade">>   = pair:lookup('Connection', Head),
-   <<"websocket">> = pair:lookup('Upgrade',    Head),
-   Key  = pair:lookup(<<"Sec-Websocket-Key">>, Head),
+   <<"Upgrade">>   = lens:get(lens:pair(<<"Connection">>), Head),
+   <<"websocket">> = lens:get(lens:pair(<<"Upgrade">>), Head),
+   Key  = lens:get(lens:pair(<<"Sec-Websocket-Key">>), Head),
    Hash = base64:encode(crypto:hash(sha, <<Key/binary, ?WS_GUID>>)),
    {Msg, _} = htstream:encode(
-      {101
-        ,[
-            {'Upgrade',  <<"websocket">>}
-           ,{'Connection', <<"Upgrade">>}
+      {101, <<"Switching Protocols">>,
+         [
+            {<<"Upgrade">>,    <<"websocket">>}
+           ,{<<"Connection">>, <<"Upgrade">>}
            ,{<<"Sec-WebSocket-Accept">>, Hash}
          ]
-        ,<<>>
       },
       htstream:new()
    ),
-   {Msg, {upgrade, ?MODULE, [Req, SOpt]}};
+   {{packet, Msg}, {upgrade, ?MODULE, [Req, SOpt]}};
 
 ioctl(_, _) ->
    throw(not_implemented).
@@ -130,10 +129,11 @@ ioctl(_, _) ->
    % TODO: htstream support HTTP/1.2 (see http://www.jmarshall.com/easy/http/)
    pipe:b(Pipe, {connect, Uri}),
    Hash = base64:encode(crypto:hash(md5, scalar:s(rand:uniform(16#ffff)))),
+   {Host, Port} = uri:authority(Uri),
    Req  = {'GET', Uri, [
-      {'Connection',      <<"Upgrade">>}
-     ,{'Upgrade',       <<"websocket">>}
-     ,{'Host',        uri:authority(Uri)}
+      {<<"Connection">>,      <<"Upgrade">>}
+     ,{<<"Upgrade">>,       <<"websocket">>}
+     ,{<<"Host">>,          <<(scalar:s(Host))/binary, $:, (scalar:s(Port))/binary>>}
      ,{<<"Sec-WebSocket-Key">>,     Hash}
      ,{<<"Sec-WebSocket-Version">>, ?VSN}
    ]},
@@ -272,8 +272,7 @@ ioctl(_, _) ->
 
 %%
 %% local peer message
-'ESTABLISHED'(Msg, Pipe, State)
- when ?is_iolist(Msg) ->
+'ESTABLISHED'({packet, Msg}, Pipe, State) ->
    case ws_send(Msg, Pipe, State#fsm.stream) of
       {eof, Stream} ->
          {stop, normal, State#fsm{stream=Stream}};
@@ -299,7 +298,7 @@ ws_new(Type, Url, _SOpt) ->
      ,peer = Url
    }.
 
-ws_new(Type, Url, _Env, _SOpt) ->
+ws_new(Type, Url, _Head, _SOpt) ->
    #stream{
       send = wsstream:new(Type)
      ,recv = wsstream:new(Type)
@@ -322,7 +321,7 @@ ws_recv(Pckt, Pipe, #stream{}=Ws) ->
 ws_send(Msg, Pipe, #stream{}=Ws) ->
    ?DEBUG("knet [websock] ~p: send ~p~n~p", [self(), Ws#stream.peer, Msg]),
    {Pckt, Send} = wsstream:encode(Msg, Ws#stream.send),
-   lists:foreach(fun(X) -> pipe:b(Pipe, X) end, Pckt),
+   lists:foreach(fun(X) -> pipe:b(Pipe, {packet, X}) end, Pckt),
    {wsstream:state(Send), Ws#stream{send=Send}}.
 
 %%

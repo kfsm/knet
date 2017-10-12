@@ -316,7 +316,7 @@ http_decode_packet(Data, #fsm{socket = Socket0} = State) ->
 %%
 %%
 http_ingress(Pipe, #http{is = upgrade, http = {_, {_, _, Head}}, pack = Pack} = Http) ->
-   Prot = case lens:get(lens:pair('Upgrade'), Head) of
+   Prot = case lens:get(lens:pair(<<"Upgrade">>, undefined), Head) of
       <<"websocket">> -> ws;
       _               -> http
    end,
@@ -340,7 +340,7 @@ http_recv_return(Pipe, #http{is = eoh, state = State}) ->
 
 http_recv_return(Pipe, #http{is = upgrade, http = {_, {_, _, Head}}} = Http) ->
    % server_upgrade(Pipe, State#fsm{stream=Stream});
-   http_recv_upgrade(lens:get(lens:pair('Upgrade'), Head), Pipe, Http);
+   http_recv_upgrade(lens:get(lens:pair(<<"Upgrade">>), Head), Pipe, Http);
 
 http_recv_return(_Pipe, #http{state = State}) ->
    State.
@@ -352,7 +352,7 @@ http_recv_upgrade(<<"websocket">>, Pipe, #http{http = {_, {Mthd, Uri, Head}}, st
    %%  - it shall emit message
    %%  - it shall return pipe compatible upgrade signature
    % access_log(websocket, State),
-   Req = {Mthd, Uri, Head, []},
+   Req = {Mthd, Uri, Head},
    #socket{so = SOpt} = Socket,
    {Msg, Upgrade} = knet_ws:ioctl({upgrade, Req, SOpt}, undefined),
    pipe:a(Pipe, Msg),

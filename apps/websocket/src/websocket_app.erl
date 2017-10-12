@@ -35,7 +35,6 @@ start(_Type, _Args) ->
      ,{backlog,  256}
      ,{certfile, filename:join([code:priv_dir(http), "server.crt"])}
      ,{keyfile,  filename:join([code:priv_dir(http), "server.key"])}
-     % ,{ciphers,  [{rsa,rc4_128,sha}]}
    ]),
    websocket_sup:start_link(). 
 
