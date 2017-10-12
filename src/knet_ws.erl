@@ -201,9 +201,14 @@ ioctl(_, _) ->
  when ?is_transport(Prot) ->
    {next_state, 'CLIENT', State};
 
-'CLIENT'({Prot, _Sock, {terminated, Reason}}, Pipe, State)
+'CLIENT'({Prot, _Sock, eof}, Pipe, State)
  when ?is_transport(Prot) ->
-   pipe:a(Pipe, {ws, self(), {terminated, Reason}}),
+   pipe:a(Pipe, {ws, self(), eof}),
+   {stop, normal, State};
+
+'CLIENT'({Prot, _Sock, {error, _} = Error}, Pipe, State)
+ when ?is_transport(Prot) ->
+   pipe:a(Pipe, {ws, self(), Error}),
    {stop, normal, State};
 
 %%
@@ -213,9 +218,9 @@ ioctl(_, _) ->
    try
       case htstream:decode(Pckt, Stream#stream.recv) of
          {{101, Msg, Head}, Http} ->
-            <<"Upgrade">>   = pair:lookup('Connection', Head),
-            <<"websocket">> = pair:lookup('Upgrade',    Head),
-            pipe:b(Pipe, {ws, self(), {101, Msg, Head, []}}),
+            <<"Upgrade">>   = lens:get(lens:pair(<<"Connection">>), Head),
+            <<"websocket">> = lens:get(lens:pair(<<"Upgrade">>), Head),
+            pipe:b(Pipe, {ws, self(), {101, Msg, Head}}),
             'ESTABLISHED'({Prot, Sock, htstream:buffer(Http)}, Pipe, 
                State#fsm{stream = ws_new(server, Stream#stream.peer, [])});
          {[], Http} ->
@@ -223,7 +228,7 @@ ioctl(_, _) ->
       end
    catch _:Reason ->
       ?NOTICE("knet [ws]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
-      pipe:b(Pipe, {ws, self(), {terminated, Reason}}),
+      pipe:b(Pipe, {ws, self(), {error, Reason}}),
       {stop, Reason, State}
    end;
 
@@ -239,7 +244,7 @@ ioctl(_, _) ->
       {next_state, 'CLIENT', State#fsm{stream = Stream#stream{send = Send}}}
    catch _:Reason ->
       ?NOTICE("knet [ws]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
-      pipe:b(Pipe, {ws, self(), {terminated, Reason}}),
+      pipe:b(Pipe, {ws, self(), {error, Reason}}),
       {stop, Reason, State}
    end.
 
@@ -269,7 +274,7 @@ ioctl(_, _) ->
  when ?is_transport(Prot), is_binary(Pckt) ->
    case ws_recv(Pckt, Pipe, State#fsm.stream) of
       {eof, Stream} ->
-         pipe:b(Pipe, {ws, self(), {terminated, normal}}),
+         pipe:b(Pipe, {ws, self(), eof}),
          {stop, normal, State#fsm{stream=Stream}};
       {_,   Stream} ->
          {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
@@ -347,16 +352,16 @@ ht_recv(Pckt, Pipe, #stream{}=Ht) ->
 
       %% GET Request
       {{'GET', Url, Head}, _Recv} ->
-         <<"Upgrade">>   = pair:lookup('Connection', Head),
-         <<"websocket">> = pair:lookup('Upgrade',    Head),
-         Key  = pair:lookup(<<"Sec-Websocket-Key">>, Head),
+         <<"Upgrade">>   = lens:get(lens:pair(<<"Connection">>), Head),
+         <<"websocket">> = lens:get(lens:pair(<<"Upgrade">>), Head),
+         Key  = lens:get(lens:pair(<<"Sec-Websocket-Key">>), Head),
          Hash = base64:encode(crypto:hash(sha, <<Key/binary, ?WS_GUID>>)),
          {Msg, _} = htstream:encode(
             {101, [{'Upgrade', <<"websocket">>}, {'Connection', <<"Upgrade">>}, {<<"Sec-WebSocket-Accept">>, Hash}], <<>>},
             htstream:new()
          ),
          pipe:a(Pipe, Msg),
-         pipe:b(Pipe, {ws, self(), {'GET', Url, Head, []}}), %% @todo env
+         pipe:b(Pipe, {ws, self(), {'GET', Url, Head}}),
          {upgrade, ws_new(server, Url, [])};
 
       %% ANY Request
