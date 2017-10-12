@@ -46,8 +46,11 @@ free(_, Sock) ->
 handle({tcp, _, {established, _Peer}}, _Pipe, Sock) ->
    {next_state, handle, Sock};
 
-handle({tcp, _, {terminated, _Reason}}, _Pipe, Sock) ->
+handle({tcp, _, eof}, _Pipe, Sock) ->
    {stop, normal, Sock};
+
+handle({tcp, _, {error, Reason}}, _Pipe, Sock) ->
+   {stop, Reason, Sock};
    
 handle({tcp, _, Msg}, Pipe, Sock) ->
    pipe:a(Pipe, {packet, Msg}),

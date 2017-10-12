@@ -253,9 +253,14 @@ ioctl(_, _) ->
 'ESTABLISHED'({sidedown, _, _}, _, State) ->
    {stop, normal, State};
 
-'ESTABLISHED'({Prot, _, {terminated, Reason}}, Pipe, State)
+'ESTABLISHED'({Prot, _, eof}, Pipe, State)
  when ?is_transport(Prot) ->
-   pipe:b(Pipe, {ws, self(), {terminated, Reason}}),
+   pipe:b(Pipe, {ws, self(), eof}),
+   {stop, normal, State};
+
+'ESTABLISHED'({Prot, _, {error, _} = Error}, Pipe, State)
+ when ?is_transport(Prot) ->
+   pipe:b(Pipe, {ws, self(), Error}),
    {stop, normal, State};
 
 %%

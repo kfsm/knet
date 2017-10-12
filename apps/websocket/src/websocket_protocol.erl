@@ -51,9 +51,11 @@ handle({ws, _Sock, {_Mthd, _Url, _Head}}, _Pipe, State) ->
    %% web socket is established
    {next_state, handle, State};
 
-handle({ws, _Sock, {terminated, _Reason}}, _Pipe, State) ->
-   %% web socket is terminated
-   {next_state, handle, State};
+handle({ws, _, eof}, _Pipe, Sock) ->
+   {stop, normal, Sock};
+
+handle({ws, _, {error, Reason}}, _Pipe, Sock) ->
+   {stop, Reason, Sock};
 
 handle({ws, _Sock, Msg}, Pipe, State) ->
    %% web socket message received
