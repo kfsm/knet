@@ -57,6 +57,10 @@ handle({http, _Sock, {Method, Url, Head}}, Pipe, Sock) ->
    pipe:a(Pipe, {packet, iolist_to_binary(Msg)}),
    {next_state, handle, Sock};
 
+handle({http, _Sock, passive}, Pipe, Sock) ->
+   pipe:a(Pipe, {active, 1024}),
+   {next_state, handle, Sock};
+
 handle({http, _Sock, eof}, Pipe, Sock) ->
    pipe:a(Pipe, eof),
    {next_state, handle, Sock};

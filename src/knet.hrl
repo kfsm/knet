@@ -148,12 +148,14 @@
 %%   * `uri:uri()` to address identity (addresses)
 %%   * stream filters to encode data streams   
 -record(socket, {
+   family   = undefined :: atom(),     %% socket family
    sock     = undefined :: _,          %% socket port or communication process
    peername = undefined :: uri:uri(),  %% socket remote peer identity
    sockname = undefined :: uri:uri(),  %% socket local peer identity
    in       = undefined :: _,          %% socket ingress packet stream
    eg       = undefined :: _,          %% socket egress packet stream
-   so       = []        :: [_]         %% socket options 
+   so       = []        :: [_],        %% socket options
+   logger   = undefined :: _           %% socket logger process(es)
 }).
 
 
@@ -205,7 +207,8 @@
 -endif.
 
 -ifndef(NOTICE).
--define(NOTICE(Fmt, Args), lager:notice(Fmt, Args)).
+% -define(NOTICE(Fmt, Args), lager:notice(Fmt, Args)).
+-define(NOTICE(Fmt, Args), ok).
 -endif.
 
 -ifndef(INFO).
@@ -220,7 +223,8 @@
 
 %%
 %% access_log 
--define(access_log(X), lager:notice(knet_log:common(X))).
+% -define(access_log(X), lager:notice(knet_log:common(X))).
+-define(access_log(X), ok).
 -record(log, {
    prot  = undefined :: any()  %% protocol identity
   ,src   = undefined :: any()  %% source address

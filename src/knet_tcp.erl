@@ -40,7 +40,8 @@
 -record(state, {
    socket   = undefined :: #socket{}
   ,flowctl  = true      :: once | true | integer()  %% flow control strategy
-  ,trace    = undefined :: _
+  % ,tracelog = undefined :: _
+  % ,accesslog= undefined :: _
   ,timeout  = undefined :: [_]
   ,so       = undefined :: [_]
 }).
@@ -63,7 +64,6 @@ init(SOpt) ->
             socket  = _
            ,flowctl = opts:val(active, SOpt)
            ,timeout = opts:val(timeout, [], SOpt)
-           ,trace   = opts:val(trace, undefined, SOpt)
            ,so      = SOpt
          }
       )
@@ -90,7 +90,7 @@ ioctl(socket, #state{socket = Sock}) ->
 
 %%
 %%
-'IDLE'({connect, Uri}, Pipe, #state{} = State0) ->
+'IDLE'({connect, Uri}, Pipe, #state{socket = Sock} = State0) ->
    case 
       [either ||
          connect(Uri, State0),
@@ -105,13 +105,14 @@ ioctl(socket, #state{socket = Sock}) ->
          {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
          error_to_side_a(Pipe, Reason, State0),
-         errorlog({syn, Reason}, Uri, State0),
+         knet_log:errorlog({syn, Reason}, Uri, Sock),
+         % errorlog({syn, Reason}, Uri, State0),
          {next_state, 'IDLE', State0}
    end;
 
 %%
 %%
-'IDLE'({listen, Uri}, Pipe, State0) ->
+'IDLE'({listen, Uri}, Pipe, #state{socket = Sock} = State0) ->
    case
       [either ||
          listen(Uri, State0),
@@ -123,13 +124,14 @@ ioctl(socket, #state{socket = Sock}) ->
          {next_state, 'LISTEN', State1};
       {error, Reason} ->
          error_to_side_a(Pipe, Reason, State0),
-         errorlog({listen, Reason}, Uri, State0),
+         knet_log:errorlog({listen, Reason}, Uri, Sock),
+         % errorlog({listen, Reason}, Uri, State0),
          {next_state, 'IDLE', State0}
    end;
 
 %%
 %%
-'IDLE'({accept, Uri}, Pipe, #state{} = State0) ->
+'IDLE'({accept, Uri}, Pipe, #state{socket = Sock} = State0) ->
    case
       [either ||
          accept(Uri, State0),
@@ -148,7 +150,8 @@ ioctl(socket, #state{socket = Sock}) ->
       {error, Reason} ->
          spawn_acceptor(Uri, State0),
          error_to_side_a(Pipe, Reason, State0),
-         errorlog({syn, Reason}, Uri, State0),
+         knet_log:errorlog({syn, Reason}, Uri, Sock),
+         % errorlog({syn, Reason}, Uri, State0),
          {stop, Reason, State0}
    end;
 
@@ -292,17 +295,17 @@ ioctl(socket, #state{socket = Sock}) ->
 connect(Uri, #state{socket = Sock} = State) ->
    T = os:timestamp(),
    [either ||
-      knet_gen_tcp:connect(Uri, Sock),
-      fmap(State#state{socket = _}),
-      tracelog(connect, tempus:diff(T), _),
-      accesslog({syn, sack}, tempus:diff(T), _)
+      Socket <- knet_gen_tcp:connect(Uri, Sock),
+      knet_log:tracelog(connect, tempus:diff(T), Socket),
+      knet_log:accesslog({syn, sack}, tempus:diff(T), Socket),
+      fmap(State#state{socket = Socket})
    ].
 
 listen(Uri, #state{socket = Sock} = State) ->
    [either ||
-      knet_gen_tcp:listen(Uri, Sock),
-      fmap(State#state{socket = _}),
-      accesslog(listen, undefined, _)
+      Socket <- knet_gen_tcp:listen(Uri, Sock),
+      knet_log:accesslog(listen, undefined, Socket),
+      fmap(State#state{socket = Socket})
    ].
 
 accept(Uri, #state{so = SOpt} = State) ->
@@ -310,17 +313,16 @@ accept(Uri, #state{so = SOpt} = State) ->
    %% Note: this is a design decision to inject listen socket via socket options
    Sock = pipe:ioctl(opts:val(listen, SOpt), socket),
    [either ||
-      % lsocket(SOpt),
-      knet_gen_tcp:accept(Uri, Sock),
-      fmap(State#state{socket = _}),
-      tracelog(connect, tempus:diff(T), _),
-      accesslog({syn, sack}, tempus:diff(T), _)
+      Socket <- knet_gen_tcp:accept(Uri, Sock),
+      knet_log:tracelog(connect, tempus:diff(T), Socket),
+      knet_log:accesslog({syn, sack}, tempus:diff(T), Socket),
+      fmap(State#state{socket = Socket})
    ].
 
-close(Reason, #state{} = State) ->
+close(Reason, #state{socket = Sock} = State) ->
    [either ||
-      accesslog({fin, Reason}, undefined, State),
-      knet_gen_tcp:close(_#state.socket),
+      knet_log:accesslog({fin, Reason}, undefined, Sock),
+      knet_gen_tcp:close(Sock),
       fmap(State#state{socket = _})
    ].
 
@@ -419,10 +421,10 @@ stream_send(_Pipe, Pckt, #state{socket = Sock} = State) ->
 %%
 stream_recv(Pipe, Pckt, #state{socket = Sock} = State) ->
    [either ||
+      knet_log:tracelog(packet, byte_size(Pckt), Sock),
       knet_gen_tcp:recv(Sock, Pckt),
       stream_uplink(Pipe, _, _),
-      fmap(State#state{socket = _}),
-      tracelog(packet, byte_size(Pckt), _)     
+      fmap(State#state{socket = _})
    ].
 
 stream_uplink(Pipe, Pckt, Socket) ->
@@ -432,24 +434,24 @@ stream_uplink(Pipe, Pckt, Socket) ->
 
 %%
 %% socket logging 
-errorlog(Reason, Peer, #state{} = State) ->
-   ?access_tcp(#{req => Reason, addr => Peer}),
-   {ok, State}.
+% errorlog(Reason, Peer, #state{} = State) ->
+%    ?access_tcp(#{req => Reason, addr => Peer}),
+%    {ok, State}.
 
-accesslog(Req, T, #state{socket = Sock} = State) ->
-   Peer = maybeT(knet_gen_tcp:peername(Sock)),
-   Addr = maybeT(knet_gen_tcp:sockname(Sock)),
-   ?access_tcp(#{req => Req, peer => Peer, addr => Addr, time => T}),
-   {ok, State}.
+% accesslog(Req, T, #state{socket = Sock} = State) ->
+%    Peer = maybeT(knet_gen_tcp:peername(Sock)),
+%    Addr = maybeT(knet_gen_tcp:sockname(Sock)),
+%    ?access_tcp(#{req => Req, peer => Peer, addr => Addr, time => T}),
+%    {ok, State}.
 
-tracelog(_Key, _Val, #state{trace = undefined} = State) ->
-   {ok, State};
-tracelog(Key, Val, #state{trace = Pid, socket = Sock} = State) ->
-   [either ||
-      knet_gen_tcp:peername(Sock),
-      knet_log:trace(Pid, {tcp, {Key, _}, Val}),
-      fmap(State)
-   ].
+% tracelog(_Key, _Val, #state{trace = undefined} = State) ->
+%    {ok, State};
+% tracelog(Key, Val, #state{trace = Pid, socket = Sock} = State) ->
+%    [either ||
+%       knet_gen_tcp:peername(Sock),
+%       knet_log:trace(Pid, {tcp, {Key, _}, Val}),
+%       fmap(State)
+%    ].
 
 %%
 %%
@@ -471,6 +473,6 @@ spawn_acceptor_pool(Uri, #state{so = SOpt} = State) ->
 
 %%
 %%
-maybeT({ok, X}) -> X;
-maybeT(_) -> undefined.
+% maybeT({ok, X}) -> X;
+% maybeT(_) -> undefined.
 
