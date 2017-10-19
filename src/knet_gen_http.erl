@@ -23,10 +23,10 @@
 socket(SOpt) ->
    {ok,
       #socket{
-         in     = htstream:new(),
-         eg     = htstream:new(),
-         so     = SOpt,
-         logger = knet_log:new(SOpt)
+         in       = htstream:new(),
+         eg       = htstream:new(),
+         so       = SOpt,
+         tracelog = opts:val(tracelog, undefined, SOpt)
       }
    }.
 

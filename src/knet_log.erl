@@ -41,12 +41,12 @@
 -compile({parse_transform, category}).
 
 -export([
-   new/1,
-   errorlog/3,
-   accesslog/3,
-   tracelog/3
+   % new/1,
+   % errorlog/3,
+   % accesslog/3,
+   % tracelog/3
 
-  ,common/1
+   common/1
   ,common/2
   ,trace/2
 ]).
@@ -56,55 +56,55 @@
    tracelog  = undefined
 }).
 
-%%
-%%
--spec new(_) -> _.
+% %%
+% %%
+% -spec new(_) -> _.
 
-new(Opts) ->
-   #netlog{
-      accesslog = opts:val(accesslog, undefined, Opts),
-      tracelog  = opts:val(tracelog, undefined, Opts)
-   }.
+% new(Opts) ->
+%    #netlog{
+%       accesslog = opts:val(accesslog, undefined, Opts),
+%       tracelog  = opts:val(tracelog, undefined, Opts)
+%    }.
 
-%%
-%%
--spec errorlog(_, _, #socket{}) -> ok.
+% %%
+% %%
+% -spec errorlog(_, _, #socket{}) -> ok.
 
-errorlog(_, _, #socket{logger = #netlog{accesslog = undefined}}) ->
-   ok;
+% errorlog(_, _, #socket{logger = #netlog{accesslog = undefined}}) ->
+%    ok;
 
-errorlog(Reason, Peer, #socket{family = knet_gen_tcp, logger = #netlog{accesslog = _Pid}}) ->
-   ?access_tcp(#{req => Reason, addr => Peer}).
-
-
-%%
-%%
--spec accesslog(_, _, #socket{}) -> ok.
-
-accesslog(_, _, #socket{logger = #netlog{accesslog = undefined}}) ->
-   ok;
-
-accesslog(Req, T, #socket{family = Family, logger = #netlog{accesslog = _Pid}} = Sock) ->
-   [either ||
-      Peer <- Family:peername(Sock),
-      Addr <- Family:sockname(Sock),
-      fmap(?access_tcp(#{req => Req, peer => Peer, addr => Addr, time => T}))
-   ].
+% errorlog(Reason, Peer, #socket{family = knet_gen_tcp, logger = #netlog{accesslog = _Pid}}) ->
+%    ?access_tcp(#{req => Reason, addr => Peer}).
 
 
-%%
-%%
--spec tracelog(_, _, #socket{}) -> ok.
+% %%
+% %%
+% -spec accesslog(_, _, #socket{}) -> ok.
 
-tracelog(_, _, #socket{logger = #netlog{tracelog = undefined}}) ->
-   ok;
+% accesslog(_, _, #socket{logger = #netlog{accesslog = undefined}}) ->
+%    ok;
 
-tracelog(Key, Val, #socket{family = Family, logger = #netlog{tracelog = Pid}} = Sock) ->
-   %% @todo: get tag from family
-   [either ||
-      Family:peername(Sock),
-      knet_log:trace(Pid, {tcp, {Key, _}, Val})
-   ].
+% accesslog(Req, T, #socket{family = Family, logger = #netlog{accesslog = _Pid}} = Sock) ->
+%    [either ||
+%       Peer <- Family:peername(Sock),
+%       Addr <- Family:sockname(Sock),
+%       fmap(?access_tcp(#{req => Req, peer => Peer, addr => Addr, time => T}))
+%    ].
+
+
+% %%
+% %%
+% -spec tracelog(_, _, #socket{}) -> ok.
+
+% tracelog(_, _, #socket{logger = #netlog{tracelog = undefined}}) ->
+%    ok;
+
+% tracelog(Key, Val, #socket{family = Family, logger = #netlog{tracelog = Pid}} = Sock) ->
+%    %% @todo: get tag from family
+%    [either ||
+%       Family:peername(Sock),
+%       knet_log:trace(Pid, {tcp, {Key, _}, Val})
+%    ].
 
 
 

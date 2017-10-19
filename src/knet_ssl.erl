@@ -42,7 +42,6 @@
    socket   = undefined :: #socket{}
   ,flowctl  = true      :: once | true | integer()  %% flow control strategy
   ,flowcrd  = undefined :: _                        %% flow control credicts
-  % ,trace    = undefined :: _
   ,timeout  = undefined :: [_]
   ,so       = undefined :: [_]
 }).
@@ -66,7 +65,6 @@ init(SOpt) ->
             socket  = _
            ,flowctl = opts:val(active, SOpt)
            ,timeout = opts:val(timeout, [], SOpt)
-           % ,trace   = opts:val(trace, undefined, SOpt)
            ,so      = SOpt
          }
       )
@@ -109,7 +107,6 @@ ioctl(socket,  #state{socket = Sock}) ->
          {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
          error_to_side_a(Pipe, Reason, State0),
-         knet_log:errorlog({syn, Reason}, Uri, Sock),
          {next_state, 'IDLE', State0}
    end;
 
@@ -128,7 +125,6 @@ ioctl(socket,  #state{socket = Sock}) ->
          {next_state, 'LISTEN', State1};
       {error, Reason} ->
          error_to_side_a(Pipe, Reason, State0),
-         knet_log:errorlog({listen, Reason}, Uri, Sock),
          {next_state, 'IDLE', State0}
    end;
 
@@ -154,7 +150,6 @@ ioctl(socket,  #state{socket = Sock}) ->
       {error, Reason} ->
          spawn_acceptor(Uri, State0),
          error_to_side_a(Pipe, Reason, State0),
-         knet_log:errorlog({syn, Reason}, Uri, Sock),
          {stop, Reason, State0}
    end;
 
@@ -223,16 +218,6 @@ ioctl(socket,  #state{socket = Sock}) ->
 
 %%
 %% flow control events
-% 'ESTABLISHED'(active, Pipe, #state{} = State0) ->
-%    case stream_flow_ctrl(State0) of
-%       {ok, State1} ->
-%          pipe:a(Pipe, ok),
-%          {next_state, 'ESTABLISHED', State1};
-%       {error, Reason} ->
-%          %% @todo: spawn pipe so that b is client
-%          'ESTABLISHED'({ssl_error, undefined, Reason}, Pipe, State0)
-%    end;
-
 'ESTABLISHED'({active, N}, Pipe, #state{} = State0) ->
    case config_flow_ctrl(State0#state{flowctl = N}) of
       {ok, State1} ->
@@ -250,9 +235,9 @@ ioctl(socket,  #state{socket = Sock}) ->
    %% wish from the socket. When the socket is empty, you can again enable {active, once}. 
    %% Note: release 17.x and later supports {active, n()}
    case 
-      [$^ ||
+      [either ||
          stream_recv(Pipe, Pckt, State0),
-         stream_flow_ctrl(_)
+         stream_flow_ctrl(Pipe, _)
       ]
    of
       {ok, State1} ->
@@ -342,8 +327,7 @@ connect(Uri, #state{socket = Sock} = State) ->
    T = os:timestamp(),
    [either ||
       Socket <- knet_gen_ssl:connect(Uri, Sock),
-      knet_log:tracelog(connect, tempus:diff(T), Socket),
-      knet_log:accesslog({syn, sack}, tempus:diff(T), Socket),
+      knet_gen:trace(connect, tempus:diff(T), Socket),
       fmap(State#state{socket = Socket})
    ].
 
@@ -351,7 +335,6 @@ connect(Uri, #state{socket = Sock} = State) ->
 listen(Uri, #state{socket = Sock} = State) ->
    [either ||
       Socket <- knet_gen_ssl:listen(Uri, Sock),
-      knet_log:accesslog(listen, undefined, Socket),
       fmap(State#state{socket = Socket})
    ].
 
@@ -362,8 +345,7 @@ accept(Uri, #state{so = SOpt} = State) ->
    Sock = pipe:ioctl(opts:val(listen, SOpt), socket),
    [either ||
       Socket <- knet_gen_ssl:accept(Uri, Sock),
-      knet_log:tracelog(connect, tempus:diff(T), Socket),
-      knet_log:accesslog({syn, sack}, tempus:diff(T), Socket),
+      knet_gen:trace(connect, tempus:diff(T), Socket),
       fmap(State#state{socket = Socket})
    ].
 
@@ -372,14 +354,12 @@ handshake(#state{socket = Sock} = State) ->
    T = os:timestamp(),
    [either ||
       Socket <- knet_gen_ssl:handshake(Sock),
-      knet_log:tracelog(handshake, tempus:diff(T), Socket),
-      knet_log:accesslog({ssl, hand}, tempus:diff(T), Socket),
+      knet_gen:trace(handshake, tempus:diff(T), Socket),
       fmap(State#state{socket = Socket})
    ].
 
 close(Reason, #state{socket = Sock} = State) ->
    [either ||
-      knet_log:accesslog({fin, Reason}, undefined, Sock),
       knet_gen_ssl:close(Sock),
       fmap(State#state{socket = _})
    ].
@@ -429,28 +409,30 @@ config_flow_ctrl(#state{flowctl = N, socket =Sock} = State) ->
 
 %%
 %% socket up/down link i/o
-stream_flow_ctrl(#state{flowctl = true, socket = Sock} = State) ->
+stream_flow_ctrl(_Pipe, #state{flowctl = true, socket = Sock} = State) ->
    ?DEBUG("[tcp] flow control = ~p", [true]),
    %% we need to ignore any error for i/o setup
    %% it will crash the process while data reside in mailbox
    knet_gen_ssl:setopts(Sock, [{active, once}]),
    {ok, State};
-stream_flow_ctrl(#state{flowctl = once} = State) ->
+stream_flow_ctrl(Pipe, #state{flowctl = once} = State) ->
    ?DEBUG("[tcp] flow control = ~p", [once]),
    %% do nothing, client must send flow control message
+   pipe:b(Pipe, {tcp, self(), passive}),
    {ok, State};
-stream_flow_ctrl(#state{flowcrd = 0, flowctl = _N} = State) ->
+stream_flow_ctrl(Pipe, #state{flowcrd = 0, flowctl = _N} = State) ->
    ?DEBUG("[tcp] flow control = ~p", [_N]),
    %% do nothing, client must send flow control message
+   pipe:b(Pipe, {tcp, self(), passive}),
    {ok, State};
-stream_flow_ctrl(#state{flowcrd = N, socket = Sock} = State) ->
+stream_flow_ctrl(_Pipe, #state{flowcrd = N, socket = Sock} = State) ->
    knet_gen_ssl:setopts(Sock, [{active, once}]),
    {ok, State#state{flowcrd = N - 1}}.
 
 %%
 %%
 pipe_to_side_a(Pipe, Event, #state{socket = Sock} = State) ->
-   [$^ ||
+   [either ||
       knet_gen_ssl:peername(Sock),
       fmap(pipe:a(Pipe, {ssl, self(), {Event, _}})),
       fmap(State)
@@ -490,7 +472,7 @@ stream_send(_Pipe, Pckt, #state{socket = Sock} = State) ->
 %%
 stream_recv(Pipe, Pckt, #state{socket = Sock} = State) ->
    [either ||
-      knet_log:tracelog(packet, byte_size(Pckt), Sock),
+      knet_gen:trace(packet, byte_size(Pckt), Sock),
       knet_gen_ssl:recv(Sock, Pckt),
       stream_uplink(Pipe, _, _),
       fmap(State#state{socket = _})
@@ -500,29 +482,6 @@ stream_uplink(Pipe, Pckt, Socket) ->
    lists:foreach(fun(X) -> pipe:b(Pipe, {ssl, self(), X}) end, Pckt),
    {ok, Socket}.
 
-
-%%
-%% socket logging 
-% errorlog(Reason, Peer, #state{} = State) ->
-%    ?access_ssl(#{req => Reason, addr => Peer}),
-%    {ok, State}.
-
-% accesslog(Req, T, #state{socket = Sock} = State) ->
-%    %% @todo: move sock abstraction to knet_log
-%    Peer = maybeT(knet_gen_ssl:peername(Sock)),
-%    Addr = maybeT(knet_gen_ssl:sockname(Sock)),
-%    ?access_tcp(#{req => Req, peer => Peer, addr => Addr, time => T}),
-%    {ok, State}.
-
-
-% tracelog(_Key, _Val, #state{trace = undefined} = State) ->
-%    {ok, State};
-% tracelog(Key, Val, #state{trace = Pid, socket = Sock} = State) ->
-%    [$^ ||
-%       knet_gen_ssl:peername(Sock),
-%       knet_log:trace(Pid, {ssl, {Key, _}, Val}),
-%       fmap(State)
-%    ].
 
 %%
 %%
@@ -541,12 +500,6 @@ spawn_acceptor_pool(Uri, #state{so = SOpt} = State) ->
       lists:seq(1, opts:val(backlog, 5, SOpt))
    ),
    {ok, State}.
-
-%%
-%%
-% maybeT({ok, X}) -> X;
-% maybeT(_) -> undefined.
-
 
 %
 % This is required to trace TLS certificates per connection (feature is disabled)

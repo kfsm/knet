@@ -27,10 +27,11 @@
 socket(SOpt) ->
    {ok,
       #socket{
-         in     = pstream:new(opts:val(stream, raw, SOpt)),
-         eg     = pstream:new(opts:val(stream, raw, SOpt)),
-         so     = SOpt,
-         logger = knet_log:new(SOpt)
+         family   = ?MODULE,
+         in       = pstream:new(opts:val(stream, raw, SOpt)),
+         eg       = pstream:new(opts:val(stream, raw, SOpt)),
+         so       = SOpt,
+         tracelog = opts:val(tracelog, undefined, SOpt)
       }
    }.
 

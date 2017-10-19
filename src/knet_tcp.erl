@@ -40,8 +40,6 @@
 -record(state, {
    socket   = undefined :: #socket{}
   ,flowctl  = true      :: once | true | integer()  %% flow control strategy
-  % ,tracelog = undefined :: _
-  % ,accesslog= undefined :: _
   ,timeout  = undefined :: [_]
   ,so       = undefined :: [_]
 }).
@@ -105,8 +103,6 @@ ioctl(socket, #state{socket = Sock}) ->
          {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
          error_to_side_a(Pipe, Reason, State0),
-         knet_log:errorlog({syn, Reason}, Uri, Sock),
-         % errorlog({syn, Reason}, Uri, State0),
          {next_state, 'IDLE', State0}
    end;
 
@@ -124,8 +120,6 @@ ioctl(socket, #state{socket = Sock}) ->
          {next_state, 'LISTEN', State1};
       {error, Reason} ->
          error_to_side_a(Pipe, Reason, State0),
-         knet_log:errorlog({listen, Reason}, Uri, Sock),
-         % errorlog({listen, Reason}, Uri, State0),
          {next_state, 'IDLE', State0}
    end;
 
@@ -150,8 +144,6 @@ ioctl(socket, #state{socket = Sock}) ->
       {error, Reason} ->
          spawn_acceptor(Uri, State0),
          error_to_side_a(Pipe, Reason, State0),
-         knet_log:errorlog({syn, Reason}, Uri, Sock),
-         % errorlog({syn, Reason}, Uri, State0),
          {stop, Reason, State0}
    end;
 
@@ -296,15 +288,13 @@ connect(Uri, #state{socket = Sock} = State) ->
    T = os:timestamp(),
    [either ||
       Socket <- knet_gen_tcp:connect(Uri, Sock),
-      knet_log:tracelog(connect, tempus:diff(T), Socket),
-      knet_log:accesslog({syn, sack}, tempus:diff(T), Socket),
+      knet_gen:trace(connect, tempus:diff(T), Socket),
       fmap(State#state{socket = Socket})
    ].
 
 listen(Uri, #state{socket = Sock} = State) ->
    [either ||
       Socket <- knet_gen_tcp:listen(Uri, Sock),
-      knet_log:accesslog(listen, undefined, Socket),
       fmap(State#state{socket = Socket})
    ].
 
@@ -314,14 +304,12 @@ accept(Uri, #state{so = SOpt} = State) ->
    Sock = pipe:ioctl(opts:val(listen, SOpt), socket),
    [either ||
       Socket <- knet_gen_tcp:accept(Uri, Sock),
-      knet_log:tracelog(connect, tempus:diff(T), Socket),
-      knet_log:accesslog({syn, sack}, tempus:diff(T), Socket),
+      knet_gen:trace(connect, tempus:diff(T), Socket),
       fmap(State#state{socket = Socket})
    ].
 
 close(Reason, #state{socket = Sock} = State) ->
    [either ||
-      knet_log:accesslog({fin, Reason}, undefined, Sock),
       knet_gen_tcp:close(Sock),
       fmap(State#state{socket = _})
    ].
@@ -421,7 +409,7 @@ stream_send(_Pipe, Pckt, #state{socket = Sock} = State) ->
 %%
 stream_recv(Pipe, Pckt, #state{socket = Sock} = State) ->
    [either ||
-      knet_log:tracelog(packet, byte_size(Pckt), Sock),
+      knet_gen:trace(packet, byte_size(Pckt), Sock),
       knet_gen_tcp:recv(Sock, Pckt),
       stream_uplink(Pipe, _, _),
       fmap(State#state{socket = _})
@@ -430,28 +418,6 @@ stream_recv(Pipe, Pckt, #state{socket = Sock} = State) ->
 stream_uplink(Pipe, Pckt, Socket) ->
    lists:foreach(fun(X) -> pipe:b(Pipe, {tcp, self(), X}) end, Pckt),
    {ok, Socket}.
-
-
-%%
-%% socket logging 
-% errorlog(Reason, Peer, #state{} = State) ->
-%    ?access_tcp(#{req => Reason, addr => Peer}),
-%    {ok, State}.
-
-% accesslog(Req, T, #state{socket = Sock} = State) ->
-%    Peer = maybeT(knet_gen_tcp:peername(Sock)),
-%    Addr = maybeT(knet_gen_tcp:sockname(Sock)),
-%    ?access_tcp(#{req => Req, peer => Peer, addr => Addr, time => T}),
-%    {ok, State}.
-
-% tracelog(_Key, _Val, #state{trace = undefined} = State) ->
-%    {ok, State};
-% tracelog(Key, Val, #state{trace = Pid, socket = Sock} = State) ->
-%    [either ||
-%       knet_gen_tcp:peername(Sock),
-%       knet_log:trace(Pid, {tcp, {Key, _}, Val}),
-%       fmap(State)
-%    ].
 
 %%
 %%
@@ -471,8 +437,4 @@ spawn_acceptor_pool(Uri, #state{so = SOpt} = State) ->
    ),
    {ok, State}.
 
-%%
-%%
-% maybeT({ok, X}) -> X;
-% maybeT(_) -> undefined.
 

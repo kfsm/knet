@@ -155,7 +155,7 @@
    in       = undefined :: _,          %% socket ingress packet stream
    eg       = undefined :: _,          %% socket egress packet stream
    so       = []        :: [_],        %% socket options
-   logger   = undefined :: _           %% socket logger process(es)
+   tracelog = undefined :: pid()       %% socket tracing
 }).
 
 
