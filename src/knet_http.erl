@@ -45,8 +45,8 @@
 -record(fsm, {
    socket   = undefined :: #socket{}    %% http i/o streams
   ,queue    = undefined :: datum:q()    %% queue of in-flight request
-  ,trace
-  ,label
+  ,trace %% @todo: deprecated
+  ,label %% @todo: deprecated
   ,shutdown = undefined :: false | true %%  
 }).
 
@@ -124,6 +124,8 @@ ioctl(_, _) ->
 'IDLE'({connect, Uri}, Pipe, State) ->
    % connect is compatibility wrapper for knet socket interface (translated to http GET request)
    % @todo: htstream support HTTP/1.2 (see http://www.jmarshall.com/easy/http/)
+
+   % @todo: send eof with request
    'IDLE'({'GET', Uri, [{<<"Connection">>, <<"keep-alive">>}]}, Pipe, State);
 
 'IDLE'({_Mthd, {uri, _, _}=Uri, _Head}=Req, Pipe, State) ->
@@ -167,11 +169,11 @@ ioctl(_, _) ->
 
 %%
 %% peer connection
-'STREAM'({Prot, _, {established, Peer}}, _Pipe, #fsm{socket = Sock0} = State)
+'STREAM'({Prot, _, {established, Peer}}, _Pipe, #fsm{socket = Sock0, queue = Q0} = State)
  when ?is_transport(Prot) ->
    {ok, Sock1} = knet_gen_http:peername(Peer, Sock0),
-   {next_state, 'STREAM', State#fsm{socket = Sock1}};
-
+   Q1 = q:map(fun(Req) -> Req#req{treq = os:timestamp()} end, Q0),
+   {next_state, 'STREAM', State#fsm{socket = Sock1, queue = Q1}};
 
 'STREAM'({Prot, _, eof}, Pipe, #fsm{shutdown = true} = State)
  when ?is_transport(Prot) ->
@@ -263,11 +265,10 @@ http_stream_send(Msg, Pipe, State0) ->
 http_send(Msg, Pipe, State) ->
    [$. ||
       http_encode_packet(Msg, State),
-      % q_enq_http_req(_),
+      enq_http_request(_),
       http_egress(Pipe, _),
-      % tracelog(_),
-      % accesslog(_),
-      % q_deq_http_req(_),
+      tracelog(_),
+      deq_http_request(_),
       http_send_return(Pipe, _)
    ].   
 
@@ -300,11 +301,10 @@ http_send_return(_Pipe, #http{state = State}) ->
 http_recv(Msg, Pipe, State) ->
    [$. ||
       http_decode_packet(Msg, State),
-      % q_enq_http_req(_),
+      enq_http_request(_),
       http_ingress(Pipe, _),
-      % tracelog(_),
-      % accesslog(_),
-      % q_deq_http_req(_),
+      tracelog(_),
+      deq_http_request(_),
       http_recv_return(Pipe, _)
    ].   
 
@@ -410,97 +410,31 @@ http_set_state(Stream, Socket, #http{state = State} = Http) ->
 
 %%
 %% enqueue references of http requests
--spec q_enq_http_req(#http{}) -> #http{}.
+-spec enq_http_request(#http{}) -> #http{}.
 
-q_enq_http_req(#http{is = eof, http = {request,  _} = Ht} = Http) ->
-   lens:apply(
-      lens_http_state_queue(),
-      fun(Q) -> q:enq(q_http_req(Ht), Q) end, 
-      Http
-   );
-
-q_enq_http_req(#http{is = eof, http = {response, _} = Ht} = Http) ->
-   lens:put(
-      lens_http_state_queue_req_code(),
-      Ht,
-      Http
-   );
-
-q_enq_http_req(Http) ->
-   Http.
-
-%%
-%% enqueue references of http requests
--spec q_deq_http_req(#http{}) -> #http{}.
-
-q_deq_http_req(#http{is = eof, http = {response, _}} = Http) ->
-   lens:apply(
-      lens_http_state_queue(),
-      fun(Q) -> deq:tail(Q) end, 
-      Http
-   );
-
-q_deq_http_req(Http) ->
-   Http.
-
-%% annotate http request with performance data 
-q_http_req({request,  _} = Req) ->
+new_http_req({request,  _} = Req) ->
    #req{
       http = Req,
       treq = os:timestamp()
    }.
 
+enq_http_request(#http{is = eof, http = {request,  _} = Ht} = Http) ->
+   lens:put(lens_http_state_queue_hd_enq(), new_http_req(Ht), Http);
+
+enq_http_request(#http{is = eof, http = {response, _} = Ht} = Http) ->
+   lens:put(lens_http_state_queue_hd_req_code(), Ht, Http);
+
+enq_http_request(Http) ->
+   Http.
 
 %%
-%%
-lens_http_state_queue() ->
-   lens:c([lens:tuple(#http.state), lens:tuple(#fsm.queue)]).
- 
-lens_http_state_queue_req_code() ->
-   lens:c([lens_http_state_queue(), lens_qhd(), lens:tuple(#req.code)]).
+%% enqueue references of http requests
+-spec deq_http_request(#http{}) -> #http{}.
 
-lens_qhd() ->
-   %% focus lens on queue head
-   fun(Fun, Queue) ->
-      lens:fmap(fun(X) -> deq:poke(X, deq:tail(Queue)) end, Fun(deq:head(Queue)))      
-   end.
+deq_http_request(#http{is = eof, http = {response, _}} = Http) ->
+   lens:put(lens_http_state_queue_tl(), undefined, Http);
 
-
-%%
-%%
--spec accesslog(#http{}) -> #http{}.
-
-accesslog(#http{is = eof, http = {response, _}, state = State} = Http) ->
-   % #fsm{
-   %    queue  = Queue, 
-   %    socket = #socket{peername = Peer}
-   % } = State,
-   % #req{
-   %    http = {_, {Mthd,  Url, HeadA}},
-   %    code = {_, {Code, _Msg, HeadB}},
-   %    treq = T
-   % } = q:head(Queue),
-   % ?access_http(#{
-   %    req  => {Mthd, Code}
-   %   ,peer => Peer
-   %   ,addr => gen_http_decode_url(Url, HeadA)
-   %   ,ua   => opts:val(<<"User-Agent">>, opts:val(<<"Server">>, undefined, HeadB), HeadA)
-   %   ,time => tempus:diff(T)
-   % }),
-   Http;
-
-accesslog(#http{is = upgrade, http = {_, {_, Url, Head}}, state = State} = Http) ->
-   % #fsm{socket = #socket{peername = Peer}} = State,
-   % Upgrade = lens:get(lens:pair(<<"Upgrade">>), Head),
-   % ?access_http(#{
-   %    req  => {upgrade, Upgrade}
-   %   ,peer => Peer
-   %   ,addr => gen_http_decode_url(Url, Head)
-   %   ,ua   => opts:val(<<"User-Agent">>, undefined, Head)
-   % }),
-   Http;
-
-accesslog(Http) ->
+deq_http_request(Http) ->
    Http.
 
 
@@ -508,46 +442,62 @@ accesslog(Http) ->
 %%
 -spec tracelog(#http{}) -> #http{}.
 
-tracelog(#http{state = #fsm{trace = undefined}} = Http) ->
-   Http;
+tracelog(#http{is = eoh, http = {response, {Code, _, _}}, state = #fsm{socket = Sock}} = Http) ->
+   T   = lens:get(lens_http_state_queue_hd_req_treq(), Http),
+   Uri = tracelog_uri(lens:get(lens_http_state_queue_hd_req_http(), Http)),
+   knet_gen:trace({code, Uri}, Code, Sock),
+   knet_gen:trace({ttfb, Uri}, tempus:diff(T), Sock),
+   lens:put(lens_http_state_queue_hd_req_teoh(), os:timestamp(), Http);
 
-tracelog(#http{is = eoh, http = {response, {Code, _, _}}, state = State} = Http) ->
-   #fsm{
-      trace = Pid,
-      label = Label,
-      queue = Queue0
-   } = State,
-   #req{
-      http = Ht,
-      treq = T
-   } = q:head(Queue0),
-   Uri = tracelog_uri(Label, Ht),
-   knet_log:trace(Pid, {http, {code, Uri}, Code}),
-   knet_log:trace(Pid, {http, {ttfb, Uri}, tempus:diff(T)}),
-   Queue1 = lens:put(lens_qhd(), lens:tuple(#req.teoh), os:timestamp(), Queue0),
-   Http#http{state = State#fsm{queue = Queue1}};   
-
-tracelog(#http{is = eof, http = {response, _}, state = State} = Http) ->
-   #fsm{
-      trace = Pid,
-      label = Label, 
-      queue = Queue0
-   } = State,
-   #req{
-      http = Ht,
-      teoh = T
-   }   = q:head(Queue0),
-   Uri = tracelog_uri(Label, Ht),
-   knet_log:trace(Pid, {http, {ttmr, Uri}, tempus:diff(T)}),
+tracelog(#http{is = eof, http = {response, _}, state = #fsm{socket = Sock}} = Http) ->
+   T   = lens:get(lens_http_state_queue_hd_req_teoh(), Http),
+   Uri = tracelog_uri(lens:get(lens_http_state_queue_hd_req_http(), Http)),
+   knet_gen:trace({ttmr, Uri}, tempus:diff(T), Sock),
    Http;
 
 tracelog(Http) ->
    Http.
 
-tracelog_uri(undefined, {request, {_Mthd, Path, Head}}) ->
-   Authority = lens:get(lens:pair('Host'), Head),
-   uri:path(Path, uri:authority(Authority, uri:new(http)));
 
-tracelog_uri(Label, _) ->
-   uri:schema(http, uri:new(Label)).
+tracelog_uri({request, {_Mthd, Path, Head}}) ->
+   Authority = lens:get(lens:pair(<<"Host">>), Head),
+   uri:path(Path, uri:authority(Authority, uri:new(http))).
+
+
+%%
+%% lenses for http requests queue
+lens_http_state_queue_hd_enq() ->
+   lens:c(lens:tuple(#http.state), lens:tuple(#fsm.queue), lens_q_hd_enq()).
+
+lens_http_state_queue_tl() ->
+   lens:c(lens:tuple(#http.state), lens:tuple(#fsm.queue), lens_q_tl()).
+
+lens_http_state_queue_hd_req_http() ->
+   lens:c(lens:tuple(#http.state), lens:tuple(#fsm.queue), lens_q_hd(), lens:tuple(#req.http)).
+
+lens_http_state_queue_hd_req_code() ->
+   lens:c(lens:tuple(#http.state), lens:tuple(#fsm.queue), lens_q_hd(), lens:tuple(#req.code)).
+
+lens_http_state_queue_hd_req_teoh() ->
+   lens:c(lens:tuple(#http.state), lens:tuple(#fsm.queue), lens_q_hd(), lens:tuple(#req.teoh)).
+
+lens_http_state_queue_hd_req_treq() ->
+   lens:c(lens:tuple(#http.state), lens:tuple(#fsm.queue), lens_q_hd(), lens:tuple(#req.treq)).
+
+lens_q_hd_enq() ->
+   fun(Fun, Queue) ->
+      lens:fmap(fun(X) -> q:enq(X, Queue) end, Fun(undefined))
+   end.
+
+lens_q_hd() ->
+   fun(Fun, Queue) ->
+      lens:fmap(fun(X) -> deq:poke(X, deq:tail(Queue)) end, Fun(deq:head(Queue)))      
+   end.
+
+lens_q_tl() ->
+   fun(Fun, Queue) ->
+      lens:fmap(fun(_) -> deq:tail(Queue) end, Fun(deq:tail(Queue)))      
+   end.
+
+
 

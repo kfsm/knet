@@ -8,6 +8,7 @@
 -export([
    socket/1,
    close/1,
+   sockname/1,
    peername/1,
    peername/2,
    send/2,
@@ -23,6 +24,7 @@
 socket(SOpt) ->
    {ok,
       #socket{
+         family   = ?MODULE,
          in       = htstream:new(),
          eg       = htstream:new(),
          so       = SOpt,
@@ -38,6 +40,12 @@ socket(SOpt) ->
 close(#socket{so = SOpt} = Socket) ->
    socket(SOpt).
 
+%%
+%%
+-spec sockname(#socket{}) -> {ok, uri:uri()} | {error, _}.
+
+sockname(#socket{sockname = Sockname}) ->
+   {ok, Sockname}.
 
 %%
 %%
