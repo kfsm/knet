@@ -37,6 +37,8 @@
   ,recv/3
   ,send/2
   ,ioctl/2
+  ,stream/1
+  ,stream/2
 ]).
 
 %%
@@ -227,5 +229,29 @@ ioctl(Sock, Msg) ->
    _ = pipe:send(Sock, Msg),
    {ok, Sock}.
 
+%%
+%% build 
+-spec stream(pid()) -> datum:stream().
+-spec stream(pid(), timeout()) -> datum:stream().
 
+stream(Sock) ->
+   stream(Sock, infinity).
 
+stream(Sock, Timeout) ->
+   case knet:recv(Sock, Timeout) of
+      {ioctl, _, _} ->
+         stream(Sock, Timeout);
+
+      {_, _, passive} ->
+         knet:ioctl(Sock, {active, 1024}),
+         stream(Sock, Timeout);
+
+      {_, _, eof} = Msg ->
+         stream:new(Msg);
+
+      {_, _, {error, _}} = Msg ->
+         stream:new(Msg);
+
+      {_, _, _} = Msg ->
+         stream:new(Msg, fun() -> stream(Sock, Timeout) end)
+   end.

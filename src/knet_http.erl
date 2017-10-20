@@ -121,12 +121,22 @@ ioctl(_, _) ->
    pipe:b(Pipe, {accept, Uri}),
    {next_state, 'STREAM', State#fsm{shutdown = true}};
 
-'IDLE'({connect, Uri}, Pipe, State) ->
+'IDLE'({connect, {uri, _, _} = Uri}, Pipe, State) ->
    % connect is compatibility wrapper for knet socket interface (translated to http GET request)
    % @todo: htstream support HTTP/1.2 (see http://www.jmarshall.com/easy/http/)
-
-   % @todo: send eof with request
-   'IDLE'({'GET', Uri, [{<<"Connection">>, <<"keep-alive">>}]}, Pipe, State);
+   pipe:b(Pipe, {connect, Uri}),
+   {next_state, 'STREAM',
+      lists:foldl(
+         fun(X, Acc) ->
+            lens:get(lens:t3(), 'STREAM'(X, Pipe, Acc))
+         end,
+         State,
+         [
+            {'GET', Uri, [{<<"Connection">>, <<"keep-alive">>}]},
+            eof
+         ]
+      )
+   };
 
 'IDLE'({_Mthd, {uri, _, _}=Uri, _Head}=Req, Pipe, State) ->
    pipe:b(Pipe, {connect, Uri}),

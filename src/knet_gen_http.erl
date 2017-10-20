@@ -111,7 +111,7 @@ decode_packet({Mthd, Url, Head}, #socket{peername = Peer})
 
 decode_packet({Code, Msg, Head}, #socket{peername = Peer})
  when is_integer(Code) ->
-   [{Code, Msg, [{<<"X-Knet-Peer">>, uri:s(Peer)} | Head]}];
+   {Code, Msg, [{<<"X-Knet-Peer">>, uri:s(Peer)} | Head]};
 
 decode_packet(Chunk, _Socket) ->
    Chunk.
