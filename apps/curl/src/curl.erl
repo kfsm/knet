@@ -1,14 +1,41 @@
+%% @doc
+%%   example of client side
 -module(curl).
 -compile({parse_transform, category}).
 
 -export([start/0]).
+-export([x/1, x/2, x/3, x/4]).
 -export([run/1, run/2, run/3]).
 
+%%
+%%
 start() ->
    applib:boot(?MODULE, code:where_is_file("app.config")).
 
 %%
+%% eXecute the request
+x(Url) ->
+   x('GET', Url).
+
+x(Mthd, Url) ->
+   x(Mthd, Url, []).
+
+x(Mthd, Url, Payload) ->
+   x(Mthd, Url, [], Payload).
+
+x(Mthd, Url, Head, Payload) ->
+   [either ||
+      Sock <- knet:socket(Url, [{active, true}]),
+      knet:send(Sock, {Mthd, uri:new(Url), [{<<"Connection">>, <<"close">>} | Head]}),
+      knet:send(Sock, Payload),
+      knet:send(Sock, eof),
+      Data <- fmap(stream:list(knet:stream(Sock))),
+      knet:close(Sock),
+      fmap(Data)
+   ].
+
 %%
+%% run the http requests in loops
 run(Url) ->
    run(Url, 1, 30).
 
@@ -38,9 +65,13 @@ loop(Sock, Url, T, Status) ->
          knet:close(Sock),
          Status;
       _ ->
-         knet:send(Sock, {'GET', Url, [{<<"Connection">>, <<"keep-alive">>}]}),
+         knet:send(Sock, {'GET', Url, [
+            {<<"Connection">>, <<"keep-alive">>},
+            {<<"Accept">>,     <<"*/*">>}
+         ]}),
          knet:send(Sock, eof),
-         {s, {_, _, {Code, _, _}}, _} = Stream = knet:stream(Sock),
+         {s, {HtCode, _, _}, _} = Stream = knet:stream(Sock),
+         Code = (HtCode div 100) * 100,
          stream:list(Stream),
          Count = maps:get(Code, Status, 0),
          loop(Sock, Url, T, maps:put(Code, Count + 1, Status))

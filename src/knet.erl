@@ -218,6 +218,17 @@ send(Sock, Pckt)
  when is_binary(Pckt) ->
    send(Sock, {packet, Pckt});
 
+send(Sock, [Head | Tail]) ->
+   case send(Sock, Head) of
+      ok ->
+         send(Sock, Tail);
+      {error, _} = Error ->
+         Error
+   end;
+
+send(Sock, []) ->
+   ok;
+
 send(Sock, Pckt) ->
    pipe:call(Sock, Pckt, infinity).
 
@@ -242,16 +253,16 @@ stream(Sock, Timeout) ->
       {ioctl, _, _} ->
          stream(Sock, Timeout);
 
-      {_, _, passive} ->
+      {_, Sock, passive} ->
          knet:ioctl(Sock, {active, 1024}),
          stream(Sock, Timeout);
 
-      {_, _, eof} = Msg ->
-         stream:new(Msg);
+      {_, Sock, eof} = Msg ->
+         stream:new(eof);
 
-      {_, _, {error, _}} = Msg ->
-         stream:new(Msg);
+      {_, Sock, {error, _} = Error} ->
+         stream:new(Error);
 
-      {_, _, _} = Msg ->
-         stream:new(Msg, fun() -> stream(Sock, Timeout) end)
+      {_, _, Pckt} ->
+         stream:new(Pckt, fun() -> stream(Sock, Timeout) end)
    end.
