@@ -226,7 +226,7 @@ send(Sock, [Head | Tail]) ->
          Error
    end;
 
-send(Sock, []) ->
+send(_Sock, []) ->
    ok;
 
 send(Sock, Pckt) ->
@@ -257,7 +257,7 @@ stream(Sock, Timeout) ->
          knet:ioctl(Sock, {active, 1024}),
          stream(Sock, Timeout);
 
-      {_, Sock, eof} = Msg ->
+      {_, Sock, eof} ->
          stream:new(eof);
 
       {_, Sock, {error, _} = Error} ->

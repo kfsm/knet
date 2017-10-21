@@ -269,8 +269,8 @@ recv(Sock, Timeout) ->
          [$? || recv(Sock, Timeout), join(Http, _)];
       {http, Sock, Pckt} ->
          [$? || recv(Sock, Timeout), join(Pckt, _)];
-      {http, _, _} = Http ->
-         ?WARNING("k [http]: unexpected message: ~p~n", [Http]),
+      {http, _, _} ->
+         % ?WARNING("k [http]: unexpected message: ~p~n", [Http]),
          recv(Sock, Timeout);
       {ioctl, _, _} ->
          recv(Sock, Timeout);

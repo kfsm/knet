@@ -37,7 +37,7 @@ socket(SOpt) ->
 %%
 -spec close(#socket{}) -> datum:either( #socket{} ).
 
-close(#socket{so = SOpt} = Socket) ->
+close(#socket{so = SOpt}) ->
    socket(SOpt).
 
 %%

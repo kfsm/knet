@@ -227,7 +227,7 @@ ioctl(_, _) ->
             {next_state, 'CLIENT', State#fsm{stream = Stream#stream{recv = Http}}}
       end
    catch _:Reason ->
-      ?NOTICE("knet [ws]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
+      % ?NOTICE("knet [ws]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
       pipe:b(Pipe, {ws, self(), {error, Reason}}),
       {stop, Reason, State}
    end;
@@ -243,7 +243,7 @@ ioctl(_, _) ->
       pipe:b(Pipe, Pckt),
       {next_state, 'CLIENT', State#fsm{stream = Stream#stream{send = Send}}}
    catch _:Reason ->
-      ?NOTICE("knet [ws]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
+      % ?NOTICE("knet [ws]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
       pipe:b(Pipe, {ws, self(), {error, Reason}}),
       {stop, Reason, State}
    end.
@@ -321,7 +321,7 @@ ws_new(Type, Url, _Head, _SOpt) ->
 %%
 %% web socket recv message
 ws_recv(Pckt, Pipe, #stream{}=Ws) ->
-   ?DEBUG("knet [websock] ~p: recv ~p~n~p", [self(), Ws#stream.peer, Pckt]),
+   % ?DEBUG("knet [websock] ~p: recv ~p~n~p", [self(), Ws#stream.peer, Pckt]),
    {Msg, Recv} = wsstream:decode(Pckt, Ws#stream.recv),
    lists:foreach(fun(X) -> pipe:b(Pipe, {ws, self(), X}) end, Msg),
    {wsstream:state(Recv), Ws#stream{recv=Recv}}.
@@ -329,7 +329,7 @@ ws_recv(Pckt, Pipe, #stream{}=Ws) ->
 %%
 %% web socket send message
 ws_send(Msg, Pipe, #stream{}=Ws) ->
-   ?DEBUG("knet [websock] ~p: send ~p~n~p", [self(), Ws#stream.peer, Msg]),
+   % ?DEBUG("knet [websock] ~p: send ~p~n~p", [self(), Ws#stream.peer, Msg]),
    {Pckt, Send} = wsstream:encode(Msg, Ws#stream.send),
    lists:foreach(fun(X) -> pipe:b(Pipe, {packet, X}) end, Pckt),
    {wsstream:state(Send), Ws#stream{send=Send}}.
@@ -344,7 +344,7 @@ ht_new(Url, _SOpt) ->
    }.
 
 ht_recv(Pckt, Pipe, #stream{}=Ht) ->
-   ?DEBUG("knet [websock] ~p: recv ~p~n~p", [self(), Ht#stream.peer, Pckt]),
+   % ?DEBUG("knet [websock] ~p: recv ~p~n~p", [self(), Ht#stream.peer, Pckt]),
    case htstream:decode(Pckt, Ht#stream.recv) of
       %% continue request streaming
       {[], Recv} ->

@@ -91,7 +91,7 @@ ioctl(socket,  #state{socket = Sock}) ->
 
 %%
 %%
-'IDLE'({connect, Uri}, Pipe, #state{socket = Sock} = State0) ->
+'IDLE'({connect, Uri}, Pipe, #state{} = State0) ->
    case 
       [either ||
          connect(Uri, State0),
@@ -113,7 +113,7 @@ ioctl(socket,  #state{socket = Sock}) ->
 
 %%
 %%
-'IDLE'({listen, Uri}, Pipe, #state{socket = Sock} = State0) ->
+'IDLE'({listen, Uri}, Pipe, #state{} = State0) ->
    case
       [either ||
          listen(Uri, State0),
@@ -130,7 +130,7 @@ ioctl(socket,  #state{socket = Sock}) ->
 
 %%
 %%
-'IDLE'({accept, Uri}, Pipe, #state{socket = Sock} = State0) ->
+'IDLE'({accept, Uri}, Pipe, #state{} = State0) ->
    case
       [either ||
          accept(Uri, State0),
@@ -358,7 +358,7 @@ handshake(#state{socket = Sock} = State) ->
       fmap(State#state{socket = Socket})
    ].
 
-close(Reason, #state{socket = Sock} = State) ->
+close(_Reason, #state{socket = Sock} = State) ->
    [either ||
       knet_gen_ssl:close(Sock),
       fmap(State#state{socket = _})
@@ -410,18 +410,18 @@ config_flow_ctrl(#state{flowctl = N, socket =Sock} = State) ->
 %%
 %% socket up/down link i/o
 stream_flow_ctrl(_Pipe, #state{flowctl = true, socket = Sock} = State) ->
-   ?DEBUG("[tcp] flow control = ~p", [true]),
+   % ?DEBUG("[tcp] flow control = ~p", [true]),
    %% we need to ignore any error for i/o setup
    %% it will crash the process while data reside in mailbox
    knet_gen_ssl:setopts(Sock, [{active, once}]),
    {ok, State};
 stream_flow_ctrl(Pipe, #state{flowctl = once} = State) ->
-   ?DEBUG("[tcp] flow control = ~p", [once]),
+   % ?DEBUG("[tcp] flow control = ~p", [once]),
    %% do nothing, client must send flow control message
    pipe:b(Pipe, {tcp, self(), passive}),
    {ok, State};
 stream_flow_ctrl(Pipe, #state{flowcrd = 0, flowctl = _N} = State) ->
-   ?DEBUG("[tcp] flow control = ~p", [_N]),
+   % ?DEBUG("[tcp] flow control = ~p", [_N]),
    %% do nothing, client must send flow control message
    pipe:b(Pipe, {tcp, self(), passive}),
    {ok, State};

@@ -70,16 +70,8 @@ init(Opts) ->
    }.
 
 %%
-free(Reason, #fsm{stream=Stream, sock=Sock}) ->
-   ?access_tcp(#{
-      req  => {fin, Reason}
-     ,peer => Stream#stream.peer 
-     ,addr => Stream#stream.addr
-     ,byte => pstream:octets(Stream#stream.recv) + pstream:octets(Stream#stream.send)
-     ,pack => pstream:packets(Stream#stream.recv) + pstream:packets(Stream#stream.send)
-     ,time => tempus:diff(Stream#stream.ts)
-   }),
-   (catch gen_tcp:close(Sock)),
+free(_Reason, #fsm{sock=Sock}) ->
+   (catch gen_udp:close(Sock)),
    ok. 
 
 %% 
@@ -97,7 +89,6 @@ ioctl(socket, State) ->
 'IDLE'({listen, Uri}, Pipe, State) ->
    case udp_listen(Uri, State) of
       {ok, Sock} ->
-         ?access_udp(#{req => listen, addr => Uri}),
          create_acceptor_pool(Uri, State),
          _ = pipe:a(Pipe, {udp, self(), {listen, Uri}}),
          {next_state, 'LISTEN', 
@@ -105,7 +96,6 @@ ioctl(socket, State) ->
          };
 
       {error, Reason} ->
-         ?access_tcp(#{req => {listen, Reason}, addr => Uri}),
          pipe:a(Pipe, {udp, self(), {terminated, Reason}}),
          {stop, Reason, State}
    end;
@@ -115,14 +105,12 @@ ioctl(socket, State) ->
 'IDLE'({connect, Uri}, Pipe, #fsm{stream = Stream0} = State) ->
    case udp_connect(Uri, State) of
       {ok, Sock} ->
-         ?access_udp(#{req => listen, addr => Uri}),
          #stream{addr = Addr} = Stream1 = 
             io_ttl(io_tth(io_connect(Sock, Uri, Stream0))),
          pipe:a(Pipe, {udp, self(), {listen, uri:authority(Addr, uri:new(udp))}}),
          {next_state, 'ESTABLISHED', udp_ioctl(State#fsm{stream=Stream1, sock=Sock})};
 
       {error, Reason} ->
-         ?access_udp(#{req => {listen, Reason}, addr => Uri}),
          pipe:a(Pipe, {udp, self(), {terminated, Reason}}),
          {stop, Reason, State}
    end;
@@ -147,7 +135,7 @@ ioctl(socket, State) ->
    };
 
 'LISTEN'({udp, _, Host, Port, Pckt}, _Pipe, #fsm{acceptor = Acceptor}=State) ->
-   ?DEBUG("knet udp ~p: recv ~p~n~p", [self(), {Host, Port}, Pckt]),
+   % ?DEBUG("knet udp ~p: recv ~p~n~p", [self(), {Host, Port}, Pckt]),
    {Pid, Queue} = q:deq(Acceptor),
    pipe:send(Pid, {udp, self(), {{Host, Port}, Pckt}}),
    {next_state, 'LISTEN', State#fsm{acceptor = q:enq(Pid, Queue)}};
@@ -206,7 +194,7 @@ ioctl(socket, State) ->
    end;
 
 'ESTABLISHED'(hibernate, _, State) ->
-   ?DEBUG("knet [udp]: suspend ~p", [self()]),
+   % ?DEBUG("knet [udp]: suspend ~p", [self()]),
    {next_state, 'HIBERNATE', State, hibernate};
 
 'ESTABLISHED'({{_Host, _Port}, Pckt} = Msg, Pipe, State)
@@ -230,7 +218,7 @@ ioctl(socket, State) ->
 %%%------------------------------------------------------------------   
 
 'HIBERNATE'(Msg, Pipe, #fsm{stream = Stream} = State) ->
-   ?DEBUG("knet [tcp]: resume ~p", [Stream#stream.peer]),
+   % ?DEBUG("knet [tcp]: resume ~p", [Stream#stream.peer]),
    'ESTABLISHED'(Msg, Pipe, State#fsm{stream=io_tth(Stream)}).
 
 
@@ -293,7 +281,7 @@ io_ttl(N, #stream{}=Sock) ->
 %%
 %% recv packet
 io_recv({{_Host, _Port}=Peer, Pckt}, Pipe, #stream{}=Sock) ->
-   ?DEBUG("knet [udp] ~p: recv ~p~n~p", [self(), Peer, Pckt]),
+   % ?DEBUG("knet [udp] ~p: recv ~p~n~p", [self(), Peer, Pckt]),
    {Msg, Recv} = pstream:decode(Pckt, Sock#stream.recv),
    lists:foreach(fun(X) -> pipe:b(Pipe, {udp, self(), {Peer, X}}) end, Msg),
    {active, Sock#stream{recv=Recv}}.
@@ -301,7 +289,7 @@ io_recv({{_Host, _Port}=Peer, Pckt}, Pipe, #stream{}=Sock) ->
 %%
 %% send packet
 io_send({{Host, Port} = _Peer, Msg}, Pipe, #stream{}=Sock) ->
-   ?DEBUG("knet [udp] ~p: send ~p~n~p", [self(), _Peer, Msg]),
+   % ?DEBUG("knet [udp] ~p: send ~p~n~p", [self(), _Peer, Msg]),
    {Pckt, Send} = pstream:encode(Msg, Sock#stream.send),
    lists:foreach(fun(X) -> ok = gen_udp:send(Pipe, Host, Port, X) end, Pckt),
    {active, Sock#stream{send=Send}}.
