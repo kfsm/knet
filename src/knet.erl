@@ -72,8 +72,7 @@ start() ->
 
 socket({uri, Schema, _}, Opts) ->
    [either ||
-      category:sequence([
-         supervisor:start_child(X, [Opts]) || X <- stack(Schema)]),
+      cats:sequence([supervisor:start_child(X, [Opts]) || X <- stack(Schema)]),
       create(_, Opts)
    ];
 
@@ -251,6 +250,9 @@ stream(Sock) ->
 stream(Sock, Timeout) ->
    case knet:recv(Sock, Timeout) of
       {ioctl, _, _} ->
+         stream(Sock, Timeout);
+
+      {trace, Sock, _} ->
          stream(Sock, Timeout);
 
       {_, Sock, passive} ->

@@ -19,7 +19,6 @@
 %%   IO-monad: http 
 -module(m_http).
 -compile({parse_transform, category}).
--compile({parse_transform, monad}).
 
 -include("knet.hrl").
 -include_lib("datum/include/datum.hrl").

@@ -57,7 +57,7 @@ setopts(#socket{sock = undefined}, _) ->
 setopts(#socket{sock = Sock} = Socket, Opts) ->
    [either ||
       inet:setopts(Sock, Opts),
-      fmap(Socket)
+      cats:unit(Socket)
    ].
 
 %%
@@ -74,7 +74,7 @@ peername(#socket{sock = undefined}) ->
 peername(#socket{sock = Sock, peername = undefined}) ->
    [either ||
       inet:peername(Sock),
-      fmap(uri:authority(_, uri:new(tcp)))
+      cats:unit(uri:authority(_, uri:new(tcp)))
    ];
 peername(#socket{peername = Peername}) ->
    {ok, Peername}.
@@ -87,7 +87,7 @@ peername(Uri, #socket{} = Socket) ->
    {ok, [identity ||
       uri:authority(Uri),
       uri:authority(_, uri:new(tcp)),
-      fmap(Socket#socket{peername = _})
+      cats:unit(Socket#socket{peername = _})
    ]}.
 
 %%
@@ -99,7 +99,7 @@ sockname(#socket{sock = undefined}) ->
 sockname(#socket{sock = Sock, sockname = undefined}) ->
    [either ||
       inet:sockname(Sock),
-      fmap(uri:authority(_, uri:new(tcp)))
+      cats:unit(uri:authority(_, uri:new(tcp)))
    ];
 sockname(#socket{sockname = Sockname}) ->
    {ok, Sockname}.
@@ -112,7 +112,7 @@ sockname(Uri, #socket{} = Socket) ->
    {ok, [identity ||
       uri:authority(Uri),
       uri:authority(_, uri:new(tcp)),
-      fmap(Socket#socket{sockname = _})
+      cats:unit(Socket#socket{sockname = _})
    ]}.
 
 
@@ -124,7 +124,7 @@ connect(Uri, #socket{so = SOpt} = Socket) ->
    {Host, Port} = uri:authority(Uri),
    [either ||
       gen_tcp:connect(scalar:c(Host), Port, so_tcp(SOpt), so_ttc(SOpt)),
-      fmap(Socket#socket{sock = _}),
+      cats:unit(Socket#socket{sock = _}),
       peername(Uri, _)
    ].
 
@@ -137,7 +137,7 @@ listen(Uri, #socket{so = SOpt} = Socket) ->
    Opts = lists:keydelete(active, 1, so_tcp(SOpt)),
    [either ||
       gen_tcp:listen(Port, [{active, false}, {reuseaddr, true} | Opts]),
-      fmap(Socket#socket{sock = _}),
+      cats:unit(Socket#socket{sock = _}),
       sockname(Uri, _),
       peername(Uri, _)  %% peername = sockname in-case of listen socket
    ].
@@ -149,9 +149,9 @@ listen(Uri, #socket{so = SOpt} = Socket) ->
 accept(Uri, #socket{sock = LSock} = Socket) ->
    [either ||
       gen_tcp:accept(LSock),
-      fmap(Socket#socket{sock = _}),
+      cats:unit(Socket#socket{sock = _}),
       sockname(Uri, _),
-      fmap(_#socket{peername = undefined})
+      cats:unit(_#socket{peername = undefined})
    ].
 
 
@@ -163,7 +163,7 @@ send(#socket{sock = Sock, eg = Stream0} = Socket, Data) ->
    {Pckt, Stream1} = pstream:encode(Data, Stream0),
    [either ||
       either_send(Sock, Pckt),
-      fmap(Socket#socket{eg = Stream1})
+      cats:unit(Socket#socket{eg = Stream1})
    ].
 
 either_send(_Sock, []) ->

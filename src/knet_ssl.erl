@@ -20,8 +20,6 @@
 -module(knet_ssl).
 -behaviour(pipe).
 -compile({parse_transform, category}).
--compile({parse_transform, monad}).
-
 
 -include("knet.hrl").
 
@@ -60,7 +58,7 @@ start_link(Opts) ->
 init(SOpt) ->
    [either ||
       knet_gen_ssl:socket(SOpt),
-      fmap('IDLE',
+      cats:unit('IDLE',
          #state{
             socket  = _
            ,flowctl = opts:val(active, SOpt)
@@ -328,14 +326,14 @@ connect(Uri, #state{socket = Sock} = State) ->
    [either ||
       Socket <- knet_gen_ssl:connect(Uri, Sock),
       knet_gen:trace(connect, tempus:diff(T), Socket),
-      fmap(State#state{socket = Socket})
+      cats:unit(State#state{socket = Socket})
    ].
 
 %%
 listen(Uri, #state{socket = Sock} = State) ->
    [either ||
       Socket <- knet_gen_ssl:listen(Uri, Sock),
-      fmap(State#state{socket = Socket})
+      cats:unit(State#state{socket = Socket})
    ].
 
 %%
@@ -346,7 +344,7 @@ accept(Uri, #state{so = SOpt} = State) ->
    [either ||
       Socket <- knet_gen_ssl:accept(Uri, Sock),
       knet_gen:trace(connect, tempus:diff(T), Socket),
-      fmap(State#state{socket = Socket})
+      cats:unit(State#state{socket = Socket})
    ].
 
 %%
@@ -355,13 +353,13 @@ handshake(#state{socket = Sock} = State) ->
    [either ||
       Socket <- knet_gen_ssl:handshake(Sock),
       knet_gen:trace(handshake, tempus:diff(T), Socket),
-      fmap(State#state{socket = Socket})
+      cats:unit(State#state{socket = Socket})
    ].
 
 close(_Reason, #state{socket = Sock} = State) ->
    [either ||
       knet_gen_ssl:close(Sock),
-      fmap(State#state{socket = _})
+      cats:unit(State#state{socket = _})
    ].
 
 
@@ -434,8 +432,8 @@ stream_flow_ctrl(_Pipe, #state{flowcrd = N, socket = Sock} = State) ->
 pipe_to_side_a(Pipe, Event, #state{socket = Sock} = State) ->
    [either ||
       knet_gen_ssl:peername(Sock),
-      fmap(pipe:a(Pipe, {ssl, self(), {Event, _}})),
-      fmap(State)
+      cats:unit(pipe:a(Pipe, {ssl, self(), {Event, _}})),
+      cats:unit(State)
    ].
 
 %%
@@ -466,7 +464,7 @@ error_to_side_b(Pipe, Reason, #state{} = State) ->
 stream_send(_Pipe, Pckt, #state{socket = Sock} = State) ->
    [either ||
       knet_gen_ssl:send(Sock, Pckt),
-      fmap(State#state{socket = _})
+      cats:unit(State#state{socket = _})
    ].
 
 %%
@@ -475,7 +473,7 @@ stream_recv(Pipe, Pckt, #state{socket = Sock} = State) ->
       knet_gen:trace(packet, byte_size(Pckt), Sock),
       knet_gen_ssl:recv(Sock, Pckt),
       stream_uplink(Pipe, _, _),
-      fmap(State#state{socket = _})
+      cats:unit(State#state{socket = _})
    ].
 
 stream_uplink(Pipe, Pckt, Socket) ->

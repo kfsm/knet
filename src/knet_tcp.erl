@@ -20,7 +20,6 @@
 -module(knet_tcp).
 -behaviour(pipe).
 -compile({parse_transform, category}).
--compile({parse_transform, monad}).
 
 -include("knet.hrl").
 
@@ -57,7 +56,7 @@ start_link(Opts) ->
 init(SOpt) ->
    [either ||
       knet_gen_tcp:socket(SOpt),
-      fmap('IDLE',
+      cats:unit('IDLE',
          #state{
             socket  = _
            ,flowctl = opts:val(active, SOpt)
@@ -289,13 +288,13 @@ connect(Uri, #state{socket = Sock} = State) ->
    [either ||
       Socket <- knet_gen_tcp:connect(Uri, Sock),
       knet_gen:trace(connect, tempus:diff(T), Socket),
-      fmap(State#state{socket = Socket})
+      cats:unit(State#state{socket = Socket})
    ].
 
 listen(Uri, #state{socket = Sock} = State) ->
    [either ||
       Socket <- knet_gen_tcp:listen(Uri, Sock),
-      fmap(State#state{socket = Socket})
+      cats:unit(State#state{socket = Socket})
    ].
 
 accept(Uri, #state{so = SOpt} = State) ->
@@ -305,13 +304,13 @@ accept(Uri, #state{so = SOpt} = State) ->
    [either ||
       Socket <- knet_gen_tcp:accept(Uri, Sock),
       knet_gen:trace(connect, tempus:diff(T), Socket),
-      fmap(State#state{socket = Socket})
+      cats:unit(State#state{socket = Socket})
    ].
 
 close(_Reason, #state{socket = Sock} = State) ->
    [either ||
       knet_gen_tcp:close(Sock),
-      fmap(State#state{socket = _})
+      cats:unit(State#state{socket = _})
    ].
 
 %%
@@ -378,8 +377,8 @@ stream_flow_ctrl(Pipe, #state{flowctl = _N} = State) ->
 pipe_to_side_a(Pipe, Event, #state{socket = Sock} = State) ->
    [either ||
       knet_gen_tcp:peername(Sock),
-      fmap(pipe:a(Pipe, {tcp, self(), {Event, _}})),
-      fmap(State)
+      cats:unit(pipe:a(Pipe, {tcp, self(), {Event, _}})),
+      cats:unit(State)
    ].
 
 %%
@@ -403,7 +402,7 @@ error_to_side_b(Pipe, Reason, #state{} = State) ->
 stream_send(_Pipe, Pckt, #state{socket = Sock} = State) ->
    [either ||
       knet_gen_tcp:send(Sock, Pckt),
-      fmap(State#state{socket = _})
+      cats:unit(State#state{socket = _})
    ].
 
 %%
@@ -412,7 +411,7 @@ stream_recv(Pipe, Pckt, #state{socket = Sock} = State) ->
       knet_gen:trace(packet, byte_size(Pckt), Sock),
       knet_gen_tcp:recv(Sock, Pckt),
       stream_uplink(Pipe, _, _),
-      fmap(State#state{socket = _})
+      cats:unit(State#state{socket = _})
    ].
 
 stream_uplink(Pipe, Pckt, Socket) ->

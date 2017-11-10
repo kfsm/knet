@@ -58,7 +58,7 @@ setopts(#socket{sock = undefined}, _) ->
 setopts(#socket{sock = Sock} = Socket, Opts) ->
    [either ||
       ssl:setopts(Sock, Opts),
-      fmap(Socket)
+      cats:unit(Socket)
    ].
 
 %%
@@ -76,7 +76,7 @@ peername(#socket{sock = undefined}) ->
 peername(#socket{sock = Sock, peername = undefined}) ->
    [either ||
       ssl_peername(Sock),
-      fmap(uri:authority(_, uri:new(ssl)))
+      cats:unit(uri:authority(_, uri:new(ssl)))
    ];
 peername(#socket{peername = Peername}) ->
    {ok, Peername}.
@@ -94,7 +94,7 @@ peername(Uri, #socket{} = Socket) ->
    {ok, [identity ||
       uri:authority(Uri),
       uri:authority(_, uri:new(ssl)),
-      fmap(Socket#socket{peername = _})
+      cats:unit(Socket#socket{peername = _})
    ]}.
 
 %%
@@ -106,7 +106,7 @@ sockname(#socket{sock = undefined}) ->
 sockname(#socket{sock = Sock, sockname = undefined}) ->
    [either ||
       ssl_sockname(Sock),
-      fmap(uri:authority(_, uri:new(ssl)))
+      cats:unit(uri:authority(_, uri:new(ssl)))
    ];
 sockname(#socket{sockname = Sockname}) ->
    {ok, Sockname}.
@@ -125,7 +125,7 @@ sockname(Uri, #socket{} = Socket) ->
    {ok, [identity ||
       uri:authority(Uri),
       uri:authority(_, uri:new(ssl)),
-      fmap(Socket#socket{sockname = _})
+      cats:unit(Socket#socket{sockname = _})
    ]}.
 
 
@@ -140,7 +140,7 @@ connect(Uri, #socket{so = SOpt} = Socket) ->
       %% Note: ssl crashes with {option, {active, 1024}} if tcp is open with {active, 1024}
       %%       this version uses once for flow control
       gen_tcp:connect(scalar:c(Host), Port, [{active, once} | Opts], so_ttc(SOpt)),
-      fmap(Socket#socket{sock = {tcp, _}}),
+      cats:unit(Socket#socket{sock = {tcp, _}}),
       peername(Uri, _)
    ].
 
@@ -154,7 +154,7 @@ listen(Uri, #socket{so = SOpt} = Socket) ->
    Opts    = lists:keydelete(active, 1, so_tcp(SOpt) ++ so_ssl(SOpt)),
    [either ||
       ssl:listen(Port, [{active, false}, {reuseaddr, true} ,{ciphers, Ciphers} | Opts]),
-      fmap(Socket#socket{sock = _}),
+      cats:unit(Socket#socket{sock = _}),
       sockname(Uri, _),
       peername(Uri, _)  %% @todo: ???
    ].
@@ -166,9 +166,9 @@ listen(Uri, #socket{so = SOpt} = Socket) ->
 accept(Uri, #socket{sock = LSock} = Socket) ->
    [either ||
       ssl:transport_accept(LSock),
-      fmap(Socket#socket{sock = _}),
+      cats:unit(Socket#socket{sock = _}),
       sockname(Uri, _),
-      fmap(_#socket{peername = undefined})
+      cats:unit(_#socket{peername = undefined})
    ].
 
 %%
@@ -179,16 +179,16 @@ handshake(#socket{sock = {tcp, Sock}, so = SOpt} = Socket) ->
    [either ||
       peername(Socket),
       % Server Name Indication requires a host name 
-      % fmap({server_name_indication, scalar:c(uri:host(_))}),
-      fmap({server_name_indication, disable}),
+      % cats:unit({server_name_indication, scalar:c(uri:host(_))}),
+      cats:unit({server_name_indication, disable}),
       ssl:connect(Sock, [_ | so_ssl(SOpt)], so_ttc(SOpt)),
-      fmap(Socket#socket{sock = _})
+      cats:unit(Socket#socket{sock = _})
    ];
 
 handshake(#socket{sock = Sock} = Socket) ->
    [either ||
       ssl:ssl_accept(Sock),
-      fmap(Socket)
+      cats:unit(Socket)
    ].
 
 
@@ -200,7 +200,7 @@ send(#socket{sock = Sock, eg = Stream0} = Socket, Data) ->
    {Pckt, Stream1} = pstream:encode(Data, Stream0),
    [either ||
       either_send(Sock, Pckt),
-      fmap(Socket#socket{eg = Stream1})
+      cats:unit(Socket#socket{eg = Stream1})
    ].
 
 either_send(_Sock, []) ->

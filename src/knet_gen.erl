@@ -24,6 +24,6 @@ trace(Key, Value, #socket{family = Family, tracelog = Pid} = Socket) ->
    [either ||
       Peer <- Family:peername(Socket),
       Addr <- Family:sockname(Socket),
-      pipe:send(Pid, #{t => os:timestamp(), peer => Peer, addr => Addr, key => Key, value => Value}),
-      fmap(Socket)
+      pipe:send(Pid, {trace, self(), #{t => os:timestamp(), peer => Peer, addr => Addr, key => Key, value => Value}}),
+      cats:unit(Socket)
    ].   

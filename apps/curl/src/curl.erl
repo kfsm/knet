@@ -26,13 +26,16 @@ x(Mthd, Url, Payload) ->
 x(Mthd, Url, Head, Payload) ->
    [either ||
       Sock <- knet:socket(Url, [{active, true}]),
-      knet:send(Sock, {Mthd, uri:new(Url), [{<<"Connection">>, <<"close">>} | Head]}),
-      knet:send(Sock, Payload),
-      knet:send(Sock, eof),
-      Data <- fmap(stream:list(knet:stream(Sock))),
+      Data <- cats:unit([either ||
+         knet:send(Sock, {Mthd, uri:new(Url), [{<<"Connection">>, <<"close">>} | Head]}),
+         knet:send(Sock, Payload),
+         knet:send(Sock, eof),
+         cats:unit(stream:list(knet:stream(Sock)))
+      ]),
       knet:close(Sock),
-      fmap(Data)
+      cats:flatten(Data)
    ].
+
 
 %%
 %% run the http requests in loops

@@ -88,7 +88,7 @@ start_link(Opts) ->
 init(SOpt) ->
    [either ||
       knet_gen_http:socket(SOpt),
-      fmap('IDLE',
+      cats:unit('IDLE',
          #fsm{
             socket   = _
            ,queue    = q:new()
