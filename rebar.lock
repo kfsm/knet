@@ -1,0 +1,30 @@
+{"1.1.0",
+[{<<"datum">>,
+  {git,"https://github.com/fogfish/datum",
+       {ref,"55476ac8c9ed4522bfc9aa8091212e99fc905bcb"}},
+  0},
+ {<<"feta">>,
+  {git,"https://github.com/fogfish/feta",
+       {ref,"07bb63115de4f2369f54bacc8e7ff10b8f79cc41"}},
+  0},
+ {<<"goldrush">>,{pkg,<<"goldrush">>,<<"0.1.9">>},1},
+ {<<"htstream">>,
+  {git,"https://github.com/kfsm/htstream",
+       {ref,"003c5c5324df8a1bef7f44b765c7b3b91fe58c58"}},
+  0},
+ {<<"lager">>,{pkg,<<"lager">>,<<"3.5.1">>},0},
+ {<<"meck">>,{pkg,<<"meck">>,<<"0.8.8">>},0},
+ {<<"pipe">>,
+  {git,"https://github.com/kfsm/pipe",
+       {ref,"a091f919659818cfe37e2d8c5d44d73962322ab9"}},
+  0},
+ {<<"pns">>,
+  {git,"https://github.com/fogfish/pns",
+       {ref,"92bfcf925064227dad32568ec84172e9321ca761"}},
+  0}]}.
+[
+{pkg_hash,[
+ {<<"goldrush">>, <<"F06E5D5F1277DA5C413E84D5A2924174182FB108DABB39D5EC548B27424CD106">>},
+ {<<"lager">>, <<"63897A61AF646C59BB928FEE9756CE8BDD02D5A1A2F3551D4A5E38386C2CC071">>},
+ {<<"meck">>, <<"EEB3EFE811D4346E1A7F65B2738ABC2AD73CBE1A2C91B5DD909BAC2EA0414FA6">>}]}
+].
