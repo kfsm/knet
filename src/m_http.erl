@@ -19,7 +19,6 @@
 %%   IO-monad: http 
 -module(m_http).
 -compile({parse_transform, category}).
--compile({parse_transform, monad}).
 
 -include("knet.hrl").
 -include_lib("datum/include/datum.hrl").
@@ -269,8 +268,8 @@ recv(Sock, Timeout) ->
          [$? || recv(Sock, Timeout), join(Http, _)];
       {http, Sock, Pckt} ->
          [$? || recv(Sock, Timeout), join(Pckt, _)];
-      {http, _, _} = Http ->
-         ?WARNING("k [http]: unexpected message: ~p~n", [Http]),
+      {http, _, _} ->
+         % ?WARNING("k [http]: unexpected message: ~p~n", [Http]),
          recv(Sock, Timeout);
       {ioctl, _, _} ->
          recv(Sock, Timeout);

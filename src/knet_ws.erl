@@ -62,11 +62,11 @@ start_link(Req, Opts) ->
    pipe:start_link(?MODULE, [Req, Opts], []).
 
 %%
-init([{_Mthd, Url, _Head, Env}, Opts]) ->
+init([{_Mthd, Url, Head}, Opts]) ->
    %% protocol fsm is created by protocol upgrade
    {ok, 'ESTABLISHED',
       #fsm{
-         stream  = ws_new(server, Url, Env, Opts)
+         stream  = ws_new(server, Url, Head, Opts)
       }
    };
 
@@ -83,24 +83,23 @@ free(_, _) ->
    ok.
 
 %%
-ioctl({upgrade, {_Mthd, _Uri, Head, _Env}=Req, SOpt}, undefined) ->
+ioctl({upgrade, {_Mthd, _Uri, Head}=Req, SOpt}, undefined) ->
    %% web socket upgrade request
-   <<"Upgrade">>   = pair:lookup('Connection', Head),
-   <<"websocket">> = pair:lookup('Upgrade',    Head),
-   Key  = pair:lookup(<<"Sec-Websocket-Key">>, Head),
+   <<"Upgrade">>   = lens:get(lens:pair(<<"Connection">>), Head),
+   <<"websocket">> = lens:get(lens:pair(<<"Upgrade">>), Head),
+   Key  = lens:get(lens:pair(<<"Sec-Websocket-Key">>), Head),
    Hash = base64:encode(crypto:hash(sha, <<Key/binary, ?WS_GUID>>)),
    {Msg, _} = htstream:encode(
-      {101
-        ,[
-            {'Upgrade',  <<"websocket">>}
-           ,{'Connection', <<"Upgrade">>}
+      {101, <<"Switching Protocols">>,
+         [
+            {<<"Upgrade">>,    <<"websocket">>}
+           ,{<<"Connection">>, <<"Upgrade">>}
            ,{<<"Sec-WebSocket-Accept">>, Hash}
          ]
-        ,<<>>
       },
       htstream:new()
    ),
-   {Msg, {upgrade, ?MODULE, [Req, SOpt]}};
+   {{packet, Msg}, {upgrade, ?MODULE, [Req, SOpt]}};
 
 ioctl(_, _) ->
    throw(not_implemented).
@@ -130,10 +129,11 @@ ioctl(_, _) ->
    % TODO: htstream support HTTP/1.2 (see http://www.jmarshall.com/easy/http/)
    pipe:b(Pipe, {connect, Uri}),
    Hash = base64:encode(crypto:hash(md5, scalar:s(rand:uniform(16#ffff)))),
+   {Host, Port} = uri:authority(Uri),
    Req  = {'GET', Uri, [
-      {'Connection',      <<"Upgrade">>}
-     ,{'Upgrade',       <<"websocket">>}
-     ,{'Host',        uri:authority(Uri)}
+      {<<"Connection">>,      <<"Upgrade">>}
+     ,{<<"Upgrade">>,       <<"websocket">>}
+     ,{<<"Host">>,          <<(scalar:s(Host))/binary, $:, (scalar:s(Port))/binary>>}
      ,{<<"Sec-WebSocket-Key">>,     Hash}
      ,{<<"Sec-WebSocket-Version">>, ?VSN}
    ]},
@@ -201,9 +201,14 @@ ioctl(_, _) ->
  when ?is_transport(Prot) ->
    {next_state, 'CLIENT', State};
 
-'CLIENT'({Prot, _Sock, {terminated, Reason}}, Pipe, State)
+'CLIENT'({Prot, _Sock, eof}, Pipe, State)
  when ?is_transport(Prot) ->
-   pipe:a(Pipe, {ws, self(), {terminated, Reason}}),
+   pipe:a(Pipe, {ws, self(), eof}),
+   {stop, normal, State};
+
+'CLIENT'({Prot, _Sock, {error, _} = Error}, Pipe, State)
+ when ?is_transport(Prot) ->
+   pipe:a(Pipe, {ws, self(), Error}),
    {stop, normal, State};
 
 %%
@@ -213,17 +218,17 @@ ioctl(_, _) ->
    try
       case htstream:decode(Pckt, Stream#stream.recv) of
          {{101, Msg, Head}, Http} ->
-            <<"Upgrade">>   = pair:lookup('Connection', Head),
-            <<"websocket">> = pair:lookup('Upgrade',    Head),
-            pipe:b(Pipe, {ws, self(), {101, Msg, Head, []}}),
+            <<"Upgrade">>   = lens:get(lens:pair(<<"Connection">>), Head),
+            <<"websocket">> = lens:get(lens:pair(<<"Upgrade">>), Head),
+            pipe:b(Pipe, {ws, self(), {101, Msg, Head}}),
             'ESTABLISHED'({Prot, Sock, htstream:buffer(Http)}, Pipe, 
                State#fsm{stream = ws_new(server, Stream#stream.peer, [])});
          {[], Http} ->
             {next_state, 'CLIENT', State#fsm{stream = Stream#stream{recv = Http}}}
       end
    catch _:Reason ->
-      ?NOTICE("knet [ws]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
-      pipe:b(Pipe, {ws, self(), {terminated, Reason}}),
+      % ?NOTICE("knet [ws]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
+      pipe:b(Pipe, {ws, self(), {error, Reason}}),
       {stop, Reason, State}
    end;
 
@@ -238,8 +243,8 @@ ioctl(_, _) ->
       pipe:b(Pipe, Pckt),
       {next_state, 'CLIENT', State#fsm{stream = Stream#stream{send = Send}}}
    catch _:Reason ->
-      ?NOTICE("knet [ws]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
-      pipe:b(Pipe, {ws, self(), {terminated, Reason}}),
+      % ?NOTICE("knet [ws]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
+      pipe:b(Pipe, {ws, self(), {error, Reason}}),
       {stop, Reason, State}
    end.
 
@@ -253,9 +258,14 @@ ioctl(_, _) ->
 'ESTABLISHED'({sidedown, _, _}, _, State) ->
    {stop, normal, State};
 
-'ESTABLISHED'({Prot, _, {terminated, Reason}}, Pipe, State)
+'ESTABLISHED'({Prot, _, eof}, Pipe, State)
  when ?is_transport(Prot) ->
-   pipe:b(Pipe, {ws, self(), {terminated, Reason}}),
+   pipe:b(Pipe, {ws, self(), eof}),
+   {stop, normal, State};
+
+'ESTABLISHED'({Prot, _, {error, _} = Error}, Pipe, State)
+ when ?is_transport(Prot) ->
+   pipe:b(Pipe, {ws, self(), Error}),
    {stop, normal, State};
 
 %%
@@ -264,7 +274,7 @@ ioctl(_, _) ->
  when ?is_transport(Prot), is_binary(Pckt) ->
    case ws_recv(Pckt, Pipe, State#fsm.stream) of
       {eof, Stream} ->
-         pipe:b(Pipe, {ws, self(), {terminated, normal}}),
+         pipe:b(Pipe, {ws, self(), eof}),
          {stop, normal, State#fsm{stream=Stream}};
       {_,   Stream} ->
          {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
@@ -272,8 +282,7 @@ ioctl(_, _) ->
 
 %%
 %% local peer message
-'ESTABLISHED'(Msg, Pipe, State)
- when ?is_iolist(Msg) ->
+'ESTABLISHED'({packet, Msg}, Pipe, State) ->
    case ws_send(Msg, Pipe, State#fsm.stream) of
       {eof, Stream} ->
          {stop, normal, State#fsm{stream=Stream}};
@@ -299,7 +308,7 @@ ws_new(Type, Url, _SOpt) ->
      ,peer = Url
    }.
 
-ws_new(Type, Url, _Env, _SOpt) ->
+ws_new(Type, Url, _Head, _SOpt) ->
    #stream{
       send = wsstream:new(Type)
      ,recv = wsstream:new(Type)
@@ -312,7 +321,7 @@ ws_new(Type, Url, _Env, _SOpt) ->
 %%
 %% web socket recv message
 ws_recv(Pckt, Pipe, #stream{}=Ws) ->
-   ?DEBUG("knet [websock] ~p: recv ~p~n~p", [self(), Ws#stream.peer, Pckt]),
+   % ?DEBUG("knet [websock] ~p: recv ~p~n~p", [self(), Ws#stream.peer, Pckt]),
    {Msg, Recv} = wsstream:decode(Pckt, Ws#stream.recv),
    lists:foreach(fun(X) -> pipe:b(Pipe, {ws, self(), X}) end, Msg),
    {wsstream:state(Recv), Ws#stream{recv=Recv}}.
@@ -320,9 +329,9 @@ ws_recv(Pckt, Pipe, #stream{}=Ws) ->
 %%
 %% web socket send message
 ws_send(Msg, Pipe, #stream{}=Ws) ->
-   ?DEBUG("knet [websock] ~p: send ~p~n~p", [self(), Ws#stream.peer, Msg]),
+   % ?DEBUG("knet [websock] ~p: send ~p~n~p", [self(), Ws#stream.peer, Msg]),
    {Pckt, Send} = wsstream:encode(Msg, Ws#stream.send),
-   lists:foreach(fun(X) -> pipe:b(Pipe, X) end, Pckt),
+   lists:foreach(fun(X) -> pipe:b(Pipe, {packet, X}) end, Pckt),
    {wsstream:state(Send), Ws#stream{send=Send}}.
 
 %%
@@ -335,7 +344,7 @@ ht_new(Url, _SOpt) ->
    }.
 
 ht_recv(Pckt, Pipe, #stream{}=Ht) ->
-   ?DEBUG("knet [websock] ~p: recv ~p~n~p", [self(), Ht#stream.peer, Pckt]),
+   % ?DEBUG("knet [websock] ~p: recv ~p~n~p", [self(), Ht#stream.peer, Pckt]),
    case htstream:decode(Pckt, Ht#stream.recv) of
       %% continue request streaming
       {[], Recv} ->
@@ -343,16 +352,16 @@ ht_recv(Pckt, Pipe, #stream{}=Ht) ->
 
       %% GET Request
       {{'GET', Url, Head}, _Recv} ->
-         <<"Upgrade">>   = pair:lookup('Connection', Head),
-         <<"websocket">> = pair:lookup('Upgrade',    Head),
-         Key  = pair:lookup(<<"Sec-Websocket-Key">>, Head),
+         <<"Upgrade">>   = lens:get(lens:pair(<<"Connection">>), Head),
+         <<"websocket">> = lens:get(lens:pair(<<"Upgrade">>), Head),
+         Key  = lens:get(lens:pair(<<"Sec-Websocket-Key">>), Head),
          Hash = base64:encode(crypto:hash(sha, <<Key/binary, ?WS_GUID>>)),
          {Msg, _} = htstream:encode(
             {101, [{'Upgrade', <<"websocket">>}, {'Connection', <<"Upgrade">>}, {<<"Sec-WebSocket-Accept">>, Hash}], <<>>},
             htstream:new()
          ),
          pipe:a(Pipe, Msg),
-         pipe:b(Pipe, {ws, self(), {'GET', Url, Head, []}}), %% @todo env
+         pipe:b(Pipe, {ws, self(), {'GET', Url, Head}}),
          {upgrade, ws_new(server, Url, [])};
 
       %% ANY Request

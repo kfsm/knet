@@ -8,16 +8,16 @@
 -export([
    socket/1,
    close/1,
-   setopts/2, %% *
+   setopts/2, 
    peername/1,
    sockname/1,
    connect/2,
-   listen/2, %% *
-   accept/2, %% *
+   listen/2,
+   accept/2, 
    send/2,
    recv/1,
    recv/2,
-   getstat/2 %% *
+   getstat/2
 ]).
 
 %%
@@ -27,9 +27,11 @@
 socket(SOpt) ->
    {ok,
       #socket{
-         in = pstream:new(opts:val(stream, raw, SOpt)),
-         eg = pstream:new(opts:val(stream, raw, SOpt)),
-         so = SOpt 
+         family   = ?MODULE,
+         in       = pstream:new(opts:val(stream, raw, SOpt)),
+         eg       = pstream:new(opts:val(stream, raw, SOpt)),
+         so       = SOpt,
+         tracelog = opts:val(tracelog, undefined, SOpt)
       }
    }.
 
@@ -53,9 +55,9 @@ close(#socket{sock = Sock, so = SOpt}) ->
 setopts(#socket{sock = undefined}, _) ->
    {error, enotconn};
 setopts(#socket{sock = Sock} = Socket, Opts) ->
-   [$^ ||
+   [either ||
       inet:setopts(Sock, Opts),
-      fmap(Socket)
+      cats:unit(Socket)
    ].
 
 %%
@@ -70,9 +72,9 @@ so_ttc(SOpt) -> lens:get(lens:c(lens:pair(timeout, []), lens:pair(ttc, ?SO_TIMEO
 peername(#socket{sock = undefined}) ->
    {error, enotconn};
 peername(#socket{sock = Sock, peername = undefined}) ->
-   [$^ ||
+   [either ||
       inet:peername(Sock),
-      fmap(uri:authority(_, uri:new(tcp)))
+      cats:unit(uri:authority(_, uri:new(tcp)))
    ];
 peername(#socket{peername = Peername}) ->
    {ok, Peername}.
@@ -82,10 +84,10 @@ peername(#socket{peername = Peername}) ->
 -spec peername(uri:uri(), #socket{}) -> {ok, #socket{}} | {error, _}.
 
 peername(Uri, #socket{} = Socket) ->
-   {ok, [$. ||
+   {ok, [identity ||
       uri:authority(Uri),
       uri:authority(_, uri:new(tcp)),
-      fmap(Socket#socket{peername = _})
+      cats:unit(Socket#socket{peername = _})
    ]}.
 
 %%
@@ -95,9 +97,9 @@ peername(Uri, #socket{} = Socket) ->
 sockname(#socket{sock = undefined}) ->
    {error, enotconn};
 sockname(#socket{sock = Sock, sockname = undefined}) ->
-   [$^ ||
+   [either ||
       inet:sockname(Sock),
-      fmap(uri:authority(_, uri:new(tcp)))
+      cats:unit(uri:authority(_, uri:new(tcp)))
    ];
 sockname(#socket{sockname = Sockname}) ->
    {ok, Sockname}.
@@ -107,10 +109,10 @@ sockname(#socket{sockname = Sockname}) ->
 -spec sockname(uri:uri(), #socket{}) -> {ok, #socket{}} | {error, _}.
 
 sockname(Uri, #socket{} = Socket) ->
-   {ok, [$. ||
+   {ok, [identity ||
       uri:authority(Uri),
       uri:authority(_, uri:new(tcp)),
-      fmap(Socket#socket{sockname = _})
+      cats:unit(Socket#socket{sockname = _})
    ]}.
 
 
@@ -120,9 +122,9 @@ sockname(Uri, #socket{} = Socket) ->
 
 connect(Uri, #socket{so = SOpt} = Socket) ->
    {Host, Port} = uri:authority(Uri),
-   [$^ ||
+   [either ||
       gen_tcp:connect(scalar:c(Host), Port, so_tcp(SOpt), so_ttc(SOpt)),
-      fmap(Socket#socket{sock = _}),
+      cats:unit(Socket#socket{sock = _}),
       peername(Uri, _)
    ].
 
@@ -133,11 +135,11 @@ connect(Uri, #socket{so = SOpt} = Socket) ->
 listen(Uri, #socket{so = SOpt} = Socket) ->
    {_Host, Port} = uri:authority(Uri),
    Opts = lists:keydelete(active, 1, so_tcp(SOpt)),
-   [$^ ||
+   [either ||
       gen_tcp:listen(Port, [{active, false}, {reuseaddr, true} | Opts]),
-      fmap(Socket#socket{sock = _}),
+      cats:unit(Socket#socket{sock = _}),
       sockname(Uri, _),
-      peername(Uri, _)  %% @todo: ???
+      peername(Uri, _)  %% peername = sockname in-case of listen socket
    ].
 
 %%
@@ -145,11 +147,11 @@ listen(Uri, #socket{so = SOpt} = Socket) ->
 -spec accept(uri:uri(), #socket{}) -> {ok, #socket{}} | {error, _}.
 
 accept(Uri, #socket{sock = LSock} = Socket) ->
-   [$^ ||
+   [either ||
       gen_tcp:accept(LSock),
-      fmap(Socket#socket{sock = _}),
+      cats:unit(Socket#socket{sock = _}),
       sockname(Uri, _),
-      fmap(_#socket{peername = undefined})
+      cats:unit(_#socket{peername = undefined})
    ].
 
 
@@ -159,15 +161,15 @@ accept(Uri, #socket{sock = LSock} = Socket) ->
 
 send(#socket{sock = Sock, eg = Stream0} = Socket, Data) ->
    {Pckt, Stream1} = pstream:encode(Data, Stream0),
-   [$^ ||
+   [either ||
       either_send(Sock, Pckt),
-      fmap(Socket#socket{eg = Stream1})
+      cats:unit(Socket#socket{eg = Stream1})
    ].
 
 either_send(_Sock, []) ->
    ok;
 either_send(Sock, [Pckt|Tail]) ->
-   [$^ ||
+   [either ||
       gen_tcp:send(Sock, Pckt),
       either_send(Sock, Tail)
    ].
@@ -178,7 +180,7 @@ either_send(Sock, [Pckt|Tail]) ->
 -spec recv(#socket{}, _) -> {ok, [binary()], #socket{}} | {error, _}.
 
 recv(#socket{sock = Sock} = Socket) ->
-   [$^ ||
+   [either ||
       gen_tcp:recv(Sock, 0),
       recv(Socket, _)
    ].

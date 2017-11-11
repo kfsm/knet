@@ -16,7 +16,10 @@
 %%   limitations under the License.
 %%
 -module(knet).
+
+-compile({parse_transform, category}).
 -include("knet.hrl").
+
 
 -export([start/0]).
 -export([
@@ -33,7 +36,15 @@
   ,recv/2
   ,recv/3
   ,send/2
+  ,ioctl/2
+  ,stream/1
+  ,stream/2
 ]).
+
+%%
+%% common types
+-type uri()    :: uri:uri() | binary() | list().
+-type opts()   :: [_]. 
 
 %%%------------------------------------------------------------------
 %%%
@@ -56,47 +67,38 @@ start() ->
 %%  Options tcp
 %%    {backlog, integer()} - defines length of acceptor pool (see also tcp backlog)
 %%
--spec socket(any()) -> pid().
--spec socket(any(), any()) -> pid().
+-spec socket(uri()) -> datum:either(pid()).
+-spec socket(uri(), opts()) -> datum:either(pid()).
 
-socket({uri, udp,  _}, Opts) ->
-   {ok, A} = supervisor:start_child(knet_udp_sup,  [Opts]),
-   create([A], Opts);
-socket({uri, tcp,  _}, Opts) ->
-   {ok, A} = supervisor:start_child(knet_tcp_sup,  [Opts]),
-   create([A], Opts);
-socket({uri, ssl,  _}, Opts) ->
-   {ok, A} = supervisor:start_child(knet_ssl_sup,  [Opts]),
-   create([A], Opts);
-socket({uri, http, _}, Opts) ->
-   {ok, A} = supervisor:start_child(knet_tcp_sup,  [Opts]),
-   {ok, B} = supervisor:start_child(knet_http_sup, [Opts]),
-   create([B, A], Opts);
-socket({uri, https,_}, Opts) ->
-   {ok, A} = supervisor:start_child(knet_ssl_sup,  [Opts]),
-   {ok, B} = supervisor:start_child(knet_http_sup, [Opts]),
-   create([B, A], Opts);
-socket({uri, ws, _}, Opts) ->
-   {ok, A} = supervisor:start_child(knet_tcp_sup,  [Opts]),
-   {ok, B} = supervisor:start_child(knet_ws_sup,   [Opts]),
-   create([B, A], Opts);
-socket({uri, wss,_}, Opts) ->
-   {ok, A} = supervisor:start_child(knet_ssl_sup,  [Opts]),
-   {ok, B} = supervisor:start_child(knet_ws_sup,   [Opts]),
-   create([B, A], Opts);
+socket({uri, Schema, _}, Opts) ->
+   [either ||
+      cats:sequence([supervisor:start_child(X, [Opts]) || X <- stack(Schema)]),
+      create(_, Opts)
+   ];
+
 socket(Url, Opts) ->
    socket(uri:new(Url), Opts).
 
 socket(Url) ->
    socket(uri:new(Url), []).
 
+%%
+stack(udp)   -> [knet_udp_sup];
+stack(tcp)   -> [knet_tcp_sup];
+stack(ssl)   -> [knet_ssl_sup];
+stack(http)  -> [knet_http_sup, knet_tcp_sup];
+stack(https) -> [knet_http_sup, knet_ssl_sup];
+stack(ws)    -> [knet_ws_sup, knet_tcp_sup];
+stack(wss)   -> [knet_ws_sup, knet_ssl_sup].
+
+%%
 create(Stack, Opts) ->
    case opts:get(nopipe, false, Opts) of
       nopipe ->
-         pipe:make(Stack);
+         {ok, pipe:make(Stack)};
       _      ->
          pipe:make([self()|Stack]),
-         hd(Stack)
+         {ok, hd(Stack)}
    end.
 
 %%
@@ -104,7 +106,7 @@ create(Stack, Opts) ->
 %%
 %% Options:
 %%   {acceptor,      atom() | pid()} - acceptor module/factory
--spec listen(any(), any()) -> pid().
+-spec listen(uri(), opts()) -> datum:either(pid()).
 
 listen({uri, _, _}=Uri, Opts)
  when is_list(Opts) ->
@@ -120,9 +122,9 @@ listen({uri, _, _}=Uri, Opts)
       _ ->
          Opts
    end,
-   Sock = socket(Uri, SOpt),
+   {ok, Sock} = socket(Uri, SOpt),
    _    = pipe:send(Sock, {listen, Uri}),
-   Sock;
+   {ok, Sock};
 
 listen({uri, _, _}=Uri, Fun)
  when is_function(Fun, 1) ->
@@ -137,7 +139,7 @@ listen(Uri, Opts)
 -spec acceptor(function(), uri:uri(), list()) -> {ok, pid()} | {error, any()}.
 
 acceptor(Fun, Uri, Opts) ->
-   Fun1 = fun(bind) -> bind(Uri, Opts), Fun end,
+   Fun1 = fun(bind) -> {ok, _} = bind(Uri, Opts), Fun end,
    Pid  = pipe:spawn_link(Fun1),
    pipe:send(Pid, bind),
    {ok, Pid}.
@@ -147,13 +149,13 @@ acceptor(Fun, Uri, Opts) ->
 %% 
 %% Options:
 %%    nopipe 
--spec bind(any()) -> pid().
--spec bind(any(), any()) -> pid().
+-spec bind(uri()) -> datum:either(pid()).
+-spec bind(uri(), opts()) -> datum:either(pid()).
 
 bind({uri, _, _}=Uri, Opts) ->
-   Sock = socket(Uri, [X || X <- Opts, X /= nopipe]),
+   {ok, Sock} = socket(Uri, [X || X <- Opts, X /= nopipe]),
    _    = pipe:send(Sock, {accept, Uri}),
-   Sock;
+   {ok, Sock};
 
 bind(Url, Opts) ->
    bind(uri:new(Url), Opts).
@@ -165,13 +167,17 @@ bind(Url) ->
 %%
 %% connect socket to remote peer
 %%  Options
--spec connect(any()) -> {ok, pid()} | {error, any()}.
--spec connect(any(), any()) -> {ok, pid()} | {error, any()}.
+-spec connect(uri()) -> datum:either(pid()).
+-spec connect(uri(), opts()) -> datum:either(pid()).
 
 connect({uri, _, _}=Uri, Opts) ->
-   Sock = socket(Uri, Opts),
-   _ = pipe:send(Sock, {connect, Uri}),
-   Sock;
+   [either ||
+      socket(Uri, Opts),
+      knet:ioctl(_, {connect, Uri})
+   ];
+   % {ok, Sock} = ,
+   % _ = pipe:send(Sock, ),
+   % {ok, Sock};
 
 connect(Url, Opts) ->
    connect(uri:new(Url), Opts).
@@ -186,6 +192,7 @@ connect(Url) ->
 
 close(Sock) ->
    pipe:free(Sock).
+
 
 %%
 %% receive data from socket
@@ -203,8 +210,61 @@ recv(Sock, Timeout, Opts) ->
    pipe:recv(Sock, Timeout, Opts).
 
 %%
-%% send data to socket
--spec send(pid(), binary()) -> ok.
+%% send data to socket (synchronous)
+-spec send(pid(), _) -> datum:either(pid()).
+
+send(Sock, Pckt)
+ when is_binary(Pckt) ->
+   send(Sock, {packet, Pckt});
+
+send(Sock, [Head | Tail]) ->
+   case send(Sock, Head) of
+      ok ->
+         send(Sock, Tail);
+      {error, _} = Error ->
+         Error
+   end;
+
+send(_Sock, []) ->
+   ok;
 
 send(Sock, Pckt) ->
-   pipe:send(Sock, Pckt).
+   pipe:call(Sock, Pckt, infinity).
+
+%%
+%% send control message to socket (asynchronous)
+-spec ioctl(pid(), _) -> datum:either(pid()).
+
+ioctl(Sock, Msg) ->
+   _ = pipe:send(Sock, Msg),
+   {ok, Sock}.
+
+%%
+%% build 
+-spec stream(pid()) -> datum:stream().
+-spec stream(pid(), timeout()) -> datum:stream().
+
+stream(Sock) ->
+   stream(Sock, infinity).
+
+stream(Sock, Timeout) ->
+   case knet:recv(Sock, Timeout) of
+      {ioctl, _, _} ->
+         stream(Sock, Timeout);
+
+      {trace, Sock, _} ->
+         stream(Sock, Timeout);
+
+      {_, Sock, passive} ->
+         knet:ioctl(Sock, {active, 1024}),
+         stream(Sock, Timeout);
+
+      {_, Sock, eof} ->
+         stream:new(eof);
+
+      {_, Sock, {error, _} = Error} ->
+         stream:new(Error);
+
+      {_, _, Pckt} ->
+         stream:new(Pckt, fun() -> stream(Sock, Timeout) end)
+   end.

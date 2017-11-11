@@ -41,13 +41,13 @@
 ]).
 
 %%
-%%
+%% @todo: rename to state
 -record(fsm, {
    socket   = undefined :: #socket{}    %% http i/o streams
   ,queue    = undefined :: datum:q()    %% queue of in-flight request
-  ,trace    = undefined :: pid()        %% knet stats function
-  ,label    = undefined :: _            %% custom label for knet stats  
-  ,shutdown = false     :: false | true %%  
+  ,trace %% @todo: deprecated
+  ,label %% @todo: deprecated
+  ,shutdown = undefined :: false | true %%  
 }).
 
 %%
@@ -85,15 +85,17 @@
 start_link(Opts) ->
    pipe:start_link(?MODULE, Opts ++ ?SO_HTTP, []).
 
-init(Opts) ->
-   {ok, 'IDLE', 
-      #fsm{
-         socket  = gen_http_socket(Opts)
-        ,queue   = q:new()
-        ,trace   = opts:val(trace, undefined, Opts)
-        ,label   = opts:val(label, undefined, Opts)
-      }
-   }.
+init(SOpt) ->
+   [either ||
+      knet_gen_http:socket(SOpt),
+      cats:unit('IDLE',
+         #fsm{
+            socket   = _
+           ,queue    = q:new()
+           ,shutdown = opts:val(shutdown, false, SOpt)
+         }
+      )
+   ].
 
 %%
 %%
@@ -119,16 +121,24 @@ ioctl(_, _) ->
    pipe:b(Pipe, {accept, Uri}),
    {next_state, 'STREAM', State#fsm{shutdown = true}};
 
-'IDLE'({connect, Uri}, Pipe, State) ->
+'IDLE'({connect, {uri, _, _} = Uri}, Pipe, State) ->
    % connect is compatibility wrapper for knet socket interface (translated to http GET request)
    % @todo: htstream support HTTP/1.2 (see http://www.jmarshall.com/easy/http/)
-   'IDLE'({'GET', Uri, [{'Connection', <<"keep-alive">>}]}, Pipe, State);
+   pipe:b(Pipe, {connect, Uri}),
+   {next_state, 'STREAM',
+      lists:foldl(
+         fun(X, Acc) ->
+            lens:get(lens:t3(), 'STREAM'(X, Pipe, Acc))
+         end,
+         State,
+         [
+            {'GET', Uri, [{<<"Connection">>, <<"keep-alive">>}]},
+            eof
+         ]
+      )
+   };
 
 'IDLE'({_Mthd, {uri, _, _}=Uri, _Head}=Req, Pipe, State) ->
-   pipe:b(Pipe, {connect, Uri}),
-   'STREAM'(Req, Pipe, State);
-
-'IDLE'({_Mthd, {uri, _, _}=Uri, _Head, _Msg}=Req, Pipe, State) ->
    pipe:b(Pipe, {connect, Uri}),
    'STREAM'(Req, Pipe, State);
 
@@ -156,20 +166,38 @@ ioctl(_, _) ->
    {stop, normal, State};
 
 %%
-%% peer connection
-'STREAM'({Prot, _, {established, Peer}}, _Pipe, #fsm{} = State)
- when ?is_transport(Prot) ->   
-   [$. ||
-      lens:apply(lens:tuple(#fsm.queue), fun queue_config_treq/1, State),
-      lens:put(lens_socket_peername(), Peer, _),
-      fmap({next_state, 'STREAM', _})
-   ];
+%%
+'STREAM'({active, _} = FlowCtrl, Pipe, State) ->
+   pipe:b(Pipe, FlowCtrl),
+   pipe:ack(Pipe, ok),
+   {next_state, 'STREAM', State};
 
-'STREAM'({Prot, _, {terminated, _}}, Pipe, #fsm{shutdown = true} = State)
+'STREAM'({Prot, _, passive}, Pipe, State)
+ when ?is_transport(Prot) ->
+   pipe:b(Pipe, {http, self(), passive}),
+   {next_state, 'STREAM', State};
+
+%%
+%% peer connection
+'STREAM'({Prot, _, {established, Peer}}, _Pipe, #fsm{socket = Sock0, queue = Q0} = State)
+ when ?is_transport(Prot) ->
+   {ok, Sock1} = knet_gen_http:peername(Peer, Sock0),
+   Q1 = q:map(fun(Req) -> Req#req{treq = os:timestamp()} end, Q0),
+   {next_state, 'STREAM', State#fsm{socket = Sock1, queue = Q1}};
+
+'STREAM'({Prot, _, eof}, Pipe, #fsm{shutdown = true} = State)
  when ?is_transport(Prot) ->
    {stop, normal, stream_reset(Pipe, State)};
 
-'STREAM'({Prot, _, {terminated, _}}, Pipe, #fsm{} = State)
+'STREAM'({Prot, _, eof}, Pipe, #fsm{} = State)
+ when ?is_transport(Prot) ->
+   {next_state, 'IDLE', stream_reset(Pipe, State)};
+
+'STREAM'({Prot, _, {error, _}}, Pipe, #fsm{shutdown = true} = State)
+ when ?is_transport(Prot) ->
+   {stop, normal, stream_reset(Pipe, State)};
+
+'STREAM'({Prot, _, {error, _}}, Pipe, #fsm{} = State)
  when ?is_transport(Prot) ->
    {next_state, 'IDLE', stream_reset(Pipe, State)};
 
@@ -190,19 +218,37 @@ ioctl(_, _) ->
          State1 ->
             {next_state, 'STREAM', State1}
       end
-   catch _:Reason ->
-      ?NOTICE("knet [http]: ingress failure ~p ~p", [Reason, erlang:get_stacktrace()]),
+   catch _:_Reason ->
+      % ?NOTICE("knet [http]: ingress failure ~p ~p", [Reason, erlang:get_stacktrace()]),
       {next_state, 'IDLE', stream_reset(Pipe, State0)}
    end;
 
 %%
 %% egress message
-'STREAM'(Msg, Pipe, State) ->
+'STREAM'({Mthd, _, _} = Request, Pipe, State)
+ when is_atom(Mthd) ->
+   http_stream_send(Request, Pipe, State);
+
+'STREAM'({Code, _, _} = Response, Pipe, State)
+ when is_integer(Code) ->
+   http_stream_send(Response, Pipe, State);
+
+'STREAM'(eof, Pipe, State) ->
+   http_stream_send(eof, Pipe, State);
+
+'STREAM'({packet, Pckt}, Pipe, State) ->
+   http_stream_send(Pckt, Pipe, State).
+
+%%
+http_stream_send(Msg, Pipe, State0) ->
    try
-      {next_state, 'STREAM', http_send(Msg, Pipe, State)}
+      State1 = http_send(Msg, Pipe, State0),
+      pipe:ack(Pipe, ok),
+      {next_state, 'STREAM', State1}
    catch _:Reason ->
-      ?NOTICE("knet [http]: egress failure ~p ~p", [Reason, erlang:get_stacktrace()]),
-      {next_state, 'IDLE', stream_reset(Pipe, State)}
+      % ?NOTICE("knet [http]: egress failure ~p ~p", [Reason, erlang:get_stacktrace()]),
+      pipe:ack(Pipe, {error, Reason}),
+      {next_state, 'IDLE', stream_reset(Pipe, State0)}
    end.
 
 %%%------------------------------------------------------------------
@@ -229,31 +275,30 @@ ioctl(_, _) ->
 http_send(Msg, Pipe, State) ->
    [$. ||
       http_encode_packet(Msg, State),
-      q_enq_http_req(_),
+      enq_http_request(_),
       http_egress(Pipe, _),
       tracelog(_),
-      accesslog(_),
-      q_deq_http_req(_),
+      deq_http_request(_),
       http_send_return(Pipe, _)
    ].   
 
 %%
 %% 
-http_encode_packet(Data, #fsm{socket = Socket0} = State) ->
-   {Pckt, #socket{eg = Stream} = Socket1} = gen_http_send(Socket0, gen_http_encode(Socket0, Data)),
+http_encode_packet(Packet, #fsm{socket = Socket0} = State) ->
+   {Pckt, #socket{eg = Stream} = Socket1} = knet_gen_http:send(Socket0, Packet),
    http_set_state(Stream, Socket1, #http{pack = Pckt, state = State}).
 
 %%
 %%
 http_egress(Pipe, #http{pack = Pckt} = Http) -> 
-   lists:foreach(fun(X) -> pipe:b(Pipe, X) end, Pckt),
+   lists:foreach(fun(X) -> pipe:b(Pipe, {packet, X}) end, Pckt),
    Http.
 
 %%
 %% #http{} category -> #fsm{}
 http_send_return(Pipe, #http{is = eoh, state = State}) ->
    %% htstream has a feature of "eoh event".
-   http_send([], Pipe, State);
+   http_send(undefined, Pipe, State);
 
 http_send_return(_Pipe, #http{state = State}) ->
    State.
@@ -266,24 +311,23 @@ http_send_return(_Pipe, #http{state = State}) ->
 http_recv(Msg, Pipe, State) ->
    [$. ||
       http_decode_packet(Msg, State),
-      q_enq_http_req(_),
+      enq_http_request(_),
       http_ingress(Pipe, _),
       tracelog(_),
-      accesslog(_),
-      q_deq_http_req(_),
+      deq_http_request(_),
       http_recv_return(Pipe, _)
    ].   
 
 %%
 %%
-http_decode_packet(Data, #fsm{socket = Socket0} = State) ->
-   {Pckt, #socket{in = Stream} = Socket1} = gen_http_recv(Socket0, Data),
-   http_set_state(Stream, Socket1, #http{pack = gen_http_decode(Socket1, Pckt), state = State}).
+http_decode_packet(Packet, #fsm{socket = Socket0} = State) ->
+   {Pckt, #socket{in = Stream} = Socket1} = knet_gen_http:recv(Socket0, Packet),
+   http_set_state(Stream, Socket1, #http{pack = Pckt, state = State}).
 
 %%
 %%
 http_ingress(Pipe, #http{is = upgrade, http = {_, {_, _, Head}}, pack = Pack} = Http) ->
-   Prot = case lens:get(lens:pair('Upgrade'), Head) of
+   Prot = case lens:get(lens:pair(<<"Upgrade">>, undefined), Head) of
       <<"websocket">> -> ws;
       _               -> http
    end,
@@ -303,11 +347,10 @@ http_recv_return(Pipe, #http{is = eof, state = State}) ->
 
 http_recv_return(Pipe, #http{is = eoh, state = State}) ->
    %% htstream has a feature on eoh event, 
-   http_recv(<<>>, Pipe, State);
+   http_recv(undefined, Pipe, State);
 
 http_recv_return(Pipe, #http{is = upgrade, http = {_, {_, _, Head}}} = Http) ->
-   % server_upgrade(Pipe, State#fsm{stream=Stream});
-   http_recv_upgrade(lens:get(lens:pair('Upgrade'), Head), Pipe, Http);
+   http_recv_upgrade(lens:get(lens:pair(<<"Upgrade">>), Head), Pipe, Http);
 
 http_recv_return(_Pipe, #http{state = State}) ->
    State.
@@ -319,7 +362,7 @@ http_recv_upgrade(<<"websocket">>, Pipe, #http{http = {_, {Mthd, Uri, Head}}, st
    %%  - it shall emit message
    %%  - it shall return pipe compatible upgrade signature
    % access_log(websocket, State),
-   Req = {Mthd, Uri, Head, []},
+   Req = {Mthd, Uri, Head},
    #socket{so = SOpt} = Socket,
    {Msg, Upgrade} = knet_ws:ioctl({upgrade, Req, SOpt}, undefined),
    pipe:a(Pipe, Msg),
@@ -356,11 +399,10 @@ send_503_to_side(Pipe, Queue) ->
       q:list(Queue)
    ).
 
-state_new(#fsm{socket = #socket{so = Opts} = Socket}) ->
+state_new(#fsm{socket = Socket}) ->
    #fsm{
-      socket  = gen_http_close(Socket)
+      socket  = knet_gen_http:close(Socket)
      ,queue   = q:new()
-     ,trace   = opts:val(trace, undefined, Opts)
    }.
 
 
@@ -378,107 +420,31 @@ http_set_state(Stream, Socket, #http{state = State} = Http) ->
 
 %%
 %% enqueue references of http requests
--spec q_enq_http_req(#http{}) -> #http{}.
+-spec enq_http_request(#http{}) -> #http{}.
 
-q_enq_http_req(#http{is = eof, http = {request,  _} = Ht} = Http) ->
-   lens:apply(
-      lens_http_state_queue(),
-      fun(Q) -> q:enq(q_http_req(Ht), Q) end, 
-      Http
-   );
-
-q_enq_http_req(#http{is = eof, http = {response, _} = Ht} = Http) ->
-   lens:put(
-      lens_http_state_queue_req_code(),
-      Ht,
-      Http
-   );
-
-q_enq_http_req(Http) ->
-   Http.
-
-%%
-%% enqueue references of http requests
--spec q_deq_http_req(#http{}) -> #http{}.
-
-q_deq_http_req(#http{is = eof, http = {response, _}} = Http) ->
-   lens:apply(
-      lens_http_state_queue(),
-      fun(Q) -> deq:tail(Q) end, 
-      Http
-   );
-
-q_deq_http_req(Http) ->
-   Http.
-
-%% annotate http request with performance data 
-q_http_req({request,  _} = Req) ->
+new_http_req({request,  _} = Req) ->
    #req{
       http = Req,
       treq = os:timestamp()
    }.
 
+enq_http_request(#http{is = eof, http = {request,  _} = Ht} = Http) ->
+   lens:put(lens_http_state_queue_hd_enq(), new_http_req(Ht), Http);
+
+enq_http_request(#http{is = eof, http = {response, _} = Ht} = Http) ->
+   lens:put(lens_http_state_queue_hd_req_code(), Ht, Http);
+
+enq_http_request(Http) ->
+   Http.
 
 %%
-%% lenses
-lens_socket_peername() ->
-   lens:c([lens:tuple(#fsm.socket), lens:tuple(#socket.peername)]).
+%% enqueue references of http requests
+-spec deq_http_request(#http{}) -> #http{}.
 
-%%
-%%
-lens_http_state_queue() ->
-   lens:c([lens:tuple(#http.state), lens:tuple(#fsm.queue)]).
- 
-lens_http_state_queue_req_code() ->
-   lens:c([lens_http_state_queue(), lens_qhd(), lens:tuple(#req.code)]).
+deq_http_request(#http{is = eof, http = {response, _}} = Http) ->
+   lens:put(lens_http_state_queue_tl(), undefined, Http);
 
-lens_qhd() ->
-   %% focus lens on queue head
-   fun(Fun, Queue) ->
-      lens:fmap(fun(X) -> deq:poke(X, deq:tail(Queue)) end, Fun(deq:head(Queue)))      
-   end.
-
-%%
-%% 
-queue_config_treq(Queue) ->
-   q:map(fun(Req) -> Req#req{treq = os:timestamp()} end, Queue).
-
-
-%%
-%%
--spec accesslog(#http{}) -> #http{}.
-
-accesslog(#http{is = eof, http = {response, _}, state = State} = Http) ->
-   #fsm{
-      queue  = Queue, 
-      socket = #socket{peername = Peer}
-   } = State,
-   #req{
-      http = {_, {Mthd,  Url, HeadA}},
-      code = {_, {Code, _Msg, HeadB}},
-      treq = T
-   } = q:head(Queue),
-   ?access_http(#{
-      req  => {Mthd, Code}
-     ,peer => Peer
-     ,addr => gen_http_decode_url(Url, HeadA)
-     ,ua   => opts:val('User-Agent', opts:val('Server', undefined, HeadB), HeadA)
-     ,time => tempus:diff(T)
-   }),
-   Http;
-
-accesslog(#http{is = upgrade, http = {_, {_, Url, Head}}, state = State} = Http) ->
-   #fsm{socket = #socket{peername = Peer}} = State,
-   Upgrade = lens:get(lens:pair('Upgrade'), Head),
-   ?access_http(#{
-      req  => {upgrade, Upgrade}
-     ,peer => Peer
-     ,addr => gen_http_decode_url(Url, Head)
-     ,ua   => opts:val('User-Agent', undefined, Head)
-   }),
-   Http;
-
-accesslog(Http) ->
+deq_http_request(Http) ->
    Http.
 
 
@@ -486,152 +452,62 @@ accesslog(Http) ->
 %%
 -spec tracelog(#http{}) -> #http{}.
 
-tracelog(#http{state = #fsm{trace = undefined}} = Http) ->
-   Http;
+tracelog(#http{is = eoh, http = {response, {Code, _, _}}, state = #fsm{socket = Sock}} = Http) ->
+   T   = lens:get(lens_http_state_queue_hd_req_treq(), Http),
+   Uri = tracelog_uri(lens:get(lens_http_state_queue_hd_req_http(), Http)),
+   knet_gen:trace({code, Uri}, Code, Sock),
+   knet_gen:trace({ttfb, Uri}, tempus:diff(T), Sock),
+   lens:put(lens_http_state_queue_hd_req_teoh(), os:timestamp(), Http);
 
-tracelog(#http{is = eoh, http = {response, {Code, _, _}}, state = State} = Http) ->
-   #fsm{
-      trace = Pid,
-      label = Label,
-      queue = Queue0
-   } = State,
-   #req{
-      http = Ht,
-      treq = T
-   } = q:head(Queue0),
-   Uri = tracelog_uri(Label, Ht),
-   knet_log:trace(Pid, {http, {code, Uri}, Code}),
-   knet_log:trace(Pid, {http, {ttfb, Uri}, tempus:diff(T)}),
-   Queue1 = lens:put(lens_qhd(), lens:tuple(#req.teoh), os:timestamp(), Queue0),
-   Http#http{state = State#fsm{queue = Queue1}};   
-
-tracelog(#http{is = eof, http = {response, _}, state = State} = Http) ->
-   #fsm{
-      trace = Pid,
-      label = Label, 
-      queue = Queue0
-   } = State,
-   #req{
-      http = Ht,
-      teoh = T
-   }   = q:head(Queue0),
-   Uri = tracelog_uri(Label, Ht),
-   knet_log:trace(Pid, {http, {ttmr, Uri}, tempus:diff(T)}),
+tracelog(#http{is = eof, http = {response, _}, state = #fsm{socket = Sock}} = Http) ->
+   T   = lens:get(lens_http_state_queue_hd_req_teoh(), Http),
+   Uri = tracelog_uri(lens:get(lens_http_state_queue_hd_req_http(), Http)),
+   knet_gen:trace({ttmr, Uri}, tempus:diff(T), Sock),
    Http;
 
 tracelog(Http) ->
    Http.
 
-tracelog_uri(undefined, {request, {_Mthd, Path, Head}}) ->
-   Authority = lens:get(lens:pair('Host'), Head),
-   uri:path(Path, uri:authority(Authority, uri:new(http)));
 
-tracelog_uri(Label, _) ->
-   uri:schema(http, uri:new(Label)).
+tracelog_uri({request, {_Mthd, Path, Head}}) ->
+   Authority = lens:get(lens:pair(<<"Host">>), Head),
+   uri:path(Path, uri:authority(Authority, uri:new(http))).
 
-%%%------------------------------------------------------------------
-%%%
-%%% http socket
-%%%
-%%%------------------------------------------------------------------
 
 %%
-%% 
--spec gen_http_socket(_) -> #socket{}.
+%% lenses for http requests queue
+lens_http_state_queue_hd_enq() ->
+   lens:c(lens:tuple(#http.state), lens:tuple(#fsm.queue), lens_q_hd_enq()).
 
-gen_http_socket(SOpt) ->
-   #socket{
-      in = htstream:new(),
-      eg = htstream:new(),
-      so = SOpt
-   }.
+lens_http_state_queue_tl() ->
+   lens:c(lens:tuple(#http.state), lens:tuple(#fsm.queue), lens_q_tl()).
 
-%%
-%%
--spec gen_http_close(#socket{}) -> #socket{}.
+lens_http_state_queue_hd_req_http() ->
+   lens:c(lens:tuple(#http.state), lens:tuple(#fsm.queue), lens_q_hd(), lens:tuple(#req.http)).
 
-gen_http_close(#socket{so = SOpt}) ->
-   gen_http_socket(SOpt).
+lens_http_state_queue_hd_req_code() ->
+   lens:c(lens:tuple(#http.state), lens:tuple(#fsm.queue), lens_q_hd(), lens:tuple(#req.code)).
 
-%%
-%%
--spec gen_http_send(#socket{}, _) -> {[binary()], #socket{}}.
+lens_http_state_queue_hd_req_teoh() ->
+   lens:c(lens:tuple(#http.state), lens:tuple(#fsm.queue), lens_q_hd(), lens:tuple(#req.teoh)).
 
-gen_http_send(#socket{eg = Stream0} = Socket, Data) ->
-   {Pckt, Stream1} = htstream:encode(Data, Stream0),
-   {Pckt, Socket#socket{eg = Stream1}}.
+lens_http_state_queue_hd_req_treq() ->
+   lens:c(lens:tuple(#http.state), lens:tuple(#fsm.queue), lens_q_hd(), lens:tuple(#req.treq)).
 
-%%
-%%
--spec gen_http_recv(#socket{}, _) -> {_, #socket{}}.
-
-gen_http_recv(#socket{in = Stream0} = Socket, Data) ->
-   {Pckt, Stream1} = htstream:decode(Data, Stream0),
-   {Pckt, Socket#socket{in = Stream1}}.
-
-%%
-%% encode client message to htstream format
--spec gen_http_encode(#socket{}, _) -> _.
-
-gen_http_encode(_Socket, {Mthd, {uri, _, _}=Uri, Head}) ->
-   {Mthd, gen_http_encode_uri(Uri), gen_http_encode_head(Uri, Head)};
-
-gen_http_encode(_Socket, {Mthd, {uri, _, _}=Uri, Head, Payload}) ->
-   {Mthd, gen_http_encode_uri(Uri), gen_http_encode_head(Uri, Head), Payload};
-
-gen_http_encode(_Socket, Payload) ->
-   Payload.
-
-%%
-gen_http_encode_uri(Uri) ->
-   case uri:suburi(Uri) of
-      undefined -> <<$/>>;
-      Path      -> Path
+lens_q_hd_enq() ->
+   fun(Fun, Queue) ->
+      lens:fmap(fun(X) -> q:enq(X, Queue) end, Fun(undefined))
    end.
 
-%%
-gen_http_encode_head(Uri, Head) ->
-   [{'Host', uri:authority(Uri)} | Head].
-   % @todo: inject system wide header
-   %    [
-   %       {'Server', ?HTTP_SERVER}
-   %      ,{'Date',   scalar:s(tempus:encode(?HTTP_DATE, os:timestamp()))}
-   %    ].
+lens_q_hd() ->
+   fun(Fun, Queue) ->
+      lens:fmap(fun(X) -> deq:poke(X, deq:tail(Queue)) end, Fun(deq:head(Queue)))      
+   end.
+
+lens_q_tl() ->
+   fun(Fun, Queue) ->
+      lens:fmap(fun(_) -> deq:tail(Queue) end, Fun(deq:tail(Queue)))      
+   end.
 
 
-
-%%
-%% decode htstream message to client format
--spec gen_http_decode(#socket{}, _) -> _.
-
-
-gen_http_decode(#socket{peername = Peer}, {Mthd, Url, Head})
- when ?is_method(Mthd) ->
-   [{Mthd, gen_http_decode_url(Url, Head), Head, gen_http_decode_env(Peer, Head)}];
-
-
-gen_http_decode(#socket{peername = Peer}, {Code, Msg, Head})
- when ?is_status(Code) ->
-   [{Code, Msg, Head, gen_http_decode_env(Peer, Head)}];
-
-gen_http_decode(_Socket, Chunk) ->
-   [X || X <- Chunk, X =/= <<>>].
-
-
-%%
-gen_http_decode_env(Peer, _Head) ->
-   [{peer, Peer}].
-
-
-%%
-gen_http_decode_url({uri, _, _} = Url, Head) ->
-   case uri:authority(Url) of
-      undefined ->
-         uri:authority(opts:val('Host', Head), uri:schema(http, Url));
-      _ ->
-         uri:schema(http, Url)
-   end;
-
-gen_http_decode_url(Url, Head) ->
-   gen_http_decode_url(uri:new(Url), Head).
 

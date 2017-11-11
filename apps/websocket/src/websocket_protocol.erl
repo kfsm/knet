@@ -34,10 +34,12 @@ start_link(Uri, Opts) ->
    pipe:start_link(?MODULE, [Uri, Opts], []).
 
 init([Uri, Opts]) ->
-   {ok, handle, knet:bind(Uri, Opts)}.
+   {ok, Sock} = knet:bind(Uri, Opts),
+   {ok, handle, Sock}.
 
-free(_, Sock) ->
-   knet:close(Sock).
+free(_, _Sock) ->
+   %% acceptor pool free resource automatically
+   ok.
 
 %%
 ioctl(_, _) ->
@@ -45,16 +47,21 @@ ioctl(_, _) ->
 
 %%
 %%
-handle({ws, _Sock, {_Mthd, _Url, _Head, _Env}}, _Pipe, State) ->
+handle({ws, _Sock, {_Mthd, _Url, _Head}}, _Pipe, State) ->
    %% web socket is established
    {next_state, handle, State};
 
-handle({ws, _Sock, {terminated, _Reason}}, _Pipe, State) ->
-   %% web socket is terminated
+handle({ws, _, eof}, _Pipe, Sock) ->
+   {stop, normal, Sock};
+
+handle({ws, _, {error, Reason}}, _Pipe, Sock) ->
+   {stop, Reason, Sock};
+
+handle({ws, _Sock, Msg}, Pipe, State) ->
+   %% web socket message received
+   pipe:a(Pipe, {packet, Msg}),
    {next_state, handle, State};
 
-handle({ws, _Sock, Msg}, Pipe, State)
- when is_binary(Msg) ->
-   %% web socket message received
-   pipe:a(Pipe, Msg),
-   {next_state, handle, State}.
+handle({sidedown, _, _}, _Pipe, Sock) ->
+   {stop, normal, Sock}.
+

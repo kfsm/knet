@@ -21,47 +21,53 @@
 -behaviour(pipe).
 
 -export([
-	start_link/2,
-	init/1,
-	free/2,
-	ioctl/2,
-	handle/3
+   start_link/2,
+   init/1,
+   free/2,
+   ioctl/2,
+   handle/3
 ]).
 
 %%
 %%
 start_link(Uri, Opts) ->
-	pipe:start_link(?MODULE, [Uri, Opts], []).
+   pipe:start_link(?MODULE, [Uri, Opts], []).
 
 init([Uri, Opts]) ->
-	{ok, handle, knet:bind(Uri, Opts)}.
+   {ok, Sock} = knet:bind(Uri, Opts),
+   {ok, handle, Sock}.
 
-free(_, Sock) ->
-	knet:close(Sock).
+free(_, _Sock) ->
+   %% acceptor pool free resource automatically
+   ok.
 
 %%
 ioctl(_, _) ->
-	throw(not_implemented).
+   throw(not_implemented).
 
 %%
 %%
-handle({http, _Sock, {Method, Url, Head, _Env}}, Pipe, Sock) ->
-   _ = pipe:a(Pipe, {ok, [
-      {'Server', <<"knet">>},
-      {'Transfer-Encoding', <<"chunked">>},
-      {'Connection', connection(Head)}
+handle({http, _Sock, {Method, Url, Head}}, Pipe, Sock) ->
+   _ = pipe:a(Pipe, {200, <<"OK">>, [
+      {<<"Server">>, <<"knet">>},
+      {<<"Transfer-Encoding">>, <<"chunked">>},
+      {<<"Connection">>, connection(Head)}
    ]}),
    {Msg, _} = htstream:encode({Method, uri:get(path, Url), Head}, htstream:new()),
-   pipe:a(Pipe, iolist_to_binary(Msg)),
-	{next_state, handle, Sock};
+   pipe:a(Pipe, {packet, iolist_to_binary(Msg)}),
+   {next_state, handle, Sock};
+
+handle({http, _Sock, passive}, Pipe, Sock) ->
+   pipe:a(Pipe, {active, 1024}),
+   {next_state, handle, Sock};
 
 handle({http, _Sock, eof}, Pipe, Sock) ->
-	pipe:a(Pipe, eof),
-	{next_state, handle, Sock};
+   pipe:a(Pipe, eof),
+   {next_state, handle, Sock};
 
 handle({http, _Sock, Msg}, Pipe, Sock) ->
-	pipe:a(Pipe, Msg),
-	{next_state, handle, Sock};
+   pipe:a(Pipe, {packet, Msg}),
+   {next_state, handle, Sock};
 
 handle({sidedown, _, _}, _Pipe, Sock) ->
    {stop, normal, Sock}.
@@ -69,7 +75,5 @@ handle({sidedown, _, _}, _Pipe, Sock) ->
 %%
 %% return http connection type 
 connection(Heads) ->
-	case lists:keyfind('Connection', 1, Heads) of
-      false    -> <<"keep-alive">>;
-      {_, Val} -> Val
-   end.
+   lens:get(lens:pair(<<"Connection">>, <<"keep-alive">>), Heads).
+

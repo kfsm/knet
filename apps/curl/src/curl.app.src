@@ -1,0 +1,17 @@
+{application, curl,
+   [
+      {description, "konduit network library - http client example"},
+      {vsn,         "1.0.0"},
+      {modules,     []},
+      {registered,  []},
+      {applications,[
+         kernel, 
+         stdlib,
+         knet,
+         ssl
+      ]},
+      {mod, {curl_app, []}},
+      {env, []}
+   ]
+}.  
+

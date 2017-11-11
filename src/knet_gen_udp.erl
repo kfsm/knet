@@ -23,9 +23,11 @@
 socket(SOpt) ->
    {ok,
       #socket{
-         in = pstream:new(opts:val(stream, raw, SOpt)),
-         eg = pstream:new(opts:val(stream, raw, SOpt)),
-         so = SOpt 
+         family   = ?MODULE,      
+         in       = pstream:new(opts:val(stream, raw, SOpt)),
+         eg       = pstream:new(opts:val(stream, raw, SOpt)),
+         so       = SOpt,
+         tracelog = opts:val(tracelog, undefined, SOpt)
       }
    }.
 
@@ -36,7 +38,7 @@ socket(SOpt) ->
 close(#socket{sock = undefined} = Socket) ->
    {ok, Socket};
 
-close(#socket{sock = Sock, so = SOpt} = Socket) ->
+close(#socket{sock = Sock, so = SOpt}) ->
    [$^||
       gen_udp:close(Sock),
       socket(SOpt)
@@ -56,7 +58,7 @@ peername(#socket{sock = undefined}) ->
 peername(#socket{sock = Sock, peername = undefined}) ->
    [$^ ||
       inet:peername(Sock),
-      fmap(uri:authority(_, uri:new(udp)))
+      cats:unit(uri:authority(_, uri:new(udp)))
    ];
 peername(#socket{peername = Peername}) ->
    {ok, Peername}.
@@ -69,7 +71,7 @@ peername(Uri, #socket{} = Socket) ->
    {ok, [$. ||
       uri:authority(Uri),
       uri:authority(_, uri:new(udp)),
-      fmap(Socket#socket{peername = _})
+      cats:unit(Socket#socket{peername = _})
    ]}.
 
 %%
@@ -81,21 +83,21 @@ sockname(#socket{sock = undefined}) ->
 sockname(#socket{sock = Sock, sockname = undefined}) ->
    [$^ ||
       inet:sockname(Sock),
-      fmap(uri:authority(_, uri:new(udp)))
+      cats:unit(uri:authority(_, uri:new(udp)))
    ];
 sockname(#socket{sockname = Sockname}) ->
    {ok, Sockname}.
 
 %%
 %%
--spec sockname(uri:uri(), #socket{}) -> {ok, #socket{}} | {error, _}.
-
-sockname(Uri, #socket{} = Socket) ->
-   {ok, [$. ||
-      uri:authority(Uri),
-      uri:authority(_, uri:new(udp)),
-      fmap(Socket#socket{sockname = _})
-   ]}.
+% -spec sockname(uri:uri(), #socket{}) -> {ok, #socket{}} | {error, _}.
+%
+% sockname(Uri, #socket{} = Socket) ->
+%    {ok, [$. ||
+%       uri:authority(Uri),
+%       uri:authority(_, uri:new(udp)),
+%       cats:unit(Socket#socket{sockname = _})
+%    ]}.
 
 
 %%
@@ -106,7 +108,7 @@ connect(Uri, #socket{so = SOpt} = Socket) ->
    {_Host, Port} = uri:authority(Uri),
    [$^ ||
       gen_udp:open(Port, so_udp(SOpt)),
-      fmap(Socket#socket{sock = _}),
+      cats:unit(Socket#socket{sock = _}),
       peername(Uri, _)
    ].
 
@@ -120,7 +122,7 @@ send(#socket{sock = Sock, eg = Stream0} = Socket, Data) ->
    [$^ ||
       peername(Socket),
       either_send(Sock, _, Pckt),
-      fmap(Socket#socket{eg = Stream1})
+      cats:unit(Socket#socket{eg = Stream1})
    ].
 
 either_send(_Sock, _Peer, []) ->

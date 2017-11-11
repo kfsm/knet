@@ -130,8 +130,8 @@ recv(Sock, Timeout) ->
     case knet:recv(Sock, Timeout, [noexit]) of
       {_, Sock, Pckt} -> 
          {ok, Pckt};
-      {_, _, _} = Pckt ->
-         ?WARNING("k [sock]: unexpected message: ~p~n", [Pckt]),
+      {_, _, _} ->
+         % ?WARNING("k [sock]: unexpected message: ~p~n", [Pckt]),
          recv(Sock, Timeout);
       {error, _} = Error ->
          Error
