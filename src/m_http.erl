@@ -23,7 +23,7 @@
 -include("knet.hrl").
 -include_lib("datum/include/datum.hrl").
 
--export([return/1, fail/1, '>>='/2]).
+-export([unit/1, fail/1, '>>='/2]).
 -export([
    new/1, new/2, 
    x/1, method/1, 
@@ -43,10 +43,10 @@
 
 %%
 %%
--spec return(A) -> m(A).
+-spec unit(A) -> m(A).
 
-return(X) ->
-   m_state:return(X).
+unit(X) ->
+   m_state:unit(X).
 
 %%
 %%
@@ -109,11 +109,10 @@ h(Head, Value) ->
 
 header(Head, Value)
  when is_list(Value) ->
-   % @todo: htstream works only with atoms, we need to fix library
-   m_state:put(header(scalar:atom(Head)), scalar:s(Value));
+   m_state:put(header(scalar:s(Head)), scalar:s(Value));
 
 header(Head, Value) ->
-   m_state:put(header(scalar:atom(Head)), Value).
+   m_state:put(header(scalar:s(Head)), Value).
 
 
 %%
@@ -149,34 +148,34 @@ request(Timeout) ->
 %%%----------------------------------------------------------------------------
 
 id() ->
-   lens:c([lens:map(spec, #{}), lens:map(id, ?NONE)]).
+   lens:c(lens:at(spec, #{}), lens:at(id, ?NONE)).
 
-focus() ->
+active_socket() ->
    fun(Fun, Map) ->
       Key = maps:get(id, Map),
       lens:fmap(fun(X) -> maps:put(Key, X, Map) end, Fun(maps:get(Key, Map, #{})))
    end.
 
 sys_so() ->
-   lens:map(so, []).
+   lens:at(so, []).
 
 so() ->
-   lens:c([lens:map(spec, #{}), focus(), lens:map(so, [])]).
+   lens:c(lens:at(spec, #{}), active_socket(), lens:at(so, [])).
 
 method() ->
-   lens:c([lens:map(spec, #{}), focus(), lens:map(method, 'GET')]).
+   lens:c(lens:at(spec, #{}), active_socket(), lens:at(method, 'GET')).
 
 uri() ->
-   lens:c([lens:map(spec, #{}), focus(), lens:map(uri, ?NONE)]).
+   lens:c(lens:at(spec, #{}), active_socket(), lens:at(uri, ?NONE)).
 
 header() ->
-   lens:c([lens:map(spec, #{}), focus(), lens:map(head, [])]).
+   lens:c(lens:at(spec, #{}), active_socket(), lens:at(head, [])).
 
 header(Head) ->
-   lens:c([lens:map(spec, #{}), focus(), lens:map(head, []), lens:pair(Head, ?NONE)]).
+   lens:c(lens:at(spec, #{}), active_socket(), lens:at(head, []), lens:pair(Head, ?NONE)).
 
 payload() ->
-   lens:c([lens:map(spec, #{}), focus(), lens:map(payload, ?NONE)]).
+   lens:c(lens:at(spec, #{}), active_socket(), lens:at(payload, ?NONE)).
 
 %%%----------------------------------------------------------------------------   
 %%%
@@ -185,29 +184,31 @@ payload() ->
 %%%----------------------------------------------------------------------------
 
 http_io(Timeout, State) ->
-   Sock = sock(State),
-   Tx   = erlang:monitor(process, Sock),
-   send(Sock, State),
-   receive
-      {'DOWN', Tx, _, _, _Reason} ->
-         erlang:demonitor(Tx, [flush]),
+   case
+      [either ||
+         Sock <- socket(State),
+         send(Sock, State),
+         recv(Sock, Timeout, State),
+         unit(Sock, _)
+      ]
+   of
+      {ok, Sock1, Pckt} ->
+         unit(Sock1, Pckt, State);
+      {error, _} ->
          Authority = uri:authority( lens:get(uri(), State) ),
          http_io(Timeout, maps:remove(Authority, State))
-   after 0 ->
-      erlang:demonitor(Tx, [flush]),
-      recv(Sock, Timeout, State)
    end.
 
 %%
 %% create a new socket or re-use existed one
-sock(State) ->
+socket(State) ->
    GOpt      = lens:get(sys_so(), State),
    SOpt      = lens:get(so(), State),
    Uri       = lens:get(uri(), State),
    Authority = uri:authority(Uri),
    case State of
       #{Authority := Sock} ->
-         Sock;
+         {ok, Sock};
       _ ->
          knet:socket(Uri, GOpt ++ SOpt)
    end.
@@ -218,8 +219,8 @@ send(Sock, State) ->
    Mthd = lens:get(method(), State),   
    Url  = lens:get(uri(), State),
    Head = head(State),
-   knet:send(Sock, {Mthd, Url, Head}),
-   [$?|| lens:get(payload(), State), knet:send(Sock, _)],
+   ok   = knet:send(Sock, {Mthd, Url, Head}),
+   [option || lens:get(payload(), State), knet:send(Sock, _)],
    knet:send(Sock, eof).
 
 %%
@@ -232,9 +233,9 @@ head(State) ->
    ].
 
 head_connection(Head) ->
-   case lens:get(lens:pair('Connection', ?NONE), Head) of
+   case lens:get(lens:pair(<<"Connection">>, ?NONE), Head) of
       ?NONE ->
-         [{'Connection', <<"close">>}|Head];
+         [{<<"Connection">>, <<"close">>}|Head];
       _     ->
          Head
    end.
@@ -242,9 +243,9 @@ head_connection(Head) ->
 head_te(undefined, Head) ->
    Head;
 head_te(_, Head) ->
-   case lens:get(lens:pair('Transfer-Encoding', ?NONE), Head) of
+   case lens:get(lens:pair(<<"Transfer-Encoding">>, ?NONE), Head) of
       ?NONE ->
-         [{'Transfer-Encoding', <<"chunked">>}|Head];
+         [{<<"Transfer-Encoding">>, <<"chunked">>}|Head];
       _     ->
          Head
    end.
@@ -252,40 +253,14 @@ head_te(_, Head) ->
 
 %%
 %%
-recv(Sock, Timeout, State) ->
-   case recv(Sock, Timeout) of
-      {ok, Pckt} ->
-         unit(Sock, Pckt, State);
-      {error, Reason} ->
-         exit({k_http, Reason})
-   end.
+recv(Sock, Timeout, _State) ->
+   {ok, stream:list(knet:stream(Sock, Timeout))}.   
 
-recv(Sock, Timeout) ->
-   case knet:recv(Sock, Timeout, [noexit]) of
-      {http, Sock, eof} ->
-         {ok, []};
-      {http, Sock, {_, _, _, _} = Http} ->
-         [$? || recv(Sock, Timeout), join(Http, _)];
-      {http, Sock, Pckt} ->
-         [$? || recv(Sock, Timeout), join(Pckt, _)];
-      {http, _, _} ->
-         % ?WARNING("k [http]: unexpected message: ~p~n", [Http]),
-         recv(Sock, Timeout);
-      {ioctl, _, _} ->
-         recv(Sock, Timeout);
-      {error, _} = Error ->
-         Error
-   end.
-
-join(Head, {ok, Tail}) ->
-   {ok, [Head|Tail]};
-join(_, {error, _} = Error) ->
-   Error.
 
 %%
 %%
 unit(Sock, Pckt, State) ->
-   case lens:get(header('Connection'), State) of
+   case lens:get(header(<<"Connection">>), State) of
       Conn when Conn =:= <<"close">> orelse Conn =:= ?NONE ->
          knet:close(Sock),
          [Pckt|maps:remove(http, State)];

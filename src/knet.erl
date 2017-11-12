@@ -175,9 +175,6 @@ connect({uri, _, _}=Uri, Opts) ->
       socket(Uri, Opts),
       knet:ioctl(_, {connect, Uri})
    ];
-   % {ok, Sock} = ,
-   % _ = pipe:send(Sock, ),
-   % {ok, Sock};
 
 connect(Url, Opts) ->
    connect(uri:new(Url), Opts).
