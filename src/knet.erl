@@ -257,7 +257,7 @@ stream(Sock, Timeout) ->
          stream(Sock, Timeout);
 
       {_, Sock, eof} ->
-         stream:new(eof);
+         stream:new();
 
       {_, Sock, {error, _} = Error} ->
          stream:new(Error);
