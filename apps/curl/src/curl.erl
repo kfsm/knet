@@ -4,7 +4,10 @@
 -compile({parse_transform, category}).
 
 -export([start/0]).
--export([x/1, x/2, x/3, x/4]).
+-export([
+   x/1, x/2, x/3, x/4,
+   m/1, m/2, m/3
+]).
 -export([run/1, run/2, run/3]).
 
 %%
@@ -13,7 +16,7 @@ start() ->
    applib:boot(?MODULE, code:where_is_file("app.config")).
 
 %%
-%% eXecute the request
+%% eXecute http request
 x(Url) ->
    x('GET', Url).
 
@@ -34,6 +37,28 @@ x(Mthd, Url, Head, Payload) ->
       ]),
       knet:close(Sock),
       cats:flatten(Data)
+   ].
+
+%%
+%% execute http request in Monad context
+m(Url) ->
+   m('GET', Url).
+
+m(Mthd, Url) ->
+   [m_http ||
+      cats:new(Url),
+      cats:x(Mthd),
+      cats:h("Connection", "keep-alive"),
+      cats:r()
+   ].
+
+m(Mthd, Url, Payload) ->
+   [m_http ||
+      cats:new(Url),
+      cats:x(Mthd),
+      cats:h("Connection", "keep-alive"),
+      cats:d(Payload),
+      cats:r()
    ].
 
 

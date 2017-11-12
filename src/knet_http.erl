@@ -400,10 +400,17 @@ send_503_to_side(Pipe, Queue) ->
    ).
 
 state_new(#fsm{socket = Socket}) ->
-   #fsm{
-      socket  = knet_gen_http:close(Socket)
-     ,queue   = q:new()
-   }.
+   [identity ||
+      cats:eitherT(knet_gen_http:close(Socket)),
+      cats:unit(
+         #fsm{
+            socket  = _
+           ,queue   = q:new()
+         }
+      )
+   ]. 
+
+
 
 
 %%

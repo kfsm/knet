@@ -1,7 +1,7 @@
 {"1.1.0",
 [{<<"datum">>,
   {git,"https://github.com/fogfish/datum",
-       {ref,"55476ac8c9ed4522bfc9aa8091212e99fc905bcb"}},
+       {ref,"6b0aefd7c7829b5f06e14cfcab938981f700dae9"}},
   0},
  {<<"feta">>,
   {git,"https://github.com/fogfish/feta",
