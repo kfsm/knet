@@ -10,7 +10,7 @@
  {<<"goldrush">>,{pkg,<<"goldrush">>,<<"0.1.9">>},1},
  {<<"htstream">>,
   {git,"https://github.com/kfsm/htstream",
-       {ref,"003c5c5324df8a1bef7f44b765c7b3b91fe58c58"}},
+       {ref,"d857f05804c351f0e40c2592e08edbb37e68ffad"}},
   0},
  {<<"lager">>,{pkg,<<"lager">>,<<"3.5.1">>},0},
  {<<"meck">>,{pkg,<<"meck">>,<<"0.8.8">>},0},
