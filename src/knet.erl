@@ -249,8 +249,8 @@ stream(Sock, Timeout) ->
       {ioctl, _, _} ->
          stream(Sock, Timeout);
 
-      {trace, Sock, _} ->
-         stream(Sock, Timeout);
+      {trace, Sock, Pckt} ->
+         stream:new({trace, Pckt}, fun() -> stream(Sock, Timeout) end);
 
       {_, Sock, passive} ->
          knet:ioctl(Sock, {active, 1024}),
