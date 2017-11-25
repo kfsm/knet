@@ -124,7 +124,7 @@ d(Value) ->
    payload(Value).
 
 payload(Value) ->
-   m_state:put(payload(), scalar:s(Value)).
+   m_state:put(payload(), Value).
 
 %%
 %%
@@ -220,7 +220,7 @@ send(Sock, State) ->
    Url  = lens:get(uri(), State),
    Head = head(State),
    ok   = knet:send(Sock, {Mthd, Url, Head}),
-   [option || lens:get(payload(), State), knet:send(Sock, _)],
+   [option || lens:get(payload(), State), scalar:s(_), knet:send(Sock, _)],
    knet:send(Sock, eof).
 
 %%
