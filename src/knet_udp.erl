@@ -39,7 +39,7 @@
 
 %% internal state
 -record(fsm, {
-   stream   = undefined :: #stream{}  %% udp packet stream
+   stream   = undefined :: #iostream{}  %% udp packet stream
   ,dispatch = undefined :: atom()     %% acceptor dispatch algorithm
   ,acceptor = undefined :: datum:q()  %% acceptor queue (worker process handling udp message) 
   ,sock     = undefined :: port()     %% udp socket
@@ -105,7 +105,7 @@ ioctl(socket, State) ->
 'IDLE'({connect, Uri}, Pipe, #fsm{stream = Stream0} = State) ->
    case udp_connect(Uri, State) of
       {ok, Sock} ->
-         #stream{addr = Addr} = Stream1 = 
+         #iostream{addr = Addr} = Stream1 = 
             io_ttl(io_tth(io_connect(Sock, Uri, Stream0))),
          pipe:a(Pipe, {udp, self(), {listen, uri:authority(Addr, uri:new(udp))}}),
          {next_state, 'ESTABLISHED', udp_ioctl(State#fsm{stream=Stream1, sock=Sock})};
@@ -209,7 +209,7 @@ ioctl(socket, State) ->
 
 'ESTABLISHED'(Pckt, Pipe, #fsm{stream=Stream}=State)
  when ?is_iolist(Pckt) ->
- 	'ESTABLISHED'({Stream#stream.peer, Pckt}, Pipe, State).
+ 	'ESTABLISHED'({Stream#iostream.peer, Pckt}, Pipe, State).
 
 %%%------------------------------------------------------------------
 %%%
@@ -218,7 +218,7 @@ ioctl(socket, State) ->
 %%%------------------------------------------------------------------   
 
 'HIBERNATE'(Msg, Pipe, #fsm{stream = Stream} = State) ->
-   % ?DEBUG("knet [tcp]: resume ~p", [Stream#stream.peer]),
+   % ?DEBUG("knet [tcp]: resume ~p", [Stream#iostream.peer]),
    'ESTABLISHED'(Msg, Pipe, State#fsm{stream=io_tth(Stream)}).
 
 
@@ -231,7 +231,7 @@ ioctl(socket, State) ->
 %%
 %% new socket stream
 io_new(SOpt) ->
-   #stream{
+   #iostream{
       send = pstream:new(opts:val(pack, raw, SOpt))
      ,recv = pstream:new(opts:val(pack, raw, SOpt))
      ,ttl  = pair:lookup([timeout, ttl], ?SO_TTL, SOpt)
@@ -241,7 +241,7 @@ io_new(SOpt) ->
 
 %%
 %% socket connected
-io_connect(Port, Uri, #stream{}=Sock) ->
+io_connect(Port, Uri, #iostream{}=Sock) ->
    Peer = case uri:host(Uri) of
       <<$*>> ->
          undefined;
@@ -254,25 +254,25 @@ io_connect(Port, Uri, #stream{}=Sock) ->
          {IP, uri:port(Uri)}
    end,
    {ok, Addr} = inet:sockname(Port),
-   Sock#stream{addr = Addr, peer = Peer, tss = os:timestamp(), ts = os:timestamp()}.
+   Sock#iostream{addr = Addr, peer = Peer, tss = os:timestamp(), ts = os:timestamp()}.
 
 %%
 %% set hibernate timeout
-io_tth(#stream{}=Sock) ->
-   Sock#stream{
-      tth = tempus:timer(Sock#stream.tth, hibernate)
+io_tth(#iostream{}=Sock) ->
+   Sock#iostream{
+      tth = tempus:timer(Sock#iostream.tth, hibernate)
    }.
 
 %%
 %% set time-to-live timeout
-io_ttl(#stream{}=Sock) ->
+io_ttl(#iostream{}=Sock) ->
    erlang:element(2, io_ttl(-1, Sock)). 
 
-io_ttl(N, #stream{}=Sock) ->
-   case pstream:packets(Sock#stream.recv) + pstream:packets(Sock#stream.send) of
+io_ttl(N, #iostream{}=Sock) ->
+   case pstream:packets(Sock#iostream.recv) + pstream:packets(Sock#iostream.send) of
       %% stream activity
       X when X > N ->
-         {active, Sock#stream{ttl = tempus:timer(Sock#stream.ttl, {ttl, X})}};
+         {active, Sock#iostream{ttl = tempus:timer(Sock#iostream.ttl, {ttl, X})}};
       %% no stream activity
       _ ->
          {eof, Sock}
@@ -280,19 +280,19 @@ io_ttl(N, #stream{}=Sock) ->
 
 %%
 %% recv packet
-io_recv({{_Host, _Port}=Peer, Pckt}, Pipe, #stream{}=Sock) ->
+io_recv({{_Host, _Port}=Peer, Pckt}, Pipe, #iostream{}=Sock) ->
    % ?DEBUG("knet [udp] ~p: recv ~p~n~p", [self(), Peer, Pckt]),
-   {Msg, Recv} = pstream:decode(Pckt, Sock#stream.recv),
+   {Msg, Recv} = pstream:decode(Pckt, Sock#iostream.recv),
    lists:foreach(fun(X) -> pipe:b(Pipe, {udp, self(), {Peer, X}}) end, Msg),
-   {active, Sock#stream{recv=Recv}}.
+   {active, Sock#iostream{recv=Recv}}.
 
 %%
 %% send packet
-io_send({{Host, Port} = _Peer, Msg}, Pipe, #stream{}=Sock) ->
+io_send({{Host, Port} = _Peer, Msg}, Pipe, #iostream{}=Sock) ->
    % ?DEBUG("knet [udp] ~p: send ~p~n~p", [self(), _Peer, Msg]),
-   {Pckt, Send} = pstream:encode(Msg, Sock#stream.send),
+   {Pckt, Send} = pstream:encode(Msg, Sock#iostream.send),
    lists:foreach(fun(X) -> ok = gen_udp:send(Pipe, Host, Port, X) end, Pckt),
-   {active, Sock#stream{send=Send}}.
+   {active, Sock#iostream{send=Send}}.
 
 %%
 %% set socket i/o control flags

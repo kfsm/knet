@@ -162,7 +162,7 @@
 
 %%
 %% i/o stream state
--record(stream, {
+-record(iostream, {
    send  = undefined :: any()      %% outbound stream encoder 
   ,recv  = undefined :: any()      %% inbound  stream encoder
 

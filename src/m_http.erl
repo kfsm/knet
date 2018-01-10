@@ -148,7 +148,7 @@ request(Timeout) ->
 %%%----------------------------------------------------------------------------
 
 id() ->
-   lens:c(lens:at(spec, #{}), lens:at(id, ?NONE)).
+   lens:c(lens:at(spec, #{}), lens:at(id, ?None)).
 
 active_socket() ->
    fun(Fun, Map) ->
@@ -166,16 +166,16 @@ method() ->
    lens:c(lens:at(spec, #{}), active_socket(), lens:at(method, 'GET')).
 
 uri() ->
-   lens:c(lens:at(spec, #{}), active_socket(), lens:at(uri, ?NONE)).
+   lens:c(lens:at(spec, #{}), active_socket(), lens:at(uri, ?None)).
 
 header() ->
    lens:c(lens:at(spec, #{}), active_socket(), lens:at(head, [])).
 
 header(Head) ->
-   lens:c(lens:at(spec, #{}), active_socket(), lens:at(head, []), lens:pair(Head, ?NONE)).
+   lens:c(lens:at(spec, #{}), active_socket(), lens:at(head, []), lens:pair(Head, ?None)).
 
 payload() ->
-   lens:c(lens:at(spec, #{}), active_socket(), lens:at(payload, ?NONE)).
+   lens:c(lens:at(spec, #{}), active_socket(), lens:at(payload, ?None)).
 
 %%%----------------------------------------------------------------------------   
 %%%
@@ -233,8 +233,8 @@ head(State) ->
    ].
 
 head_connection(Head) ->
-   case lens:get(lens:pair(<<"Connection">>, ?NONE), Head) of
-      ?NONE ->
+   case lens:get(lens:pair(<<"Connection">>, ?None), Head) of
+      ?None ->
          [{<<"Connection">>, <<"close">>}|Head];
       _     ->
          Head
@@ -243,8 +243,8 @@ head_connection(Head) ->
 head_te(undefined, Head) ->
    Head;
 head_te(_, Head) ->
-   case lens:get(lens:pair(<<"Transfer-Encoding">>, ?NONE), Head) of
-      ?NONE ->
+   case lens:get(lens:pair(<<"Transfer-Encoding">>, ?None), Head) of
+      ?None ->
          [{<<"Transfer-Encoding">>, <<"chunked">>}|Head];
       _     ->
          Head
@@ -261,7 +261,7 @@ recv(Sock, Timeout, _State) ->
 %%
 unit(Sock, Pckt, State) ->
    case lens:get(header(<<"Connection">>), State) of
-      Conn when Conn =:= <<"close">> orelse Conn =:= ?NONE ->
+      Conn when Conn =:= <<"close">> orelse Conn =:= ?None ->
          knet:close(Sock),
          [Pckt|maps:remove(http, State)];
       _           ->

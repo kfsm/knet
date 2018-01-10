@@ -38,7 +38,7 @@
 %%
 %% internal state
 -record(fsm, {
-   stream    = undefined :: #stream{}        % websocket data stream
+   stream    = undefined :: #iostream{}        % websocket data stream
   ,schema    = undefined :: atom()           % websocket transport schema (ws, wss)
   ,so        = undefined :: list() 
 }).
@@ -216,15 +216,15 @@ ioctl(_, _) ->
 'CLIENT'({Prot, Sock, Pckt}, Pipe, #fsm{stream = Stream} = State)
  when ?is_transport(Prot), is_binary(Pckt) ->
    try
-      case htstream:decode(Pckt, Stream#stream.recv) of
+      case htstream:decode(Pckt, Stream#iostream.recv) of
          {{101, Msg, Head}, Http} ->
             <<"Upgrade">>   = lens:get(lens:pair(<<"Connection">>), Head),
             <<"websocket">> = lens:get(lens:pair(<<"Upgrade">>), Head),
             pipe:b(Pipe, {ws, self(), {101, Msg, Head}}),
             'ESTABLISHED'({Prot, Sock, htstream:buffer(Http)}, Pipe, 
-               State#fsm{stream = ws_new(server, Stream#stream.peer, [])});
+               State#fsm{stream = ws_new(server, Stream#iostream.peer, [])});
          {[], Http} ->
-            {next_state, 'CLIENT', State#fsm{stream = Stream#stream{recv = Http}}}
+            {next_state, 'CLIENT', State#fsm{stream = Stream#iostream{recv = Http}}}
       end
    catch _:Reason ->
       % ?NOTICE("knet [ws]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
@@ -239,9 +239,9 @@ ioctl(_, _) ->
 
 'CLIENT'(Msg, Pipe, #fsm{stream = Stream} = State) ->
    try
-      {Pckt, Send} = htstream:encode(Msg, Stream#stream.send),
+      {Pckt, Send} = htstream:encode(Msg, Stream#iostream.send),
       pipe:b(Pipe, Pckt),
-      {next_state, 'CLIENT', State#fsm{stream = Stream#stream{send = Send}}}
+      {next_state, 'CLIENT', State#fsm{stream = Stream#iostream{send = Send}}}
    catch _:Reason ->
       % ?NOTICE("knet [ws]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
       pipe:b(Pipe, {ws, self(), {error, Reason}}),
@@ -300,16 +300,16 @@ ioctl(_, _) ->
 %%%------------------------------------------------------------------   
 
 %%
-%% create new #stream{} 
+%% create new #iostream{} 
 ws_new(Type, Url, _SOpt) ->
-   #stream{
+   #iostream{
       send = wsstream:new(Type)
      ,recv = wsstream:new(Type)
      ,peer = Url
    }.
 
 ws_new(Type, Url, _Head, _SOpt) ->
-   #stream{
+   #iostream{
       send = wsstream:new(Type)
      ,recv = wsstream:new(Type)
      ,peer = Url
@@ -320,35 +320,35 @@ ws_new(Type, Url, _Head, _SOpt) ->
 
 %%
 %% web socket recv message
-ws_recv(Pckt, Pipe, #stream{}=Ws) ->
-   % ?DEBUG("knet [websock] ~p: recv ~p~n~p", [self(), Ws#stream.peer, Pckt]),
-   {Msg, Recv} = wsstream:decode(Pckt, Ws#stream.recv),
+ws_recv(Pckt, Pipe, #iostream{}=Ws) ->
+   % ?DEBUG("knet [websock] ~p: recv ~p~n~p", [self(), Ws#iostream.peer, Pckt]),
+   {Msg, Recv} = wsstream:decode(Pckt, Ws#iostream.recv),
    lists:foreach(fun(X) -> pipe:b(Pipe, {ws, self(), X}) end, Msg),
-   {wsstream:state(Recv), Ws#stream{recv=Recv}}.
+   {wsstream:state(Recv), Ws#iostream{recv=Recv}}.
 
 %%
 %% web socket send message
-ws_send(Msg, Pipe, #stream{}=Ws) ->
-   % ?DEBUG("knet [websock] ~p: send ~p~n~p", [self(), Ws#stream.peer, Msg]),
-   {Pckt, Send} = wsstream:encode(Msg, Ws#stream.send),
+ws_send(Msg, Pipe, #iostream{}=Ws) ->
+   % ?DEBUG("knet [websock] ~p: send ~p~n~p", [self(), Ws#iostream.peer, Msg]),
+   {Pckt, Send} = wsstream:encode(Msg, Ws#iostream.send),
    lists:foreach(fun(X) -> pipe:b(Pipe, {packet, X}) end, Pckt),
-   {wsstream:state(Send), Ws#stream{send=Send}}.
+   {wsstream:state(Send), Ws#iostream{send=Send}}.
 
 %%
-%% create new http #stream{}
+%% create new http #iostream{}
 ht_new(Url, _SOpt) ->
-   #stream{
+   #iostream{
       send = htstream:new()
      ,recv = htstream:new()
      ,peer = Url
    }.
 
-ht_recv(Pckt, Pipe, #stream{}=Ht) ->
-   % ?DEBUG("knet [websock] ~p: recv ~p~n~p", [self(), Ht#stream.peer, Pckt]),
-   case htstream:decode(Pckt, Ht#stream.recv) of
+ht_recv(Pckt, Pipe, #iostream{}=Ht) ->
+   % ?DEBUG("knet [websock] ~p: recv ~p~n~p", [self(), Ht#iostream.peer, Pckt]),
+   case htstream:decode(Pckt, Ht#iostream.recv) of
       %% continue request streaming
       {[], Recv} ->
-         {htstream:state(Recv), Ht#stream{recv=Recv}};
+         {htstream:state(Recv), Ht#iostream{recv=Recv}};
 
       %% GET Request
       {{'GET', Url, Head}, _Recv} ->
@@ -366,7 +366,7 @@ ht_recv(Pckt, Pipe, #stream{}=Ht) ->
 
       %% ANY Request
       {_, Recv} ->
-         {eof, Ht#stream{recv=Recv}}       
+         {eof, Ht#iostream{recv=Recv}}       
    end.
 
 

@@ -246,6 +246,7 @@ http_stream_send(Msg, Pipe, State0) ->
       pipe:ack(Pipe, ok),
       {next_state, 'STREAM', State1}
    catch _:Reason ->
+      io:format("==> ~p ~p~n", [Reason, erlang:get_stacktrace()]),
       % ?NOTICE("knet [http]: egress failure ~p ~p", [Reason, erlang:get_stacktrace()]),
       pipe:ack(Pipe, {error, Reason}),
       {next_state, 'IDLE', stream_reset(Pipe, State0)}
@@ -484,22 +485,22 @@ tracelog_uri({request, {_Mthd, Path, Head}}) ->
 %%
 %% lenses for http requests queue
 lens_http_state_queue_hd_enq() ->
-   lens:c(lens:tuple(#http.state), lens:tuple(#fsm.queue), lens_q_hd_enq()).
+   lens:c(lens:ti(#http.state), lens:ti(#fsm.queue), lens_q_hd_enq()).
 
 lens_http_state_queue_tl() ->
-   lens:c(lens:tuple(#http.state), lens:tuple(#fsm.queue), lens_q_tl()).
+   lens:c(lens:ti(#http.state), lens:ti(#fsm.queue), lens_q_tl()).
 
 lens_http_state_queue_hd_req_http() ->
-   lens:c(lens:tuple(#http.state), lens:tuple(#fsm.queue), lens_q_hd(), lens:tuple(#req.http)).
+   lens:c(lens:ti(#http.state), lens:ti(#fsm.queue), lens_q_hd(), lens:ti(#req.http)).
 
 lens_http_state_queue_hd_req_code() ->
-   lens:c(lens:tuple(#http.state), lens:tuple(#fsm.queue), lens_q_hd(), lens:tuple(#req.code)).
+   lens:c(lens:ti(#http.state), lens:ti(#fsm.queue), lens_q_hd(), lens:ti(#req.code)).
 
 lens_http_state_queue_hd_req_teoh() ->
-   lens:c(lens:tuple(#http.state), lens:tuple(#fsm.queue), lens_q_hd(), lens:tuple(#req.teoh)).
+   lens:c(lens:ti(#http.state), lens:ti(#fsm.queue), lens_q_hd(), lens:ti(#req.teoh)).
 
 lens_http_state_queue_hd_req_treq() ->
-   lens:c(lens:tuple(#http.state), lens:tuple(#fsm.queue), lens_q_hd(), lens:tuple(#req.treq)).
+   lens:c(lens:ti(#http.state), lens:ti(#fsm.queue), lens_q_hd(), lens:ti(#req.treq)).
 
 lens_q_hd_enq() ->
    fun(Fun, Queue) ->
@@ -508,7 +509,7 @@ lens_q_hd_enq() ->
 
 lens_q_hd() ->
    fun(Fun, Queue) ->
-      lens:fmap(fun(X) -> deq:poke(X, deq:tail(Queue)) end, Fun(deq:head(Queue)))      
+      lens:fmap(fun(X) -> deq:enqh(X, deq:tail(Queue)) end, Fun(deq:head(Queue)))      
    end.
 
 lens_q_tl() ->
