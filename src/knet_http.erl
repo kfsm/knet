@@ -246,8 +246,6 @@ http_stream_send(Msg, Pipe, State0) ->
       pipe:ack(Pipe, ok),
       {next_state, 'STREAM', State1}
    catch _:Reason ->
-      io:format("==> ~p ~p~n", [Reason, erlang:get_stacktrace()]),
-      % ?NOTICE("knet [http]: egress failure ~p ~p", [Reason, erlang:get_stacktrace()]),
       pipe:ack(Pipe, {error, Reason}),
       {next_state, 'IDLE', stream_reset(Pipe, State0)}
    end.
