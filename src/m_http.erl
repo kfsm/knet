@@ -44,11 +44,11 @@
 
 %%
 %% request data type
--record(request, {
+-record(http_request, {
    uri     = ?None    :: _,
    method  = 'GET'    :: _,
    headers = []       :: _,
-   payload = ?None    :: _,
+   content = ?None    :: _,
    so      = []       :: _
 }).
 
@@ -89,7 +89,7 @@ new(Uri) ->
 
 new(Uri, SOpt) ->
    fun(State) ->
-      [Uri|State#{http => #request{uri = uri:new(Uri), so = SOpt}}]
+      [Uri|State#{request => #http_request{uri = uri:new(Uri), so = SOpt}}]
    end.
 
 %%
@@ -140,7 +140,7 @@ d(Value) ->
    payload(Value).
 
 payload(Value) ->
-   m_state:put(payload(), Value).
+   m_state:put(content(), Value).
 
 %%
 %% evaluate http request
@@ -159,27 +159,30 @@ request(Timeout) ->
 
 %%%----------------------------------------------------------------------------   
 %%%
-%%% http environment
+%%% state lenses
 %%%
 %%%----------------------------------------------------------------------------
 
 uri() ->
-   lens:c(lens:at(http), lens:ti(#request.uri)).
+   lens:c(lens:at(request), lens:ti(#http_request.uri)).
 
 method() ->
-   lens:c(lens:at(http), lens:ti(#request.method)).
+   lens:c(lens:at(request), lens:ti(#http_request.method)).
 
 header(Head) ->
-   lens:c(lens:at(http), lens:ti(#request.headers), lens:pair(Head, ?None)).
+   lens:c(lens:at(request), lens:ti(#http_request.headers), lens:pair(Head, ?None)).
 
-header() ->
-   lens:c(lens:at(http), lens:ti(#request.headers)).
+headers() ->
+   lens:c(lens:at(request), lens:ti(#http_request.headers)).
 
-payload() ->
-   lens:c(lens:at(http), lens:ti(#request.payload)).
+content() ->
+   lens:c(lens:at(request), lens:ti(#http_request.content)).
 
 so() ->
-   lens:c(lens:at(http), lens:ti(#request.so)).
+   lens:c(lens:at(request), lens:ti(#http_request.so)).
+
+% so(Opt) ->
+%    lens:c(lens:at(http), lens:ti(#request.so), lens:pair(Opt, ?None)).
 
 %%%----------------------------------------------------------------------------   
 %%%
@@ -223,16 +226,16 @@ send(Sock, State) ->
    Url  = lens:get(uri(), State),
    Head = head(State),
    ok   = knet:send(Sock, {Mthd, Url, Head}),
-   [option || lens:get(payload(), State), scalar:s(_), knet:send(Sock, _)],
+   [option || lens:get(content(), State), scalar:s(_), knet:send(Sock, _)],
    knet:send(Sock, eof).
 
 %%
 %% 
 head(State) ->
    [$.||
-      lens:get(header(), State),
+      lens:get(headers(), State),
       head_connection(_),
-      head_te(lens:get(payload(), State), _)
+      head_te(lens:get(content(), State), _)
    ].
 
 head_connection(Head) ->
@@ -264,8 +267,8 @@ unit(Sock, Pckt, State) ->
    case lens:get(header(<<"Connection">>), State) of
       Conn when Conn =:= <<"close">> orelse Conn =:= ?None ->
          knet:close(Sock),
-         [Pckt|maps:remove(http, State)];
+         [Pckt|maps:remove(request, State)];
       _           ->
          Authority = uri:authority( lens:get(uri(), State) ),
-         [Pckt|maps:remove(http, State#{Authority => Sock})]
+         [Pckt|maps:remove(request, State#{Authority => Sock})]
    end.
