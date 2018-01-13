@@ -25,15 +25,32 @@
 
 -export([unit/1, fail/1, '>>='/2]).
 -export([
-   new/1, new/2, 
-   x/1, method/1, 
-   h/1, h/2, header/2, 
-   d/1, payload/1, 
-   r/0, request/0, request/1
+   new/1, 
+   new/2, 
+   x/1, 
+   method/1, 
+   h/1, 
+   h/2, 
+   header/2,
+   d/1, 
+   payload/1, 
+   r/0, 
+   request/0, 
+   request/1
 ]).
 
 -type m(A)    :: fun((_) -> [A|_]).
 -type f(A, B) :: fun((A) -> m(B)).
+
+%%
+%% request data type
+-record(request, {
+   uri     = ?None    :: _,
+   method  = 'GET'    :: _,
+   headers = []       :: _,
+   payload = ?None    :: _,
+   so      = []       :: _
+}).
 
 %%%----------------------------------------------------------------------------   
 %%%
@@ -63,7 +80,7 @@ fail(X) ->
    m_state:'>>='(X, Fun).
 
 %%
-%%
+%% define a new context for http request
 -spec new(_) -> m(_).
 -spec new(_, list()) -> m(_).
 
@@ -71,13 +88,12 @@ new(Uri) ->
    new(Uri, []).
 
 new(Uri, SOpt) ->
-   fun(State0) ->
-      Id = scalar:s(opts:val(label, Uri, SOpt)),
-      [Id|lens:put(so(), SOpt, lens:put(uri(), uri:new(Uri), lens:put(id(), Id, State0)))]
+   fun(State) ->
+      [Uri|State#{http => #request{uri = uri:new(Uri), so = SOpt}}]
    end.
 
 %%
-%%
+%% define method of http request
 -spec x(_) -> m(_).
 -spec method(_) -> m(_).
 
@@ -88,7 +104,7 @@ method(Mthd) ->
    m_state:put(method(), Mthd).
 
 %%
-%%
+%% add header to http request
 -spec h(_) -> m(_).
 -spec h(_, _) -> m(_).
 -spec header(_, _) -> m(_).
@@ -101,7 +117,7 @@ hv(<<$\s, X/binary>>) -> hv(X);
 hv(<<$\t, X/binary>>) -> hv(X);
 hv(<<$\n, X/binary>>) -> hv(X);
 hv(<<$\r, X/binary>>) -> hv(X);
-hv(X) -> X.
+hv(X) -> scalar:decode(X).
 
 
 h(Head, Value) ->
@@ -116,7 +132,7 @@ header(Head, Value) ->
 
 
 %%
-%%
+%% add payload to http request
 -spec d(_) -> m(_).
 -spec payload(_) -> m(_).
 
@@ -127,7 +143,7 @@ payload(Value) ->
    m_state:put(payload(), Value).
 
 %%
-%%
+%% evaluate http request
 -spec r() -> m(_).
 -spec request() -> m(_).
 -spec request(_) -> m(_).
@@ -147,35 +163,23 @@ request(Timeout) ->
 %%%
 %%%----------------------------------------------------------------------------
 
-id() ->
-   lens:c(lens:at(spec, #{}), lens:at(id, ?NONE)).
-
-active_socket() ->
-   fun(Fun, Map) ->
-      Key = maps:get(id, Map),
-      lens:fmap(fun(X) -> maps:put(Key, X, Map) end, Fun(maps:get(Key, Map, #{})))
-   end.
-
-sys_so() ->
-   lens:at(so, []).
-
-so() ->
-   lens:c(lens:at(spec, #{}), active_socket(), lens:at(so, [])).
+uri() ->
+   lens:c(lens:at(http), lens:ti(#request.uri)).
 
 method() ->
-   lens:c(lens:at(spec, #{}), active_socket(), lens:at(method, 'GET')).
-
-uri() ->
-   lens:c(lens:at(spec, #{}), active_socket(), lens:at(uri, ?NONE)).
-
-header() ->
-   lens:c(lens:at(spec, #{}), active_socket(), lens:at(head, [])).
+   lens:c(lens:at(http), lens:ti(#request.method)).
 
 header(Head) ->
-   lens:c(lens:at(spec, #{}), active_socket(), lens:at(head, []), lens:pair(Head, ?NONE)).
+   lens:c(lens:at(http), lens:ti(#request.headers), lens:pair(Head, ?None)).
+
+header() ->
+   lens:c(lens:at(http), lens:ti(#request.headers)).
 
 payload() ->
-   lens:c(lens:at(spec, #{}), active_socket(), lens:at(payload, ?NONE)).
+   lens:c(lens:at(http), lens:ti(#request.payload)).
+
+so() ->
+   lens:c(lens:at(http), lens:ti(#request.so)).
 
 %%%----------------------------------------------------------------------------   
 %%%
@@ -202,7 +206,6 @@ http_io(Timeout, State) ->
 %%
 %% create a new socket or re-use existed one
 socket(State) ->
-   GOpt      = lens:get(sys_so(), State),
    SOpt      = lens:get(so(), State),
    Uri       = lens:get(uri(), State),
    Authority = uri:authority(Uri),
@@ -210,13 +213,13 @@ socket(State) ->
       #{Authority := Sock} ->
          {ok, Sock};
       _ ->
-         knet:socket(Uri, GOpt ++ SOpt)
+         knet:socket(Uri, SOpt)
    end.
 
 %%
 %%
 send(Sock, State) ->
-   Mthd = lens:get(method(), State),   
+   Mthd = lens:get(method(), State),
    Url  = lens:get(uri(), State),
    Head = head(State),
    ok   = knet:send(Sock, {Mthd, Url, Head}),
@@ -233,8 +236,8 @@ head(State) ->
    ].
 
 head_connection(Head) ->
-   case lens:get(lens:pair(<<"Connection">>, ?NONE), Head) of
-      ?NONE ->
+   case lens:get(lens:pair(<<"Connection">>, ?None), Head) of
+      ?None ->
          [{<<"Connection">>, <<"close">>}|Head];
       _     ->
          Head
@@ -243,28 +246,26 @@ head_connection(Head) ->
 head_te(undefined, Head) ->
    Head;
 head_te(_, Head) ->
-   case lens:get(lens:pair(<<"Transfer-Encoding">>, ?NONE), Head) of
-      ?NONE ->
+   case lens:get(lens:pair(<<"Transfer-Encoding">>, ?None), Head) of
+      ?None ->
          [{<<"Transfer-Encoding">>, <<"chunked">>}|Head];
       _     ->
          Head
    end.
-
 
 %%
 %%
 recv(Sock, Timeout, _State) ->
    {ok, stream:list(knet:stream(Sock, Timeout))}.   
 
-
 %%
 %%
 unit(Sock, Pckt, State) ->
    case lens:get(header(<<"Connection">>), State) of
-      Conn when Conn =:= <<"close">> orelse Conn =:= ?NONE ->
+      Conn when Conn =:= <<"close">> orelse Conn =:= ?None ->
          knet:close(Sock),
          [Pckt|maps:remove(http, State)];
       _           ->
          Authority = uri:authority( lens:get(uri(), State) ),
-         [Pckt|State#{Authority => Sock}]
+         [Pckt|maps:remove(http, State#{Authority => Sock})]
    end.

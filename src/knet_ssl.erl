@@ -145,6 +145,9 @@ ioctl(socket,  #state{socket = Sock}) ->
          {next_state, 'ESTABLISHED', State1};
       {error, closed} ->
          {stop, normal, State0};
+      {error, enoent} ->
+         error_to_side_a(Pipe, enoent, State0),
+         {stop, normal, State0};         
       {error, Reason} ->
          spawn_acceptor(Uri, State0),
          error_to_side_a(Pipe, Reason, State0),

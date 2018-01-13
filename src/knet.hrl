@@ -161,8 +161,8 @@
 
 
 %%
-%% i/o stream state
--record(stream, {
+%% i/o stream state (deprecated)
+-record(iostream, {
    send  = undefined :: any()      %% outbound stream encoder 
   ,recv  = undefined :: any()      %% inbound  stream encoder
 

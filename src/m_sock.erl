@@ -78,7 +78,7 @@ recv(Timeout) ->
 %%%----------------------------------------------------------------------------
 
 id() ->
-   lens:c([lens:map(spec, #{}), lens:map(id, ?NONE)]).
+   lens:c([lens:map(spec, #{}), lens:map(id, ?None)]).
 
 focus() ->
    fun(Fun, Map) ->
@@ -93,7 +93,7 @@ so() ->
    lens:c([lens:map(spec, #{}), focus(), lens:map(so, [])]).
 
 uri() ->
-   lens:c([lens:map(spec, #{}), focus(), lens:map(uri, ?NONE)]).
+   lens:c([lens:map(spec, #{}), focus(), lens:map(uri, ?None)]).
 
 %%%----------------------------------------------------------------------------   
 %%%
