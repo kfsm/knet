@@ -7,7 +7,7 @@
  {<<"goldrush">>,{pkg,<<"goldrush">>,<<"0.1.9">>},1},
  {<<"htcodec">>,
   {git,"https://github.com/kfsm/htcodec",
-       {ref,"f2f85f024cb8ab18f2a8055d3b48539a201db3e9"}},
+       {ref,"709a9a0fb5028196f32bf5573a60f28c07ce5246"}},
   0},
  {<<"htstream">>,
   {git,"https://github.com/kfsm/htstream",
