@@ -20,19 +20,19 @@
 
 %% common test
 -export([
-   all/0
-  ,groups/0
-  ,init_per_suite/1
-  ,end_per_suite/1
-  ,init_per_group/2
-  ,end_per_group/2
+   all/0,
+   groups/0,
+   init_per_suite/1,
+   end_per_suite/1,
+   init_per_group/2,
+   end_per_group/2,
+   init_per_testcase/2,
+   end_per_testcase/2
 ]).
 -export([
-   knet_cli_get/1,
-   knet_cli_post/1
+   connect/1,
+   send_recv/1
 ]).
-
--define(URI,     "http://httpbin.org/").
 
 %%%----------------------------------------------------------------------------   
 %%%
@@ -48,8 +48,7 @@ all() ->
 groups() ->
    [
       {client, [], [
-         knet_cli_get
-        ,knet_cli_post
+         connect, send_recv
       ]}
    ].
 
@@ -67,16 +66,24 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
    application:stop(knet).
 
-%%   
 %%
 init_per_group(_, Config) ->
    Config.
 
-
-%%
 %%
 end_per_group(_, _Config) ->
    ok.
+
+%%
+init_per_testcase(_, Config) ->
+   meck:new(inet, [unstick, passthrough]),
+   meck:new(gen_tcp, [unstick, passthrough]),
+   Config.
+
+end_per_testcase(_, _Config) ->
+   meck:unload(gen_tcp),
+   meck:unload(inet),
+   ok. 
 
 %%%----------------------------------------------------------------------------   
 %%%
@@ -84,24 +91,70 @@ end_per_group(_, _Config) ->
 %%%
 %%%----------------------------------------------------------------------------   
 
-knet_cli_get(_) ->
-   {ok, Sock} = knet:connect(uri:path(<<"/get">>, uri:new(?URI))),
-   %% http interface do have require explicit eof
-   %% {'GET', ...}
-   %% eof
-   {ioctl, b, Sock} = knet:recv(Sock),
-   {http, Sock, {200, <<"OK">>, _, _}} = knet:recv(Sock),
-   {http, Sock,   _} = knet:recv(Sock),
-   {http, Sock, eof} = knet:recv(Sock).
+connect(_Config) ->
+   meck_gen_http_echo(),
 
-knet_cli_post(_) ->
-   Uri  = uri:path(<<"/post">>, uri:new(?URI)),
-   {ok, Sock} = knet:socket(Uri),
-   _    = knet:send(Sock, {'POST', Uri, [{'Connection', <<"close">>}, {'Content-Length', 6}], <<"123456">>}),
+   {ok, Sock} = knet:connect("http://example.com:80"),
    {ioctl, b, Sock} = knet:recv(Sock),
-   {http, Sock, {200, <<"OK">>, _, _}} = knet:recv(Sock),
-   {http, Sock,   _} = knet:recv(Sock),
-   {http, Sock, eof} = knet:recv(Sock).
-   
+   {http, Sock, 
+      {200, <<"OK">>, [
+         {<<"X-Knet-Peer">>,<<"tcp://example.com:80">>},
+         {<<"Content-Length">>, <<"5">>},
+         {<<"Connection">>, <<"close">>}
+      ]}
+   } = knet:recv(Sock),
+   {http, Sock, <<"hello">>} = knet:recv(Sock),
+   {http, Sock, eof} = knet:recv(Sock),
 
+   true = meck:validate(gen_tcp),
+   true = meck:validate(inet).
+
+
+
+send_recv(_Config) ->
+   meck_gen_http_echo(),
+
+   {ok, Sock} = knet:socket("http://example.com:80"),
+   {ioctl, b, Sock} = knet:recv(Sock),
+
+   ok = knet:send(Sock, {'GET', uri:new("http://example.com:80/"), []}),
+   ok = knet:send(Sock, eof),
+   {http, Sock, 
+      {200, <<"OK">>, [
+         {<<"X-Knet-Peer">>,<<"tcp://example.com:80">>},
+         {<<"Content-Length">>, <<"5">>},
+         {<<"Connection">>, <<"close">>}
+      ]}
+   } = knet:recv(Sock),
+   {http, Sock, <<"hello">>} = knet:recv(Sock),
+   {http, Sock, eof} = knet:recv(Sock),
+
+   true = meck:validate(gen_tcp),
+   true = meck:validate(inet).
+
+%%%----------------------------------------------------------------------------   
+%%%
+%%% utility
+%%%
+%%%----------------------------------------------------------------------------   
+
+%%
+%%
+meck_gen_http_echo() ->
+   meck:expect(gen_tcp, connect, 
+      fun(Host, Port, _Opts, _Timeout) -> 
+         {ok, #{peer => {Host, Port}, sock => {{127,0,0,1}, 65536}}}
+      end
+   ),
+   meck:expect(gen_tcp, close,  fun(_) -> ok end),
+   meck:expect(inet, setopts,  fun(_, _) -> ok end),
+   meck:expect(inet, peername, fun(#{peer := Peer}) -> {ok, Peer} end),
+   meck:expect(inet, sockname, fun(#{sock := Sock}) -> {ok, Sock} end),
+
+   meck:expect(gen_tcp, send,
+      fun(_Sock, _Packet) -> 
+         self() ! {tcp, undefined, <<"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello">>},
+         ok 
+      end
+   ).
 
