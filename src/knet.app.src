@@ -10,8 +10,7 @@
          feta,
          htstream,
          pipe,
-         datum,
-         pns 
+         datum
       ]},
       {mod, {knet_app, []}},
       {env, []}
