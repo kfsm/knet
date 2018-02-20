@@ -33,7 +33,8 @@
    header/2,
    payload/1, 
    request/0, 
-   request/1
+   request/1,
+   require/1
 ]).
 
 -type m(A)    :: fun((_) -> [A|_]).
@@ -152,6 +153,23 @@ request() ->
 request(Timeout) ->
    fun(State) -> http_io(Timeout, State) end.   
 
+%%
+%%
+-spec require(lens:lens()) -> m(_).
+
+require(Lens) ->
+   fun(State) ->
+      case lens:get(lens:c(lens:at(ret, #{}), Lens), State) of
+         {ok, Expect} ->
+            [Expect | State];
+         {error, Reason} ->
+            throw(Reason);
+         LensWithFocused ->
+            [LensWithFocused | State]
+      end
+   end.
+
+
 %%%----------------------------------------------------------------------------   
 %%%
 %%% state lenses
@@ -213,20 +231,20 @@ uri() ->
 %%%
 %%%----------------------------------------------------------------------------
 
-http_io(Timeout, State) ->
+http_io(Timeout, State0) ->
    case
       [either ||
-         Sock <- socket(State),
-         send(Sock, State),
-         recv(Sock, Timeout, State),
-         unit(Sock, _)
+         Sock <- socket(State0),
+         send(Sock, State0),
+         recv(Sock, Timeout, State0),
+         cats:unit(Sock, _)
       ]
    of
-      {ok, Sock1, Pckt} ->
-         unit(Sock1, Pckt, State);
+      {ok, Sock1, #{ret := Pckt} = State1} ->
+         unit(Sock1, Pckt, State1);
       {error, _} ->
-         Authority = uri:authority( lens:get(req_uri(), State) ),
-         http_io(Timeout, maps:remove(Authority, State))
+         Authority = uri:authority( lens:get(req_uri(), State0) ),
+         http_io(Timeout, maps:remove(Authority, State0))
    end.
 
 %%
@@ -256,7 +274,7 @@ send(Sock, State) ->
 
 %%
 %%
-recv(Sock, Timeout, _State) ->
+recv(Sock, Timeout, State) ->
    Http    = stream:list(knet:stream(Sock, Timeout)),
    Payload = case 
       htcodec:decode(Http) 
@@ -266,7 +284,7 @@ recv(Sock, Timeout, _State) ->
       {error, _} ->
          tl(Http)
    end,
-   {ok, [hd(Http) | Payload]}.   
+   {ok, State#{ret => [hd(Http) | Payload]}}.   
 
 %%
 %%
