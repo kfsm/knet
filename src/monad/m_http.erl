@@ -83,9 +83,16 @@ fail(X) ->
 
 new(Uri) ->
    fun(State) ->
-      Request = [#'GET'{uri = uri:new(Uri)}],
-      [Uri | State#{req => Request}]
+      Request = #'GET'{
+         uri     = uri:new(Uri),
+         headers = [
+            {<<"Connection">>, <<"close">>},
+            {<<"Accept">>,     <<"*/*">>}
+         ]
+      },
+      [Uri | State#{req => [Request]}]
    end.
+
 
 %% 
 %% set socket options
@@ -118,10 +125,10 @@ hv(X) -> scalar:decode(X).
 
 header(Head, Value)
  when is_list(Value) ->
-   m_state:put(header(scalar:s(Head)), scalar:s(Value));
+   m_state:put(req_header(scalar:s(Head)), scalar:s(Value));
 
 header(Head, Value) ->
-   m_state:put(header(scalar:s(Head)), Value).
+   m_state:put(req_header(scalar:s(Head)), Value).
 
 
 %%
@@ -129,7 +136,10 @@ header(Head, Value) ->
 -spec payload(_) -> m(_).
 
 payload(Value) ->
-   m_state:put(req_payload(), Value).
+   fun(State) ->
+      {ok, Payload} = htcodec:encode(lens:get(req_header(<<"Content-Type">>), State), Value),
+      [Payload | lens:put(req_payload(), Payload, State)]
+   end.
 
 %%
 %% evaluate http request
@@ -169,7 +179,11 @@ req_payload() ->
    lens:c(lens:at(req), lens:tl()).
 
 
-% ret
+%%
+%%
+ret() ->
+   lens:c(lens:at(ret), lens:hd()).
+
 
 
 uri() ->
@@ -233,92 +247,26 @@ socket(State) ->
 %%
 send(Sock, State) ->
    [either ||
-      Request <- http_request(State),
-      Payload <- http_payload(State),
+      Request =< lens:get(req(), State),
+      Payload =< lens:get(req_payload(), State),
       knet:send(Sock, Request),
       knet:send(Sock, Payload),
       knet:send(Sock, eof)
    ].
 
-http_request(State) ->
-   {ok, [identity ||
-      default_headers(State),
-      lens:get(req(), _)
-   ]}.
-   
-http_payload(State) ->
-   case lens:get(req_payload(), State) of
-      [] ->
-         {ok, []};
-      Payload ->
-         htcodec:encode(lens:get(req_header(<<"Content-Type">>), State), Payload)
-   end.
-
-
-%%
-%%
-default_headers(State) ->
-   [identity ||
-      cats:unit(State),
-      default_headers_connection(_),
-      default_headers_accept(_),
-      default_headers_transfer_encoding(_)
-   ].
-
-default_headers_connection(State) ->
-   default_header(<<"Connection">>, <<"close">>, State).
-
-default_headers_accept(State) ->
-   default_header(<<"Accept">>, <<"*/*">>, State).
-
-default_headers_transfer_encoding(State) ->
-   case lens:get(req_payload(), State) of
-      [] ->
-         State;
-      _  ->
-         default_header(<<"Transfer-Encoding">>, <<"chunked">>, State)
-   end.
-
-default_header(Head, Value, State) ->
-   case lens:get(req_header(Head), State) of
-      ?None ->
-         lens:put(req_header(Head), Value, State);
-      _     ->
-         State
-   end.
-
-
-% %%
-% %% 
-% head(State) ->
-%    [$.||
-%       lens:get(headers(), State),
-%       head_connection(_),
-%       head_te(lens:get(content(), State), _)
-%    ].
-
-% head_connection(Head) ->
-%    case lens:get(lens:pair(<<"Connection">>, ?None), Head) of
-%       ?None ->
-%          [{<<"Connection">>, <<"close">>}|Head];
-%       _     ->
-%          Head
-%    end.
-
-% head_te(undefined, Head) ->
-%    Head;
-% head_te(_, Head) ->
-%    case lens:get(lens:pair(<<"Transfer-Encoding">>, ?None), Head) of
-%       ?None ->
-%          [{<<"Transfer-Encoding">>, <<"chunked">>}|Head];
-%       _     ->
-%          Head
-%    end.
-
 %%
 %%
 recv(Sock, Timeout, _State) ->
-   {ok, stream:list(knet:stream(Sock, Timeout))}.   
+   Http    = stream:list(knet:stream(Sock, Timeout)),
+   Payload = case 
+      htcodec:decode(Http) 
+   of
+      {ok, Result} -> 
+         [Result];
+      {error, _} ->
+         tl(Http)
+   end,
+   {ok, [hd(Http) | Payload]}.   
 
 %%
 %%
