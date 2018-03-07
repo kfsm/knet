@@ -34,7 +34,9 @@
    payload/1, 
    request/0, 
    request/1,
-   require/1
+   require/1,
+   require/2,
+   defined/1
 ]).
 
 -type m(A)    :: fun((_) -> [A|_]).
@@ -156,6 +158,7 @@ request(Timeout) ->
 %%
 %%
 -spec require(lens:lens()) -> m(_).
+-spec require(atom(), lens:lens()) -> m(_).
 
 require(Lens) ->
    fun(State) ->
@@ -164,8 +167,31 @@ require(Lens) ->
             [Expect | State];
          {error, Reason} ->
             throw(Reason);
-         LensWithFocused ->
-            [LensWithFocused | State]
+         LensFocusedAt ->
+            [LensFocusedAt | State]
+      end
+   end.
+
+require(code, Code) ->
+   require( lens:c(lens:hd(), lens:t1(), lens:require(Code)) );
+
+require(header, Lens) ->
+   require( lens:c(lens:hd(), lens:t3(), Lens) );
+
+require(content, Lens) ->
+   require( lens:c(lens:tl(), lens:hd(), Lens) ).
+
+%%
+%%
+-spec defined(lens:lens()) -> m(_).
+
+defined(Lens) ->
+   fun(State) ->
+      case lens:get(lens:c(lens:at(ret, #{}), Lens), State) of
+         undefined ->
+            throw(undefined);
+         LensFocusedAt ->
+            [LensFocusedAt | State]
       end
    end.
 
@@ -196,7 +222,6 @@ req_header(Head) ->
 req_payload() ->
    lens:c(lens:at(req), lens:tl()).
 
-
 %%
 %%
 ret() ->
@@ -204,8 +229,6 @@ ret() ->
 
 
 
-uri() ->
-   lens:c(lens:at(request), lens:ti(#http_request.uri)).
 
 % method() ->
 %    lens:c(lens:at(request), lens:ti(#http_request.method)).
@@ -294,6 +317,6 @@ unit(Sock, Pckt, State) ->
          knet:close(Sock),
          [Pckt|maps:remove(request, State)];
       _           ->
-         Authority = uri:authority( lens:get(uri(), State) ),
+         Authority = uri:authority( lens:get(req_uri(), State) ),
          [Pckt|maps:remove(request, State#{Authority => Sock})]
    end.
