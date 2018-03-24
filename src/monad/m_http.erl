@@ -228,26 +228,6 @@ ret() ->
    lens:c(lens:at(ret), lens:hd()).
 
 
-
-
-% method() ->
-%    lens:c(lens:at(request), lens:ti(#http_request.method)).
-
-% headers(Head) ->
-%    lens:c(lens:at(request), lens:ti(#http_request.headers), lens:pair(Head, ?None)).
-
-% headers() ->
-%    lens:c(lens:at(request), lens:ti(#http_request.headers)).
-
-% content() ->
-%    lens:c(lens:at(request), lens:ti(#http_request.content)).
-
-% so() ->
-%    lens:c(lens:at(request), lens:ti(#http_request.so)).
-
-% so(Opt) ->
-%    lens:c(lens:at(http), lens:ti(#request.so), lens:pair(Opt, ?None)).
-
 %%%----------------------------------------------------------------------------   
 %%%
 %%% i/o routine
@@ -273,8 +253,7 @@ http_io(Timeout, State0) ->
 %%
 %% create a new socket or re-use existed one
 socket(State) ->
-   SOpt      = [],
-   % SOpt      = lens:get(so(), State),
+   SOpt      = lens:get(lens:at(so), State),
    Uri       = lens:get(req_uri(), State),
    Authority = uri:authority(Uri),
    case State of
@@ -298,7 +277,10 @@ send(Sock, State) ->
 %%
 %%
 recv(Sock, Timeout, State) ->
-   Http    = stream:list(knet:stream(Sock, Timeout)),
+   {Trace, Http} = lists:partition(
+      fun({trace, _}) -> true; (_) -> false end,
+      stream:list(knet:stream(Sock, Timeout))
+   ),
    Payload = case 
       htcodec:decode(Http) 
    of
@@ -307,7 +289,7 @@ recv(Sock, Timeout, State) ->
       {error, _} ->
          tl(Http)
    end,
-   {ok, State#{ret => [hd(Http) | Payload]}}.   
+   {ok, State#{ret => [hd(Http) | Payload], trace => Trace}}.   
 
 %%
 %%
