@@ -106,7 +106,7 @@ new(Uri) ->
             {<<"Accept">>,     <<"*/*">>}
          ]
       },
-      [Uri | State#{req => [Request]}]
+      [Uri | State#{req => [Request], so => []}]
    end.
 
 
