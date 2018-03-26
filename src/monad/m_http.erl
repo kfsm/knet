@@ -24,7 +24,7 @@
 -include_lib("datum/include/datum.hrl").
 -include_lib("knet/include/knet.hrl").
 
--export([unit/1, fail/1, '>>='/2]).
+-export([unit/1, fail/1, '>>='/2, once/1]).
 -export([
    new/1, 
    so/1,
@@ -79,6 +79,19 @@ fail(X) ->
 
 '>>='(X, Fun) ->
    m_state:'>>='(X, Fun).
+
+%%
+%% evaluate monadic expression
+-spec once(m(_)) -> _.
+
+once(Expr) ->
+   try
+      [Result | _] = Expr(#{}),
+      {ok, Result}
+   catch throw:Reason ->
+      {error, Reason}
+   end.   
+
 
 %%
 %% create a new context for http request
