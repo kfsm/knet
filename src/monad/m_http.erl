@@ -154,7 +154,11 @@ header(Head, Value) ->
 payload(Value) ->
    fun(State) ->
       {ok, Payload} = htcodec:encode(lens:get(req_header(<<"Content-Type">>), State), Value),
-      [Payload | lens:put(req_payload(), Payload, State)]
+      % [Payload | lens:put(req_payload(), Payload, State)]
+      Len = erlang:byte_size(Payload),
+      [Payload |
+         lens:put(req_header(<<"Content-Length">>), Len, 
+            lens:put(req_payload(), Payload, State))]
    end.
 
 %%
@@ -290,6 +294,7 @@ send(Sock, State) ->
 %%
 %%
 recv(Sock, Timeout, State) ->
+   %% @todo: we do not support trace here. It must be handled via side-effect.
    {Trace, Http} = lists:partition(
       fun({trace, _}) -> true; (_) -> false end,
       stream:list(knet:stream(Sock, Timeout))

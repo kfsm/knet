@@ -10,7 +10,7 @@
   0},
  {<<"htstream">>,
   {git,"https://github.com/kfsm/htstream",
-       {ref,"1659ec5a6e12aec4b8debd1bcfae421cdcf4659b"}},
+       {ref,"d4719b4603f8610444035f4416f4648bb32bb31e"}},
   0},
  {<<"jsx">>,{pkg,<<"jsx">>,<<"2.9.0">>},1},
  {<<"meck">>,{pkg,<<"meck">>,<<"0.8.9">>},0},
