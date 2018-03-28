@@ -152,13 +152,12 @@ header(Head, Value) ->
 -spec payload(_) -> m(_).
 
 payload(Value) ->
-   fun(State) ->
-      {ok, Payload} = htcodec:encode(lens:get(req_header(<<"Content-Type">>), State), Value),
-      % [Payload | lens:put(req_payload(), Payload, State)]
-      Len = erlang:byte_size(Payload),
-      [Payload |
-         lens:put(req_header(<<"Content-Length">>), Len, 
-            lens:put(req_payload(), Payload, State))]
+   fun(State0) ->
+      {ok, Payload} = htcodec:encode(lens:get(req_header(<<"Content-Type">>), State0), Value),
+      Length = erlang:byte_size(Payload),
+      State1 = lens:put(req_payload(), Payload, State0),
+      State2 = lens:put(req_header(<<"Content-Length">>), Length, State1),
+      [Payload | State2]
    end.
 
 %%
