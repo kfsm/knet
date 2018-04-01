@@ -24,7 +24,7 @@
 -include_lib("datum/include/datum.hrl").
 -include_lib("knet/include/knet.hrl").
 
--export([unit/1, fail/1, '>>='/2, once/1]).
+-export([unit/1, fail/1, '>>='/2, putT/1, getT/1, once/1]).
 -export([
    new/1, 
    so/1,
@@ -81,6 +81,49 @@ fail(X) ->
    m_state:'>>='(X, Fun).
 
 %%
+%%
+-spec putT(_) -> m(_).
+
+putT(Expr)
+ when is_list(Expr) ->
+   {Head, Value} = lists:splitwith(fun(X) -> X =/= $  end, Expr),
+   case lists:last(Head) of
+      %% The value is header
+      $: ->
+         header(Expr);
+
+      %% The value is method + url
+      _  ->
+         [m_state ||
+            new( tl(Value) ),
+            method(scalar:atom(Head))
+         ]
+   end;
+
+putT(X) ->
+   payload(X).
+
+
+%%
+%%
+-spec getT(_) -> m(_).
+
+getT(Code)
+ when is_integer(Code) ->
+   [m_state ||
+      request(),
+      require(code, Code)
+   ];
+
+getT(X)
+ when is_list(X) ->
+   ok;
+
+getT(_) ->
+   ok.
+
+
+%%
 %% evaluate monadic expression
 -spec once(m(_)) -> _.
 
@@ -92,6 +135,11 @@ once(Expr) ->
       {error, Reason}
    end.   
 
+%%%----------------------------------------------------------------------------   
+%%%
+%%% http dsl
+%%%
+%%%----------------------------------------------------------------------------
 
 %%
 %% create a new context for http request
