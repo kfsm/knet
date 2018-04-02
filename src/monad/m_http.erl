@@ -86,22 +86,31 @@ fail(X) ->
 
 putT(Expr)
  when is_list(Expr) ->
-   {Head, Value} = lists:splitwith(fun(X) -> X =/= $  end, Expr),
-   case lists:last(Head) of
-      %% The value is header
-      $: ->
-         header(Expr);
-
-      %% The value is method + url
-      _  ->
+   case parse_either_request_or_header(Expr) of
+      {request, Mthd, Url} ->
          [m_state ||
-            new( tl(Value) ),
-            method(scalar:atom(Head))
-         ]
+            new( Url ),
+            method( scalar:atom(Mthd) )
+         ];
+
+      {header, Head, Value} ->
+         header(Head, hv(scalar:s(Value)))
    end;
 
 putT(X) ->
    payload(X).
+
+
+parse_either_request_or_header(Expr) ->
+   parse_either_request_or_header(Expr, []).
+
+parse_either_request_or_header([$  | Tail], Acc) ->
+   {request, lists:reverse(Acc), Tail};
+parse_either_request_or_header([$: | Tail], Acc) ->
+   {header, lists:reverse(Acc), Tail};
+parse_either_request_or_header([Head | Tail], Acc) ->
+   parse_either_request_or_header(Tail, [Head | Acc]).
+
 
 
 %%
@@ -115,12 +124,27 @@ getT(Code)
       require(code, Code)
    ];
 
-getT(X)
- when is_list(X) ->
-   ok;
+getT(Head)
+ when is_list(Head) ->
+   [H, V] = binary:split(scalar:s(Head), <<$:>>),
+   case hv(V) of
+      <<$_>> ->
+         require(header, lens:pair(H));
+      Value  ->
+         require(header, lens:c(lens:pair(H), lens:require(Value)))
+   end;
 
-getT(_) ->
-   ok.
+getT('*') ->
+   require(content, identity());
+
+getT(Lens) ->
+   require(content, Lens).
+
+
+identity() ->
+   fun(Fun, Data) ->
+      lens:fmap(fun(X) -> X end, Fun(Data))
+   end.
 
 
 %%
