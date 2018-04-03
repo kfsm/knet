@@ -137,6 +137,18 @@ getT(Head)
 getT('*') ->
    require(content, identity());
 
+getT({Struct, Lens}) ->
+   fun(State) ->
+      case lens:get(Lens, Struct) of
+         {ok, Expect} ->
+            [Expect | State];
+         {error, Reason} ->
+            throw(Reason);
+         LensFocusedAt ->
+            [LensFocusedAt | State]
+      end
+   end;
+
 getT(Lens) ->
    require(content, Lens).
 
