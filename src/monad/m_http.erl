@@ -24,7 +24,7 @@
 -include_lib("datum/include/datum.hrl").
 -include_lib("knet/include/knet.hrl").
 
--export([unit/1, fail/1, '>>='/2, putT/1, getT/1, once/1]).
+-export([unit/1, fail/1, '>>='/2, putT/1, getT/1, once/1, once/2]).
 -export([
    new/1, 
    so/1,
@@ -164,12 +164,16 @@ identity() ->
 -spec once(m(_)) -> _.
 
 once(Expr) ->
+   once(Expr, []).
+
+once(Expr, SOpt) ->
    try
-      [Result | _] = Expr(#{}),
+      [Result | _] = Expr(#{so => SOpt}),
       {ok, Result}
    catch throw:Reason ->
       {error, Reason}
    end.   
+
 
 %%%----------------------------------------------------------------------------   
 %%%
