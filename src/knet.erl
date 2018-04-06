@@ -249,8 +249,9 @@ stream(Sock, Timeout) ->
       {ioctl, _, _} ->
          stream(Sock, Timeout);
 
-      {trace, Sock, Pckt} ->
-         stream:new({trace, Pckt}, fun() -> stream(Sock, Timeout) end);
+      % i/o traces needs to be handled via side-effect
+      % {trace, Sock, Pckt} ->
+      %    stream:new({trace, Pckt}, fun() -> stream(Sock, Timeout) end);
 
       {_, Sock, passive} ->
          knet:ioctl(Sock, {active, 1024}),

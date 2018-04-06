@@ -190,7 +190,7 @@ new(Uri) ->
             {<<"Accept">>,     <<"*/*">>}
          ]
       },
-      [Uri | State#{req => [Request], so => []}]
+      [Uri | State#{req => [Request]}]
    end.
 
 
@@ -353,7 +353,7 @@ http_io(Timeout, State0) ->
 %%
 %% create a new socket or re-use existed one
 socket(State) ->
-   SOpt      = lens:get(lens:at(so), State),
+   SOpt      = lens:get(lens:at(so, []), State),
    Uri       = lens:get(req_uri(), State),
    Authority = uri:authority(Uri),
    case State of
@@ -376,21 +376,17 @@ send(Sock, State) ->
 
 %%
 %%
-recv(Sock, Timeout, State) ->
-   %% @todo: we do not support trace here. It must be handled via side-effect.
-   {Trace, Http} = lists:partition(
-      fun({trace, _}) -> true; (_) -> false end,
-      stream:list(knet:stream(Sock, Timeout))
-   ),
+recv(Sock, Timeout, State) ->  
+   Http = stream:list(knet:stream(Sock, Timeout)),
    Payload = case 
-      htcodec:decode(Http) 
+      htcodec:decode( Http )
    of
       {ok, Result} -> 
          [Result];
       {error, _} ->
          tl(Http)
    end,
-   {ok, State#{ret => [hd(Http) | Payload], trace => Trace}}.   
+   {ok, State#{ret => [hd(Http) | Payload]}}.   
 
 %%
 %%
