@@ -256,6 +256,9 @@ ioctl(socket, #state{socket = Sock}) ->
 'ESTABLISHED'(tth, _, State) ->
    {next_state, 'HIBERNATE', State, hibernate};
 
+'ESTABLISHED'(ttl, Pipe, State) ->
+   'ESTABLISHED'({tcp_error, undefined, normal}, Pipe, State);
+
 'ESTABLISHED'({packet, Pckt}, Pipe, #state{} = State0) ->
    case stream_send(Pipe, Pckt, State0) of
       {ok, State1} ->

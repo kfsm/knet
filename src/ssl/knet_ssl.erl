@@ -260,6 +260,9 @@ ioctl(socket,  #state{socket = Sock}) ->
    % ?DEBUG("knet [ssl]: suspend ~p", [(State#fsm.stream)#stream.peer]),
    {next_state, 'HIBERNATE', State, hibernate};
 
+'ESTABLISHED'(ttl, Pipe, State) ->
+   'ESTABLISHED'({ssl_error, undefined, normal}, Pipe, State);
+
 %
 % This is required to trace TLS certificates per connection (feature is disabled)
 %
