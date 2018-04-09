@@ -6,7 +6,7 @@
   0},
  {<<"htcodec">>,
   {git,"https://github.com/kfsm/htcodec",
-       {ref,"e3cd6f34869a1eee76677dfd16b04aace4dfd1b0"}},
+       {ref,"2c9293e659fc1b000038862201b3dbd90ae6e308"}},
   0},
  {<<"htstream">>,
   {git,"https://github.com/kfsm/htstream",
