@@ -258,6 +258,11 @@ ioctl(_, _) ->
 'ESTABLISHED'({sidedown, _, _}, _, State) ->
    {stop, normal, State};
 
+'ESTABLISHED'({Prot, _, passive}, Pipe, State)
+ when ?is_transport(Prot) ->
+   pipe:b(Pipe, {ws, self(), passive}),
+   {next_state, 'STREAM', State};
+
 'ESTABLISHED'({Prot, _, eof}, Pipe, State)
  when ?is_transport(Prot) ->
    pipe:b(Pipe, {ws, self(), eof}),
