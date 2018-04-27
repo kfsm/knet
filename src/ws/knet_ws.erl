@@ -217,7 +217,7 @@ ioctl(_, _) ->
  when ?is_transport(Prot), is_binary(Pckt) ->
    try
       case htstream:decode(Pckt, Stream#iostream.recv) of
-         {{101, Msg, Head}, Http} ->
+         {[{101, Msg, Head}], Http} ->
             <<"Upgrade">>   = lens:get(lens:pair(<<"Connection">>), Head),
             <<"websocket">> = lens:get(lens:pair(<<"Upgrade">>), Head),
             pipe:b(Pipe, {ws, self(), {101, Msg, Head}}),
@@ -240,7 +240,7 @@ ioctl(_, _) ->
 'CLIENT'(Msg, Pipe, #fsm{stream = Stream} = State) ->
    try
       {Pckt, Send} = htstream:encode(Msg, Stream#iostream.send),
-      pipe:b(Pipe, Pckt),
+      pipe:b(Pipe, {packet, Pckt}),
       {next_state, 'CLIENT', State#fsm{stream = Stream#iostream{send = Send}}}
    catch _:Reason ->
       % ?NOTICE("knet [ws]: failure ~p ~p", [Reason, erlang:get_stacktrace()]),
@@ -261,7 +261,7 @@ ioctl(_, _) ->
 'ESTABLISHED'({Prot, _, passive}, Pipe, State)
  when ?is_transport(Prot) ->
    pipe:b(Pipe, {ws, self(), passive}),
-   {next_state, 'STREAM', State};
+   {next_state, 'ESTABLISHED', State};
 
 'ESTABLISHED'({Prot, _, eof}, Pipe, State)
  when ?is_transport(Prot) ->
@@ -290,8 +290,10 @@ ioctl(_, _) ->
 'ESTABLISHED'({packet, Msg}, Pipe, State) ->
    case ws_send(Msg, Pipe, State#fsm.stream) of
       {eof, Stream} ->
+         pipe:ack(Pipe, ok),
          {stop, normal, State#fsm{stream=Stream}};
       {_,   Stream} ->
+         pipe:ack(Pipe, ok),
          {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
    end;
 
