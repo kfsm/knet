@@ -2,7 +2,7 @@
 [{<<"datum">>,{pkg,<<"datum">>,<<"4.3.2">>},0},
  {<<"feta">>,
   {git,"https://github.com/fogfish/feta",
-       {ref,"0621beb5ed4d02f1fe8b109c8a9fcbffc42c5730"}},
+       {ref,"c5d251b3f995b96afd5e8ec7da61516842aa658c"}},
   0},
  {<<"htcodec">>,
   {git,"https://github.com/kfsm/htcodec",
@@ -10,15 +10,15 @@
   0},
  {<<"htstream">>,
   {git,"https://github.com/kfsm/htstream",
-       {ref,"2a6519efd737eebb70cb9518335f4baf3f479913"}},
+       {ref,"3a393c3595232bf9cfe4d7ae0a4e09acadb1deda"}},
   0},
  {<<"jsx">>,{pkg,<<"jsx">>,<<"2.9.0">>},1},
  {<<"meck">>,{pkg,<<"meck">>,<<"0.8.9">>},0},
- {<<"pipe">>,{pkg,<<"pipes">>,<<"1.7.0">>},0}]}.
+ {<<"pipe">>,{pkg,<<"pipes">>,<<"1.8.0">>},0}]}.
 [
 {pkg_hash,[
  {<<"datum">>, <<"841549936326B2D660D267D52B3DC7B16457CC174CBACF57E655D79F4BAB924E">>},
  {<<"jsx">>, <<"D2F6E5F069C00266CAD52FB15D87C428579EA4D7D73A33669E12679E203329DD">>},
  {<<"meck">>, <<"64C5C0BD8BCCA3A180B44196265C8ED7594E16BCC845D0698EC6B4E577F48188">>},
- {<<"pipe">>, <<"30648602EEBA882C566277593BC72EC503854A103A52880AB5C4C5039DFA27C3">>}]}
+ {<<"pipe">>, <<"512C831A47605D43688C8CB9266A3DCAE88BA6A3845FA65E40EB9EC22E77F5C7">>}]}
 ].

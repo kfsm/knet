@@ -346,7 +346,7 @@ ws_recv(Pckt, Pipe, #iostream{}=Ws) ->
 ws_send(Msg, Pipe, #iostream{}=Ws) ->
    % ?DEBUG("knet [websock] ~p: send ~p~n~p", [self(), Ws#iostream.peer, Msg]),
    {Pckt, Send} = wsstream:encode(Msg, Ws#iostream.send),
-   lists:foreach(fun(X) -> pipe:b(Pipe, {packet, X}) end, Pckt),
+   lists:foreach(fun(X) -> pipe:b(Pipe, {packet, X}, infinity) end, Pckt),
    {wsstream:state(Send), Ws#iostream{send=Send}}.
 
 %%

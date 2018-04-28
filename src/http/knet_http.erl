@@ -298,7 +298,7 @@ http_encode_packet(Packet, #fsm{socket = Socket0} = State) ->
 %%
 %%
 http_egress(Pipe, #http{pack = Pckt} = Http) -> 
-   lists:foreach(fun(X) -> pipe:b(Pipe, {packet, X}) end, Pckt),
+   lists:foreach(fun(X) -> pipe:b(Pipe, {packet, X}, infinity) end, Pckt),
    Http.
 
 %%

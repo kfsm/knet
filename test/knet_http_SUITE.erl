@@ -48,7 +48,8 @@ all() ->
 groups() ->
    [
       {client, [], [
-         connect, send_recv
+         connect, 
+         send_recv
       ]}
    ].
 
@@ -118,6 +119,7 @@ send_recv(_Config) ->
    {ioctl, b, Sock} = knet:recv(Sock),
 
    ok = knet:send(Sock, {'GET', uri:new("http://example.com:80/"), []}),
+   io:format("==> blaaaaaa~n"),
    ok = knet:send(Sock, eof),
    {http, Sock, 
       {200, <<"OK">>, [
@@ -152,9 +154,16 @@ meck_gen_http_echo() ->
    meck:expect(inet, sockname, fun(#{sock := Sock}) -> {ok, Sock} end),
 
    meck:expect(gen_tcp, send,
-      fun(_Sock, _Packet) -> 
-         self() ! {tcp, undefined, <<"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello">>},
-         ok 
+      fun
+      (_Sock, <<"GET", _/binary>>) ->
+         Self = self(),
+         spawn(fun() ->
+            timer:sleep(10),
+            Self ! {tcp, undefined, <<"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello">>}
+         end),
+         ok;
+      (_, _) ->
+         ok
       end
    ).
 
