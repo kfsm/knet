@@ -76,7 +76,8 @@
 %%
 %%
 start_link(Opts) ->
-   pipe:start_link(?MODULE, Opts ++ ?SO_HTTP, []).
+   pipe:start_link(?MODULE, Opts ++ ?SO_HTTP,
+      [{acapacity, opts:val(queue, undefined, Opts)}]).
 
 init(SOpt) ->
    [either ||
@@ -298,7 +299,7 @@ http_encode_packet(Packet, #fsm{socket = Socket0} = State) ->
 %%
 %%
 http_egress(Pipe, #http{pack = Pckt} = Http) -> 
-   lists:foreach(fun(X) -> pipe:b(Pipe, {packet, X}, infinity) end, Pckt),
+   lists:foreach(fun(X) -> pipe:b(Pipe, {packet, X}) end, Pckt),
    Http.
 
 %%

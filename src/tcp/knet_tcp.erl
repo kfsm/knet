@@ -50,7 +50,8 @@
 %%%------------------------------------------------------------------   
 
 start_link(Opts) ->
-   pipe:start_link(?MODULE, Opts ++ ?SO_TCP, []).
+   pipe:start_link(?MODULE, Opts ++ ?SO_TCP, 
+      [{acapacity, opts:val(queue, undefined, Opts)}]).
 
 %%
 init(SOpt) ->

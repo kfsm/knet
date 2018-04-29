@@ -56,10 +56,12 @@
 %%
 %%
 start_link(Opts) ->
-   pipe:start_link(?MODULE, Opts ++ ?SO_HTTP, []).
+   pipe:start_link(?MODULE, Opts ++ ?SO_HTTP,
+      [{acapacity, opts:val(queue, undefined, Opts)}]).
 
 start_link(Req, Opts) ->
-   pipe:start_link(?MODULE, [Req, Opts], []).
+   pipe:start_link(?MODULE, [Req, Opts],
+      [{acapacity, opts:val(queue, undefined, Opts)}]).
 
 %%
 init([{_Mthd, Url, Head}, Opts]) ->
@@ -346,7 +348,7 @@ ws_recv(Pckt, Pipe, #iostream{}=Ws) ->
 ws_send(Msg, Pipe, #iostream{}=Ws) ->
    % ?DEBUG("knet [websock] ~p: send ~p~n~p", [self(), Ws#iostream.peer, Msg]),
    {Pckt, Send} = wsstream:encode(Msg, Ws#iostream.send),
-   lists:foreach(fun(X) -> pipe:b(Pipe, {packet, X}, infinity) end, Pckt),
+   lists:foreach(fun(X) -> pipe:b(Pipe, {packet, X}) end, Pckt),
    {wsstream:state(Send), Ws#iostream{send=Send}}.
 
 %%

@@ -56,7 +56,8 @@
 %%%------------------------------------------------------------------   
 
 start_link(Opts) ->
-   pipe:start_link(?MODULE, Opts ++ ?SO_UDP, []).
+   pipe:start_link(?MODULE, Opts ++ ?SO_UDP,
+      [{acapacity, opts:val(queue, undefined, Opts)}]).
 
 %%
 init(Opts) ->
