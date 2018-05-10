@@ -8,9 +8,10 @@
          kernel, 
          stdlib,
          feta,
-         htstream,
          pipe,
-         datum
+         datum,
+         htstream,
+         htcodec
       ]},
       {mod, {knet_app, []}},
       {env, []}
