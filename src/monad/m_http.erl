@@ -418,8 +418,8 @@ unit(Sock, Pckt, State) ->
    case lens:get(req_header(<<"Connection">>), State) of
       Conn when Conn =:= <<"close">> orelse Conn =:= ?None ->
          knet:close(Sock),
-         [Pckt|maps:remove(request, State)];
+         [Pckt|maps:remove(req, State)];
       _           ->
          Authority = uri:authority( lens:get(req_uri(), State) ),
-         [Pckt|maps:remove(request, State#{Authority => Sock})]
+         [Pckt|maps:remove(req, State#{Authority => Sock})]
    end.
