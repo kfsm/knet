@@ -24,7 +24,7 @@
 -include_lib("datum/include/datum.hrl").
 -include_lib("knet/include/knet.hrl").
 
--export([unit/1, fail/1, '>>='/2, putT/1, getT/1, once/1, once/2]).
+-export([unit/1, fail/1, '>>='/2, putT/1, getT/1, once/1, once/2, eval/2, eval/3]).
 -export([
    new/1, 
    so/1,
@@ -167,13 +167,33 @@ once(Expr) ->
    once(Expr, []).
 
 once(Expr, SOpt) ->
+   run(1, Expr, #{so => SOpt}).
+
+%%
+%% evaluate monadic expression
+-spec eval(_, m(_)) -> _.
+
+eval(N, Expr) ->
+   eval(N, Expr, []).
+
+eval(N, Expr, SOpt) ->
+   run(N, Expr, #{so => SOpt}).
+
+run(1, Expr, State) ->
    try
-      [Result | _] = Expr(#{so => SOpt}),
+      [Result | _] = Expr(State),
       {ok, Result}
    catch throw:Reason ->
       {error, Reason}
-   end.   
+   end;
 
+run(N, Expr, State0) ->
+   try
+      [_ | State1] = Expr(State0),
+      run(N - 1, Expr, State1)
+   catch throw:Reason ->
+      {error, Reason}
+   end.
 
 %%%----------------------------------------------------------------------------   
 %%%
