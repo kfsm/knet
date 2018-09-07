@@ -1,5 +1,5 @@
 {"1.1.0",
-[{<<"datum">>,{pkg,<<"datum">>,<<"4.3.2">>},0},
+[{<<"datum">>,{pkg,<<"datum">>,<<"4.3.6">>},0},
  {<<"feta">>,
   {git,"https://github.com/fogfish/feta",
        {ref,"c5d251b3f995b96afd5e8ec7da61516842aa658c"}},
@@ -13,14 +13,14 @@
        {ref,"3a393c3595232bf9cfe4d7ae0a4e09acadb1deda"}},
   0},
  {<<"jsx">>,{pkg,<<"jsx">>,<<"2.9.0">>},1},
- {<<"meck">>,{pkg,<<"meck">>,<<"0.8.9">>},0},
+ {<<"meck">>,{pkg,<<"meck">>,<<"0.8.12">>},0},
  {<<"pipe">>,
   {git,"https://github.com/fogfish/pipe",
-       {ref,"e928fe3f219882939a224f5a79496008dd9d0a52"}},
+       {ref,"37adab4c405e18ea125cf2ddf5f89e082d49f8ee"}},
   0}]}.
 [
 {pkg_hash,[
- {<<"datum">>, <<"841549936326B2D660D267D52B3DC7B16457CC174CBACF57E655D79F4BAB924E">>},
+ {<<"datum">>, <<"07AA802EF8C68FC990164BB398890FBE03FF4FA30570C37BF6D836A4FDF27D54">>},
  {<<"jsx">>, <<"D2F6E5F069C00266CAD52FB15D87C428579EA4D7D73A33669E12679E203329DD">>},
- {<<"meck">>, <<"64C5C0BD8BCCA3A180B44196265C8ED7594E16BCC845D0698EC6B4E577F48188">>}]}
+ {<<"meck">>, <<"1F7B1A9F5D12C511848FEC26BBEFD09A21E1432EADB8982D9A8ACEB9891A3CF2">>}]}
 ].

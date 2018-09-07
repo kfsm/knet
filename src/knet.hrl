@@ -30,11 +30,10 @@
    ]
 ).
 
--define(SO_HTTP, 
-	[
-		{'keep-alive', 60000}
-	]
-).
+-define(SO_HTTP, #{
+   'keep-alive' => 60000
+,  tracelog => undefined
+}).
 
 -define(SO_SSH,
    [

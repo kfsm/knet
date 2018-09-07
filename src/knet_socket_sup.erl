@@ -5,7 +5,6 @@
 -export([start_link/2, init/1]).
 
 start_link(Protocols, Opts) ->
-   io:format("=[ so ]=> ~p~n", [Opts]),
    pipe:supervise(?MODULE, [Protocols, Opts], opts(Opts)).
 
 init([Protocols, Opts]) ->

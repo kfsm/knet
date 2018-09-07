@@ -72,11 +72,13 @@
 
                         %% side-effect to receive protocol traces
                      ,  tracelog => pid() | undefined
+
+                     , shutdown  => true | false   %% ??? http
                      }.
 
 -type timeouts()  :: #{
                         %% time-to-connect
-                        ttc      => integer()
+                        ttc      => integer()      %% time-to-connect
                      ,  ttl      => integer()      %% time-to-live ???
                      ,  tth      => integer()      %% time-to-hibernate ???
                      ,  ttp      => integer()      %% time-to-packet
@@ -152,7 +154,6 @@ listen(Uri, Opts)
 -spec bind(uri(), opts()) -> datum:either(pid()).
 
 bind({uri, _, _} = Uri, Opts) ->
-   io:format("=[ ~p ] => bind ~p~n", [self(), Opts]),
    [either ||
       %% Note 
       %%  * acceptor process cannot exists outside of pipeline

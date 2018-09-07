@@ -49,7 +49,7 @@
 %%%------------------------------------------------------------------   
 
 start_link(Opts) ->
-   pipe:start_link(?MODULE, maps:merge(Opts, ?SO_TCP), []).
+   pipe:start_link(?MODULE, maps:merge(?SO_TCP, Opts), []).
 
 %%
 init(SOpt) ->

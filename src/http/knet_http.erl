@@ -76,8 +76,7 @@
 %%
 %%
 start_link(Opts) ->
-   pipe:start_link(?MODULE, Opts ++ ?SO_HTTP,
-      [{acapacity, opts:val(queue, undefined, Opts)}]).
+   pipe:start_link(?MODULE, maps:merge(?SO_HTTP, Opts), []).
 
 init(SOpt) ->
    [either ||
@@ -86,7 +85,7 @@ init(SOpt) ->
          #fsm{
             socket   = _
            ,queue    = q:new()
-           ,shutdown = opts:val(shutdown, false, SOpt)
+           ,shutdown = lens:get(lens:at(shutdown, false), SOpt)
          }
       )
    ].

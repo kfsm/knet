@@ -21,14 +21,14 @@
 %% new socket
 -spec socket([_]) -> datum:either( #socket{} ).
 
-socket(SOpt) ->
+socket(#{tracelog := Tracelog} = SOpt) ->
    {ok,
       #socket{
          family   = ?MODULE,
          in       = htstream:new(),
          eg       = htstream:new(),
          so       = SOpt,
-         tracelog = opts:val(tracelog, undefined, SOpt)
+         tracelog = Tracelog
       }
    }.
 
