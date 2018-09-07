@@ -14,13 +14,13 @@
 %% default socket options
 %%
 %%-----------------------------------------------------------------------------
--define(SO_TCP,  
-   [
-      binary
-     ,{active,  1024}
-     ,{nodelay, true}
-   ]
-). 
+-define(SO_TCP, #{
+   active   => 1024
+,  nodelay  => true
+,  stream   => raw
+,  tracelog => undefined
+}).
+
 
 -define(SO_UDP, 
    [
@@ -59,7 +59,7 @@
      ,recbuf 
      ,send_timeout 
      ,sndbuf 
-     ,binary 
+     % ,binary 
      % ,active 
      ,backlog
      ,priority

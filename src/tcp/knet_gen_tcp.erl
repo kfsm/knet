@@ -24,14 +24,14 @@
 %% new socket
 -spec socket([_]) -> {ok, #socket{}} | {error, _}.
 
-socket(SOpt) ->
+socket(#{stream := Stream, tracelog := Tracelog} = SOpt) ->
    {ok,
       #socket{
          family   = ?MODULE,
-         in       = pstream:new(opts:val(stream, raw, SOpt)),
-         eg       = pstream:new(opts:val(stream, raw, SOpt)),
+         in       = pstream:new(Stream),
+         eg       = pstream:new(Stream),
          so       = SOpt,
-         tracelog = opts:val(tracelog, undefined, SOpt)
+         tracelog = Tracelog
       }
    }.
 
@@ -43,7 +43,7 @@ close(#socket{sock = undefined} = Socket) ->
    {ok, Socket};
 
 close(#socket{sock = Sock, so = SOpt}) ->
-   [$^||
+   [either ||
       gen_tcp:close(Sock),
       socket(SOpt)
    ].
@@ -62,8 +62,8 @@ setopts(#socket{sock = Sock} = Socket, Opts) ->
 
 %%
 %% socket options
-so_tcp(SOpt) -> opts:filter(?SO_TCP_ALLOWED, SOpt).
-so_ttc(SOpt) -> lens:get(lens:c(lens:pair(timeout, []), lens:pair(ttc, ?SO_TIMEOUT)), SOpt).
+so_tcp(SOpt) -> [binary | maps:to_list(maps:with(?SO_TCP_ALLOWED, SOpt))].
+so_ttc(SOpt) -> lens:get(lens:c(lens:at(timeout, #{}), lens:at(ttc, ?SO_TIMEOUT)), SOpt).
 
 %%
 %%

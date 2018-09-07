@@ -39,8 +39,7 @@
 -record(state, {
    socket   = undefined :: #socket{}
   ,flowctl  = true      :: once | true | integer()  %% flow control strategy
-  ,timeout  = undefined :: [_]
-  ,so       = undefined :: [_]
+  ,so       = undefined :: knet:opts()
 }).
 
 %%%------------------------------------------------------------------
@@ -50,8 +49,7 @@
 %%%------------------------------------------------------------------   
 
 start_link(Opts) ->
-   pipe:start_link(?MODULE, Opts ++ ?SO_TCP, 
-      [{acapacity, opts:val(queue, undefined, Opts)}]).
+   pipe:start_link(?MODULE, maps:merge(Opts, ?SO_TCP), []).
 
 %%
 init(SOpt) ->
@@ -60,8 +58,7 @@ init(SOpt) ->
       cats:unit('IDLE',
          #state{
             socket  = _
-           ,flowctl = opts:val(active, SOpt)
-           ,timeout = opts:val(timeout, [], SOpt)
+           ,flowctl = lens:get(lens:at(active), SOpt)
            ,so      = SOpt
          }
       )
@@ -304,10 +301,10 @@ listen(Uri, #state{socket = Sock} = State) ->
       cats:unit(State#state{socket = Socket})
    ].
 
-accept(Uri, #state{so = SOpt} = State) ->
+accept(Uri, #state{so = #{listen := LSock} = SOpt} = State) ->
    T    = os:timestamp(),
    %% Note: this is a design decision to inject listen socket via socket options
-   Sock = pipe:ioctl(opts:val(listen, SOpt), socket),
+   Sock = pipe:ioctl(LSock, socket),
    [either ||
       Socket <- knet_gen_tcp:accept(Uri, Sock),
       knet_gen:trace(connect, tempus:diff(T), Socket),
@@ -322,25 +319,25 @@ close(_Reason, #state{socket = Sock} = State) ->
 
 %%
 %% socket timeout
-time_to_live(#state{timeout = SOpt} = State) ->
+time_to_live(#state{so = SOpt} = State) ->
    [option || 
-      opts:val(ttl, undefined, SOpt), 
+      lens:get(lens:c(lens:at(timeout, #{}), lens:at(ttl)), SOpt), 
       tempus:timer(_, ttl)
    ],
    {ok, State}.
 
-time_to_hibernate(#state{timeout = SOpt} = State) ->
-   [option || 
-      opts:val(tth, undefined, SOpt), 
+time_to_hibernate(#state{so = SOpt} = State) ->
+   [option ||
+      lens:get(lens:c(lens:at(timeout, #{}), lens:at(tth)), SOpt), 
       tempus:timer(_, tth)
    ],
    {ok, State}.
 
-time_to_packet(N, #state{socket = Sock, timeout = SOpt} = State) ->
+time_to_packet(N, #state{socket = Sock, so = SOpt} = State) ->
    case knet_gen_tcp:getstat(Sock, packet) of
       X when X > N orelse N =:= 0 ->
          [option ||
-            opts:val(ttp, undefined, SOpt),
+            lens:get(lens:c(lens:at(timeout, #{}), lens:at(ttp)), SOpt), 
             tempus:timer(_, {ttp, X})
          ],
          {ok, State};
@@ -427,19 +424,17 @@ stream_uplink(Pipe, Pckt, Socket) ->
 
 %%
 %%
-spawn_acceptor(Uri, #state{so = SOpt} = State) ->
-   Sup = opts:val(acceptor,  SOpt), 
+spawn_acceptor(Uri, #state{so = #{acceptor := Sup} = SOpt} = State) ->
    {ok, _} = supervisor:start_child(Sup, [Uri, SOpt]),
    {ok, State}.
 
-spawn_acceptor_pool(Uri, #state{so = SOpt} = State) ->
-   Sup  = opts:val(acceptor,  SOpt), 
-   Opts = [{listen, self()} | SOpt],
+spawn_acceptor_pool(Uri, #state{so = #{acceptor := Sup} = SOpt} = State) ->
+   Opts = SOpt#{listen => self()},
    lists:foreach(
       fun(_) ->
          {ok, _} = supervisor:start_child(Sup, [Uri, Opts])
       end,
-      lists:seq(1, opts:val(backlog, 5, SOpt))
+      lists:seq(1, lens:get(lens:at(backlog, 5), SOpt))
    ),
    {ok, State}.
 
