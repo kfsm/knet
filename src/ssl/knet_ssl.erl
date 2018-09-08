@@ -39,8 +39,7 @@
 -record(state, {
    socket   = undefined :: #socket{}
   ,flowctl  = true      :: once | true | integer()  %% flow control strategy
-  ,flowcrd  = undefined :: _                        %% flow control credicts
-  ,timeout  = undefined :: [_]
+  ,flowcrd  = undefined :: _                        %% flow control credits
   ,so       = undefined :: [_]
 }).
 
@@ -52,8 +51,7 @@
 %%%------------------------------------------------------------------   
 
 start_link(Opts) ->
-   pipe:start_link(?MODULE, Opts ++ ?SO_TCP,
-      [{acapacity, opts:val(queue, undefined, Opts)}]).
+   pipe:start_link(?MODULE, maps:merge(?SO_TCP, Opts), []).
 
 %%
 init(SOpt) ->
@@ -62,8 +60,7 @@ init(SOpt) ->
       cats:unit('IDLE',
          #state{
             socket  = _
-           ,flowctl = opts:val(active, SOpt)
-           ,timeout = opts:val(timeout, [], SOpt)
+           ,flowctl = lens:get(lens:at(active), SOpt)
            ,so      = SOpt
          }
       )
@@ -117,13 +114,13 @@ ioctl(socket,  #state{socket = Sock}) ->
       [either ||
          listen(Uri, State0),
          spawn_acceptor_pool(Uri, _),
-         pipe_to_side_a(Pipe, listen, _)
+         pipe_to_side_b(Pipe, listen, _)
       ]
    of
       {ok, State1} ->
          {next_state, 'LISTEN', State1};
       {error, Reason} ->
-         error_to_side_a(Pipe, Reason, State0),
+         error_to_side_b(Pipe, Reason, State0),
          {next_state, 'IDLE', State0}
    end;
 
@@ -138,7 +135,7 @@ ioctl(socket,  #state{socket = Sock}) ->
          time_to_live(_),
          time_to_hibernate(_),
          time_to_packet(0, _),
-         pipe_to_side_a(Pipe, established, _),
+         pipe_to_side_b(Pipe, established, _),
          config_flow_ctrl(_)
       ]
    of
@@ -147,32 +144,28 @@ ioctl(socket,  #state{socket = Sock}) ->
       {error, closed} ->
          {stop, normal, State0};
       {error, enoent} ->
-         error_to_side_a(Pipe, enoent, State0),
+         error_to_side_b(Pipe, enoent, State0),
          {stop, normal, State0};         
       {error, Reason} ->
          spawn_acceptor(Uri, State0),
-         error_to_side_a(Pipe, Reason, State0),
+         error_to_side_b(Pipe, Reason, State0),
          {stop, Reason, State0}
    end;
 
-'IDLE'({sidedown, a, _}, _Pipe, State0) ->
-   {stop, normal, State0};
+'IDLE'({sidedown, a, _}, _Pipe, State) ->
+   {stop, normal, State};
 
-'IDLE'(tth, _Pipe, State0) ->
-   {next_state, 'IDLE', State0};
+'IDLE'(tth, _Pipe, State) ->
+   {next_state, 'IDLE', State};
 
-'IDLE'(ttl, _Pipe, State0) ->
-   {next_state, 'IDLE', State0};
+'IDLE'(ttl, _Pipe, State) ->
+   {next_state, 'IDLE', State};
 
-'IDLE'({ttp, _}, _Pipe, State0) ->
-   {next_state, 'IDLE', State0};
+'IDLE'({ttp, _}, _Pipe, State) ->
+   {next_state, 'IDLE', State};
 
-'IDLE'({packet, _}, Pipe, State0) ->
-   pipe:ack(Pipe, {error, ecomm}),
-   {next_state, 'IDLE', State0};
-
-'IDLE'(_, _Pipe, State0) ->
-   {next_state, 'IDLE', State0}.
+'IDLE'({packet, _}, Pipe, State) ->
+   {reply, {error, ecomm}, 'IDLE', State}.
 
 
 %%%------------------------------------------------------------------
@@ -258,7 +251,6 @@ ioctl(socket,  #state{socket = Sock}) ->
    end;
 
 'ESTABLISHED'(tth, _, State) ->
-   % ?DEBUG("knet [ssl]: suspend ~p", [(State#fsm.stream)#stream.peer]),
    {next_state, 'HIBERNATE', State, hibernate};
 
 'ESTABLISHED'(ttl, Pipe, State) ->
@@ -315,7 +307,6 @@ ioctl(socket,  #state{socket = Sock}) ->
 %%%------------------------------------------------------------------   
 
 'HIBERNATE'(Msg, Pipe, #state{} = State0) ->
-   % ?DEBUG("knet [ssl]: resume ~p",[Stream#stream.peer]),
    {ok, State1} = time_to_hibernate(State0),
    'ESTABLISHED'(Msg, Pipe, State1).
 
@@ -344,10 +335,10 @@ listen(Uri, #state{socket = Sock} = State) ->
    ].
 
 %%
-accept(Uri, #state{so = SOpt} = State) ->
+accept(Uri, #state{so = #{listen := LSock} = SOpt} = State) ->
    T    = os:timestamp(),
    %% Note: this is a design decision to inject listen socket via socket options
-   Sock = pipe:ioctl(opts:val(listen, SOpt), socket),
+   Sock = pipe:ioctl(LSock, socket),
    [either ||
       Socket <- knet_gen_ssl:accept(Uri, Sock),
       knet_gen:trace(connect, tempus:diff(T), Socket),
@@ -372,25 +363,25 @@ close(_Reason, #state{socket = Sock} = State) ->
 
 %%
 %% socket timeout
-time_to_live(#state{timeout = SOpt} = State) ->
+time_to_live(#state{so = SOpt} = State) ->
    [option || 
-      opts:val(ttl, undefined, SOpt), 
+      lens:get(lens:c(lens:at(timeout, #{}), lens:at(ttl)), SOpt),
       tempus:timer(_, ttl)
    ],
    {ok, State}.
 
-time_to_hibernate(#state{timeout = SOpt} = State) ->
+time_to_hibernate(#state{so = SOpt} = State) ->
    [option || 
-      opts:val(tth, undefined, SOpt), 
+      lens:get(lens:c(lens:at(timeout, #{}), lens:at(tth)), SOpt),
       tempus:timer(_, tth)
    ],
    {ok, State}.
 
-time_to_packet(N, #state{socket = Sock, timeout = SOpt} = State) ->
+time_to_packet(N, #state{socket = Sock, so = SOpt} = State) ->
    case knet_gen_ssl:getstat(Sock, packet) of
       X when X > N orelse N =:= 0 ->
          [option ||
-            opts:val(ttp, undefined, SOpt),
+            lens:get(lens:c(lens:at(timeout, #{}), lens:at(ttp)), SOpt),
             tempus:timer(_, {ttp, X})
          ],
          {ok, State};
@@ -400,13 +391,13 @@ time_to_packet(N, #state{socket = Sock, timeout = SOpt} = State) ->
 
 %%
 %%
-config_flow_ctrl(#state{flowctl = true, socket =Sock} = State) ->
+config_flow_ctrl(#state{flowctl = true, socket = Sock} = State) ->
    knet_gen_ssl:setopts(Sock, [{active, true}]),
    {ok, State};
-config_flow_ctrl(#state{flowctl = once, socket =Sock} = State) ->
+config_flow_ctrl(#state{flowctl = once, socket = Sock} = State) ->
    knet_gen_ssl:setopts(Sock, [{active, once}]),
    {ok, State};
-config_flow_ctrl(#state{flowctl = N, socket =Sock} = State) ->
+config_flow_ctrl(#state{flowctl = N, socket = Sock} = State) ->
    %% Note: ssl accepts only true | false | once.
    %% {active, N} needs to be faked for ssl 
    knet_gen_ssl:setopts(Sock, [{active, once}]),
@@ -443,6 +434,16 @@ pipe_to_side_a(Pipe, Event, #state{socket = Sock} = State) ->
       cats:unit(State)
    ].
 
+pipe_to_side_b({pipe, _, undefined} = Pipe, Event, State) ->
+   % this is required when pipe has single side
+   pipe_to_side_a(Pipe, Event, State);
+pipe_to_side_b(Pipe, Event, #state{socket = Sock} = State) ->
+   [either ||
+      knet_gen_ssl:peername(Sock),
+      cats:unit(pipe:b(Pipe, {ssl, self(), {Event, _}})),
+      cats:unit(State)
+   ].
+
 %%
 %%
 error_to_side_a(Pipe, normal, #state{} = State) ->
@@ -452,6 +453,9 @@ error_to_side_a(Pipe, Reason, #state{} = State) ->
    pipe:a(Pipe, {ssl, self(), {error, Reason}}),
    {ok, State}.
 
+error_to_side_b({pipe, _, undefined} = Pipe, Reason, State) ->
+   % this is required when pipe has single side
+   error_to_side_a(Pipe, Reason, State);
 error_to_side_b(Pipe, normal, #state{} = State) ->
    pipe:b(Pipe, {ssl, self(), eof}),
    {ok, State};
@@ -490,19 +494,17 @@ stream_uplink(Pipe, Pckt, Socket) ->
 
 %%
 %%
-spawn_acceptor(Uri, #state{so = SOpt} = State) ->
-   Sup = opts:val(acceptor,  SOpt), 
+spawn_acceptor(Uri, #state{so = #{acceptor := Sup} = SOpt} = State) ->
    {ok, _} = supervisor:start_child(Sup, [Uri, SOpt]),
    {ok, State}.
 
-spawn_acceptor_pool(Uri, #state{so = SOpt} = State) ->
-   Sup  = opts:val(acceptor,  SOpt), 
-   Opts = [{listen, self()} | SOpt],
+spawn_acceptor_pool(Uri, #state{so = #{acceptor := Sup} = SOpt} = State) ->
+   Opts = SOpt#{listen => self()},
    lists:foreach(
       fun(_) ->
          {ok, _} = supervisor:start_child(Sup, [Uri, Opts])
       end,
-      lists:seq(1, opts:val(backlog, 5, SOpt))
+      lists:seq(1, lens:get(lens:at(backlog, 5), SOpt))
    ),
    {ok, State}.
 

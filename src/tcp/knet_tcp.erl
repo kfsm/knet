@@ -22,8 +22,6 @@
 -compile({parse_transform, category}).
 
 -include("knet.hrl").
--include_lib("common_test/include/ct.hrl").
-
 
 -export([
    start_link/1, 
@@ -149,26 +147,20 @@ ioctl(socket, #state{socket = Sock}) ->
          {stop, Reason, State0}
    end;
 
-'IDLE'({sidedown, a, _}, _Pipe, State0) ->
-   {stop, normal, State0};
+'IDLE'({sidedown, a, _}, _Pipe, State) ->
+   {stop, normal, State};
 
-'IDLE'(tth, _Pipe, State0) ->
-   {next_state, 'IDLE', State0};
+'IDLE'(tth, _Pipe, State) ->
+   {next_state, 'IDLE', State};
 
-'IDLE'(ttl, _Pipe, State0) ->
-   {next_state, 'IDLE', State0};
+'IDLE'(ttl, _Pipe, State) ->
+   {next_state, 'IDLE', State};
 
-'IDLE'({ttp, _}, _Pipe, State0) ->
-   {next_state, 'IDLE', State0};
+'IDLE'({ttp, _}, _Pipe, State) ->
+   {next_state, 'IDLE', State};
 
-'IDLE'({packet, _}, Pipe, State0) ->
-   pipe:ack(Pipe, {error, ecomm}),
-   {next_state, 'IDLE', State0}.
-
-% This is bad style
-% 'IDLE'(_, _Pipe, State0) ->
-   % {next_state, 'IDLE', State0}.
-
+'IDLE'({packet, _}, Pipe, State) ->
+   {reply, {error, ecomm}, 'IDLE', State}.
 
 
 %%%------------------------------------------------------------------
@@ -227,7 +219,6 @@ ioctl(socket, #state{socket = Sock}) ->
       {ok, State1} ->
          {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
-         %% @todo: spawn pipe so that b is client
          'ESTABLISHED'({tcp_error, undefined, Reason}, Pipe, State0)
    end;
 
@@ -350,13 +341,13 @@ time_to_packet(N, #state{socket = Sock, so = SOpt} = State) ->
 
 %%
 %%
-config_flow_ctrl(#state{flowctl = true, socket =Sock} = State) ->
+config_flow_ctrl(#state{flowctl = true, socket = Sock} = State) ->
    knet_gen_tcp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
    {ok, State};
-config_flow_ctrl(#state{flowctl = once, socket =Sock} = State) ->
+config_flow_ctrl(#state{flowctl = once, socket = Sock} = State) ->
    knet_gen_tcp:setopts(Sock, [{active, once}]),
    {ok, State};
-config_flow_ctrl(#state{flowctl = N, socket =Sock} = State) ->
+config_flow_ctrl(#state{flowctl = N, socket = Sock} = State) ->
    knet_gen_tcp:setopts(Sock, [{active, N}]),
    {ok, State#state{flowctl = N}}.
 

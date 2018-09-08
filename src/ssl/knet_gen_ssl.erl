@@ -25,14 +25,14 @@
 %% new socket
 -spec socket([_]) -> {ok, #socket{}} | {error, _}.
 
-socket(SOpt) ->
+socket(#{stream := Stream, tracelog := Tracelog} = SOpt) ->
    {ok,
       #socket{
          family   = ?MODULE,
-         in       = pstream:new(opts:val(stream, raw, SOpt)),
-         eg       = pstream:new(opts:val(stream, raw, SOpt)),
+         in       = pstream:new(Stream),
+         eg       = pstream:new(Stream),
          so       = SOpt,
-         tracelog = opts:val(tracelog, undefined, SOpt)
+         tracelog = Tracelog
       }
    }.
 
@@ -63,9 +63,10 @@ setopts(#socket{sock = Sock} = Socket, Opts) ->
 
 %%
 %% socket options
-so_tcp(SOpt) -> opts:filter(?SO_TCP_ALLOWED, SOpt).
-so_ssl(SOpt) -> opts:filter(?SO_SSL_ALLOWED, SOpt).
-so_ttc(SOpt) -> lens:get(lens:c(lens:pair(timeout, []), lens:pair(ttc, ?SO_TIMEOUT)), SOpt).
+so_tcp(SOpt) -> [binary | maps:to_list(maps:with(?SO_TCP_ALLOWED, SOpt))].
+so_ssl(SOpt) -> maps:to_list(maps:with(?SO_SSL_ALLOWED, SOpt)).
+so_ttc(SOpt) -> lens:get(lens:c(lens:at(timeout, #{}), lens:at(ttc, ?SO_TIMEOUT)), SOpt).
+
 
 %%
 %%
@@ -150,7 +151,7 @@ connect(Uri, #socket{so = SOpt} = Socket) ->
 
 listen(Uri, #socket{so = SOpt} = Socket) ->
    {_Host, Port} = uri:authority(Uri),
-   Ciphers = opts:val(ciphers, cipher_suites(), SOpt),
+   Ciphers = lens:get(lens:at(ciphers, cipher_suites()), SOpt),
    Opts    = lists:keydelete(active, 1, so_tcp(SOpt) ++ so_ssl(SOpt)),
    [either ||
       ssl:listen(Port, [{active, false}, {reuseaddr, true} ,{ciphers, Ciphers} | Opts]),
