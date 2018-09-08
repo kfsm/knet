@@ -276,7 +276,7 @@ tcp_accept_failure(_) ->
 %%
 %%
 gen_tcp_client_to_knet_server(_) ->
-   {ok, LSock} = knet_echo_tcp:init("tcp://*:8888"),
+   {ok, LSock} = knet_echo_sock:init("tcp://*:8888", #{}),
    {ok,  Sock} = gen_tcp:connect("127.0.0.1", 8888, [binary, {active, false}]),
    {ok, <<"hello">>} = gen_tcp:recv(Sock, 0),
    ok = gen_tcp:send(Sock, <<"-123456">>),
@@ -287,7 +287,7 @@ gen_tcp_client_to_knet_server(_) ->
 %%
 %%
 knet_client_to_knet_server(_) ->
-   {ok, LSock} = knet_echo_tcp:init("tcp://*:8888"),
+   {ok, LSock} = knet_echo_sock:init("tcp://*:8888", #{}),
    {ok, Sock}  = knet:connect("tcp://127.0.0.1:8888"),
    {ioctl, b, Sock} = knet:recv(Sock),
    {tcp, Sock, {established, _}} = knet:recv(Sock),

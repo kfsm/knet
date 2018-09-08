@@ -75,6 +75,8 @@
 
                      ,  shutdown  => true | false   %% ??? http
                      ,  headers   => _              %% ??? list of http headers
+                     ,  certfile  => _              %% ??? ssl
+                     ,  keyfile   => _              %% ??? ssl
                      }.
 
 -type timeouts()  :: #{
