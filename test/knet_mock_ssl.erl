@@ -8,7 +8,6 @@
 ,  with_setup_tls_alert/1
 ,  with_setup_error/1
 ,  with_accept_error/1
-% ,  with_accept_packet/1
 ,  with_packet_echo/0
 ,  with_packet_loopback/1
 ,  with_packet/1
@@ -58,16 +57,6 @@ with_accept_error(Reason) ->
          {error, Reason}
       end
    ).
-
-% %%
-% %%
-% with_accept_packet(Egress) ->
-%    meck:expect(gen_tcp, accept, 
-%       fun(LSock) ->
-%          [self() ! {tcp, undefined, X} || X <- Egress],
-%          accept(LSock)
-%       end
-%    ).
 
 %%
 %%

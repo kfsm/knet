@@ -21,17 +21,15 @@
 %% common test
 -export([
    all/0
-  ,groups/0
-  ,init_per_suite/1
-  ,end_per_suite/1
-  ,init_per_group/2
-  ,end_per_group/2
+,  groups/0
+,  init_per_suite/1
+,  end_per_suite/1
 ]).
 -export([
-   knet_cli_ws/1,
-   knet_cli_wss/1,
-   knet_srv_http/1,
-   knet_srv_ws/1
+   ws_connect/1
+,  echo_websocket_org_with_ws/1
+,  echo_websocket_org_with_wss/1
+% ,  knet_client_to_knet_server/1
 ]).
 
 -define(HOST,     "echo.websocket.org").
@@ -47,21 +45,19 @@
 
 all() ->
    [
-      {group, client}
-     ,{group, server}
+      {group, ws}
    ].
 
 groups() ->
    [
-      {client, [], [
-         knet_cli_ws
-        ,knet_cli_wss
-      ]},
-
-      {server, [], [
-         knet_srv_http
-        ,knet_srv_ws
-      ]}
+      {ws, [],
+         [Test || {Test, NAry} <- ?MODULE:module_info(exports), 
+            Test =/= module_info,
+            Test =/= init_per_suite,
+            Test =/= end_per_suite,
+            NAry =:= 1
+         ]
+      }
    ].
 
 %%%----------------------------------------------------------------------------   
@@ -79,16 +75,6 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
    application:stop(knet).
 
-%%   
-%%
-init_per_group(_, Config) ->
-   Config.
-
-%%
-%%
-end_per_group(_, _Config) ->
-   ok.
-
 
 %%%----------------------------------------------------------------------------   
 %%%
@@ -96,76 +82,81 @@ end_per_group(_, _Config) ->
 %%%
 %%%----------------------------------------------------------------------------   
 
-knet_cli_ws(_) ->
-   {ok, Sock} = knet:connect(uri:host(?HOST, uri:new("ws://*:80"))),
-   {ioctl, b, Sock} = knet:recv(Sock),
-   {ws, Sock, {101, _Url, _Head, _Env}} = knet:recv(Sock),
-   <<"123456">> = knet:send(Sock, <<"123456">>),
-   {ws, Sock, <<"123456">>} = knet:recv(Sock),
-   ok      = knet:close(Sock),
-   {error, _} = knet:recv(Sock, 1000, [noexit]).
-
-knet_cli_wss(_) ->
-   {ok, Sock} = knet:connect(uri:authority(?HOST, uri:new("wss://*:443"))),
-   {ioctl, b, Sock} = knet:recv(Sock),
-   {ws, Sock, {101, _Url, _Head, _Env}} = knet:recv(Sock),
-   <<"123456">> = knet:send(Sock, <<"123456">>),
-   {ws, Sock, <<"123456">>} = knet:recv(Sock),
-   ok      = knet:close(Sock),
-   {error, _} = knet:recv(Sock, 1000, [noexit]).
-
-knet_srv_http(Opts) ->
-   {ok, LSock} = knet_listen(uri:port(?PORT, uri:host(?LOCAL, uri:new(http)))),
-   {ok, Sock} = knet:connect(uri:port(?PORT, uri:host(?LOCAL, uri:new(ws)))),
-   {ioctl, b, Sock} = knet:recv(Sock),
-   {ws, Sock, {101, _Url, _Head, _Env}} = knet:recv(Sock),
-   {ws, Sock, <<"hello">>} = knet:recv(Sock),
-   <<"-123456">> = knet:send(Sock, <<"-123456">>),
-   {ws, Sock, <<"+123456">>} = knet:recv(Sock),
-   knet:close(Sock),
-   knet:close(LSock).
-
-knet_srv_ws(Opts) ->
-   {ok, LSock} = knet_listen(uri:port(?PORT, uri:host(?LOCAL, uri:new(ws)))),
-   {ok, Sock} = knet:connect(uri:port(?PORT, uri:host(?LOCAL, uri:new(ws)))),
-   {ioctl, b, Sock} = knet:recv(Sock),
-   {ws, Sock, {101, _Url, _Head, _Env}} = knet:recv(Sock),
-   {ws, Sock, <<"hello">>} = knet:recv(Sock),
-   <<"-123456">> = knet:send(Sock, <<"-123456">>),
-   {ws, Sock, <<"+123456">>} = knet:recv(Sock),
-   knet:close(Sock),
-   knet:close(LSock).
+-define(URI, <<"ws://example.com:4213">>).
 
 %%
 %%
-knet_listen(Uri) -> 
-   knet_listen(Uri, []).
+ws_connect(_) ->
+   knet_mock_tcp:init(),
+   knet_mock_tcp:with_packet(fun ws_ok/1),
 
-knet_listen(Uri, Opts) -> 
-   {ok, Sock} = knet:listen(Uri, [
-      {backlog,  2}
-     ,{acceptor, fun knet_echo/1}
-     |Opts
-   ]),
+   {ok, Sock} = knet:connect(?URI),
    {ioctl, b, Sock} = knet:recv(Sock),
-   {ok, Sock}.
-   % case knet:recv(Sock) of
-   %    {ws, Sock, {listen, _}} ->
-   %       {ok, Sock};
+   {ws, Sock, 
+      {101, <<"Switching Protocols">>, [
+         {<<"Upgrade">>, <<"websocket">>},
+         {<<"Connection">>, <<"Upgrade">>},
+         {<<"Sec-Websocket-Accept">>, <<"HVijLzgfnS0ipVJfoVi11TVbe6o=">>}
+      ]}
+   } = knet:recv(Sock),
+   ok = knet:close(Sock),
+   ok = knet_check:is_shutdown(Sock),
 
-   %    {ws, Sock, {terminated, Reason}} ->
-   %       {error, Reason}
-   % end.
+   knet_mock_tcp:free().
 
 
-knet_echo({ws, _Sock, {'GET', _Url, _Head, _Env}}) ->
-   {a, <<"hello">>};
+%%
+%%
+echo_websocket_org_with_ws(_) ->
+   {ok, Sock} = knet:connect("ws://echo.websocket.org"),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   {ws, Sock, {101, _Text, _Head}} = knet:recv(Sock),
+   knet:send(Sock, <<"123456">>),
+   {ws, Sock, <<"123456">>} = knet:recv(Sock),
+   ok = knet:close(Sock),
+   ok = knet_check:is_shutdown(Sock).
 
-knet_echo({ws, _Sock,  <<$-, Pckt/binary>>}) ->
-   {a, <<$+, Pckt/binary>>};
+echo_websocket_org_with_wss(_) ->
+   {ok, Sock} = knet:connect("wss://echo.websocket.org"),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   {ws, Sock, {101, _Text, _Head}} = knet:recv(Sock),
+   knet:send(Sock, <<"123456">>),
+   {ws, Sock, <<"123456">>} = knet:recv(Sock),
+   ok = knet:close(Sock),
+   ok = knet_check:is_shutdown(Sock).
 
-knet_echo({ws, _Sock, _}) ->
-   ok;
+%%
+%%
+knet_client_to_knet_server(_) ->
+   {ok, LSock} = knet_echo_sock:init("ws://*:8888", #{}),
+   {ok, Sock}  = knet:connect("ws://127.0.0.1:8888"),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   {tcp, Sock, {established, _}} = knet:recv(Sock),
+   {tcp, Sock, <<"hello">>} = knet:recv(Sock),
+   ok = knet:send(Sock, <<"-123456">>),
+   {tcp, Sock, <<"+123456">>} = knet:recv(Sock),
+   knet:close(Sock),
+   knet:close(LSock).
 
-knet_echo({sidedown, _, _}) ->
-   ok.
+
+%%%----------------------------------------------------------------------------   
+%%%
+%%% utility
+%%%
+%%%----------------------------------------------------------------------------   
+
+%%
+ws_ok([<<"GET", _/binary>> | _]) ->
+   [
+      <<"HTTP/1.1 101 Switching Protocols\r\n">>, 
+      <<"Upgrade: websocket\r\n">>,
+      <<"Connection: Upgrade\r\n">>,
+      <<"Sec-WebSocket-Accept: HVijLzgfnS0ipVJfoVi11TVbe6o=\r\n\r\n">>
+   ];
+ws_ok(X) ->
+   undefined.
+
+
+
+
+

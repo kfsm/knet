@@ -56,12 +56,10 @@
 %%
 %%
 start_link(Opts) ->
-   pipe:start_link(?MODULE, Opts ++ ?SO_HTTP,
-      [{acapacity, opts:val(queue, undefined, Opts)}]).
+   pipe:start_link(?MODULE, maps:merge(?SO_HTTP, Opts), []).
 
 start_link(Req, Opts) ->
-   pipe:start_link(?MODULE, [Req, Opts],
-      [{acapacity, opts:val(queue, undefined, Opts)}]).
+   pipe:start_link(?MODULE, [Req, Opts], []).
 
 %%
 init([{_Mthd, Url, Head}, Opts]) ->
@@ -113,8 +111,9 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'IDLE'({listen,  Uri}, Pipe, State) ->
-   pipe:b(Pipe, {listen, Uri}),
+'IDLE'({Prot, _, {listen, _} = Listen}, Pipe, State)
+ when ?is_transport(Prot) ->
+   pipe:b(Pipe, {ws, self(), Listen}),
    {next_state, 'LISTEN', State};
 
 'IDLE'({accept,  Uri}, Pipe, State) ->

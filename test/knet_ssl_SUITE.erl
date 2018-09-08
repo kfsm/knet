@@ -94,24 +94,20 @@ end_per_suite(_Config) ->
 %%
 %%
 socket_with_pipe_to_owner(_) ->
-   {ok, Stack} = knet:socket(?URI),
-   Sock = pipe:head(Stack),
+   {ok, Sock} = knet:socket(?URI),
    {ioctl, b, Sock} = knet:recv(Sock),
    ok = knet:close(Sock),
 
-   ok = knet_check:is_shutdown(Sock),
-   ok = knet_check:is_shutdown(Stack).
+   ok = knet_check:is_shutdown(Sock).
 
 %%
 %%
 socket_without_pipe_to_owner(_) ->
-   {ok, Stack} = knet:socket(?URI, #{pipe => false}),
-   Sock = pipe:head(Stack),
+   {ok, Sock} = knet:socket(?URI, #{pipe => false}),
    {error, _} = knet:recv(Sock, 100, [noexit]),
    ok = knet:close(Sock),
 
-   ok = knet_check:is_shutdown(Sock),
-   ok = knet_check:is_shutdown(Stack).
+   ok = knet_check:is_shutdown(Sock).
 
 
 %%

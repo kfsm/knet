@@ -28,9 +28,9 @@ x(Mthd, Url, Payload) ->
 
 x(Mthd, Url, Head, Payload) ->
    [either ||
-      Sock <- knet:socket(Url, [{active, true}]),
+      Sock <- knet:socket(Url, #{active => true}),
       Data <- cats:unit([either ||
-         knet:send(Sock, {Mthd, uri:new(Url), [{<<"Connection">>, <<"close">>} | Head]}),
+         knet:send(Sock, {Mthd, uri:new(Url), [{<<"Connection">>, <<"keep-alive">>} | Head]}),
          knet:send(Sock, Payload),
          knet:send(Sock, eof),
          cats:unit(stream:list(knet:stream(Sock)))

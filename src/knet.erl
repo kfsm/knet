@@ -22,7 +22,8 @@
 
 -export([start/0]).
 -export([
-   socket/1
+   layers/2
+,  socket/1
 ,  socket/2
 ,  listen/2
 ,  bind/1
@@ -99,21 +100,14 @@ start() ->
    applib:boot(?MODULE, code:where_is_file("app.config")).
 
 %%
-%% spawn new socket
--spec socket(uri()) -> datum:either(pid()).
--spec socket(uri(), opts()) -> datum:either(pid()).
+%% create protocol stack layers
+-spec layers(atom(), opts()) -> datum:either(pid()).
 
-socket({uri, Schema, _}, Opts) ->
+layers(Schema, Opts) ->
    supervisor:start_child(knet_socket_root_sup, [
       stack(Schema),
       Opts#{owner => self()}
-   ]);
-
-socket(Url, Opts) ->
-   socket(uri:new(Url), Opts).
-
-socket(Url) ->
-   socket(uri:new(Url), #{}).
+   ]).
 
 stack(udp)   -> [knet_udp];
 stack(tcp)   -> [knet_tcp];
@@ -123,6 +117,22 @@ stack(https) -> [knet_http, knet_ssl];
 stack(ws)    -> [knet_ws, knet_tcp];
 stack(wss)   -> [knet_ws, knet_ssl].
 
+%%
+%% spawn new socket
+-spec socket(uri()) -> datum:either(pid()).
+-spec socket(uri(), opts()) -> datum:either(pid()).
+
+socket({uri, Schema, _}, Opts) ->
+   [either ||
+      layers(Schema, Opts),
+      cats:unit( pipe:head(_) )
+   ];
+
+socket(Url, Opts) ->
+   socket(uri:new(Url), Opts).
+
+socket(Url) ->
+   socket(uri:new(Url), #{}).
 
 %%
 %% listen incoming connection
@@ -131,11 +141,11 @@ stack(wss)   -> [knet_ws, knet_ssl].
 %%   {acceptor,      atom() | pid()} - acceptor module/factory
 -spec listen(uri(), opts()) -> datum:either(pid()).
 
-listen({uri, _, _} = Uri, #{acceptor := Acceptor} = Opts) ->
+listen({uri, Schema, _} = Uri, #{acceptor := Acceptor} = Opts) ->
    [either ||
       knet_acceptor:spawn(Acceptor),
       cats:unit( Opts#{acceptor => _} ),
-      Sock <- socket(Uri, _),
+      Sock <- layers(Schema, _),
       cats:unit( pipe:send(pipe:tail(Sock), {listen, Uri}) ),
       cats:unit( pipe:head(Sock) )
    ];
@@ -156,13 +166,13 @@ listen(Uri, Opts)
 -spec bind(uri()) -> datum:either(pid()).
 -spec bind(uri(), opts()) -> datum:either(pid()).
 
-bind({uri, _, _} = Uri, Opts) ->
+bind({uri, Schema, _} = Uri, Opts) ->
    [either ||
       %% Note 
       %%  * acceptor process cannot exists outside of pipeline
       %%  * owner must be current process otherwise badly bound
       cats:unit( maps:without([pipe], Opts#{owner => self()}) ),
-      Sock <- socket(Uri, _),
+      Sock <- layers(Schema, _),
       cats:unit( pipe:send(pipe:tail(Sock), {accept, Uri}) ),
       cats:unit( pipe:head(Sock) )
    ];
@@ -180,9 +190,9 @@ bind(Url) ->
 -spec connect(uri()) -> datum:either(pid()).
 -spec connect(uri(), opts()) -> datum:either(pid()).
 
-connect({uri, _, _} = Uri, Opts) ->
+connect({uri, Schema, _} = Uri, Opts) ->
    [either ||
-      Sock <- socket(Uri, Opts),
+      Sock <- layers(Schema, Opts),
       cats:unit( pipe:send(pipe:head(Sock), {connect, Uri}) ),
       cats:unit( pipe:head(Sock) )
    ];
