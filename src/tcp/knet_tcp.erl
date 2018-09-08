@@ -110,7 +110,7 @@ ioctl(socket, #state{socket = Sock}) ->
       [either ||
          listen(Uri, State0),
          spawn_acceptor_pool(Uri, _),
-         pipe_to_side_a(Pipe, listen, _)
+         pipe_to_side_b(Pipe, listen, _)
       ]
    of
       {ok, State1} ->
@@ -130,7 +130,7 @@ ioctl(socket, #state{socket = Sock}) ->
          time_to_live(_),
          time_to_hibernate(_),
          time_to_packet(0, _),
-         pipe_to_side_a(Pipe, established, _),
+         pipe_to_side_b(Pipe, established, _),
          config_flow_ctrl(_)
       ]
    of
@@ -161,10 +161,11 @@ ioctl(socket, #state{socket = Sock}) ->
 
 'IDLE'({packet, _}, Pipe, State0) ->
    pipe:ack(Pipe, {error, ecomm}),
-   {next_state, 'IDLE', State0};
-
-'IDLE'(_, _Pipe, State0) ->
    {next_state, 'IDLE', State0}.
+
+% This is bad style
+% 'IDLE'(_, _Pipe, State0) ->
+   % {next_state, 'IDLE', State0}.
 
 
 
@@ -384,6 +385,17 @@ pipe_to_side_a(Pipe, Event, #state{socket = Sock} = State) ->
       cats:unit(pipe:a(Pipe, {tcp, self(), {Event, _}})),
       cats:unit(State)
    ].
+
+pipe_to_side_b({pipe, _, undefined} = Pipe, Event, State) ->
+   % this is required when pipe has single side
+   pipe_to_side_a(Pipe, Event, State);
+pipe_to_side_b(Pipe, Event, #state{socket = Sock} = State) ->
+   [either ||
+      knet_gen_tcp:peername(Sock),
+      cats:unit(pipe:b(Pipe, {tcp, self(), {Event, _}})),
+      cats:unit(State)
+   ].
+
 
 %%
 %%

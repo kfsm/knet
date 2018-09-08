@@ -133,7 +133,7 @@ listen({uri, _, _} = Uri, #{acceptor := Acceptor} = Opts) ->
       knet_acceptor:spawn(Acceptor),
       cats:unit( Opts#{acceptor => _} ),
       Sock <- socket(Uri, _),
-      cats:unit( pipe:send(pipe:head(Sock), {listen, Uri}) ),
+      cats:unit( pipe:send(pipe:tail(Sock), {listen, Uri}) ),
       cats:unit( pipe:head(Sock) )
    ];
 
@@ -160,7 +160,7 @@ bind({uri, _, _} = Uri, Opts) ->
       %%  * owner must be current process otherwise badly bound
       cats:unit( maps:without([pipe], Opts#{owner => self()}) ),
       Sock <- socket(Uri, _),
-      cats:unit( pipe:send(pipe:head(Sock), {accept, Uri}) ),
+      cats:unit( pipe:send(pipe:tail(Sock), {accept, Uri}) ),
       cats:unit( pipe:head(Sock) )
    ];
 
@@ -168,7 +168,7 @@ bind(Url, Opts) ->
    bind(uri:new(Url), Opts).
 
 bind(Url) ->
-   bind(uri:new(Url), []).
+   bind(uri:new(Url), #{}).
 
 
 %%
@@ -180,7 +180,7 @@ bind(Url) ->
 connect({uri, _, _} = Uri, Opts) ->
    [either ||
       Sock <- socket(Uri, Opts),
-      cats:unit( pipe:send(pipe:head(Sock), {connet, Uri}) ),
+      cats:unit( pipe:send(pipe:head(Sock), {connect, Uri}) ),
       cats:unit( pipe:head(Sock) )
    ];
 
@@ -188,7 +188,7 @@ connect(Url, Opts) ->
    connect(uri:new(Url), Opts).
 
 connect(Url) ->
-   connect(uri:new(Url), []).
+   connect(uri:new(Url), #{}).
 
 %%
 %% close socket

@@ -26,12 +26,13 @@
 ]).
 
 start(_Type, _Args) -> 
-   knet:listen("tcp://*:8888", [
-      {acceptor, tcp_protocol}
-     ,{backlog,  256}
-     ,{timeout,  [{ttp, 10000}]}
-     ,inet
-   ]),
+   knet:listen("tcp://*:8888", #{
+      acceptor  => tcp_protocol
+   ,  backlog   => 256
+   ,  timeout   => #{ttp => 10000}
+   %  How to pass flags
+   % ,  inet      => true
+   }),
    tcp_sup:start_link(). 
 
 stop(_State) ->

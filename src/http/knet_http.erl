@@ -136,7 +136,20 @@ ioctl(_, _) ->
    'STREAM'(Req, Pipe, State);
 
 'IDLE'({sidedown, _, _}, _, State) ->
-   {stop, normal, State}.
+   {stop, normal, State};
+
+'IDLE'({Prot, _, {established, Peer}}, _Pipe, #fsm{socket = Sock0, queue = Q} = State)
+ when ?is_transport(Prot) ->
+   {ok, Sock1} = knet_gen_http:peername(Peer, Sock0),
+   {next_state, 'STREAM', 
+      State#fsm{
+         socket = Sock1, 
+         queue  = q_set_req_time(Q)
+      }
+   };
+
+'IDLE'({Prot, _, {listen, Peer}}, _, State) ->
+   {next_state, 'LISTEN', State}.
 
 %%%------------------------------------------------------------------
 %%%
