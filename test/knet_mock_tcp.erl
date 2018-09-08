@@ -3,12 +3,14 @@
 -module(knet_mock_tcp).
 
 -export([
-   init/0,
-   free/0,
-   with_setup_error/1,
-   with_accept_error/1,
-   with_packet_echo/0,
-   with_packet_loopback/1
+   init/0
+,  free/0
+,  with_setup_error/1
+,  with_accept_error/1
+,  with_accept_packet/1
+,  with_packet_echo/0
+,  with_packet_loopback/1
+,  with_packet/1
 ]).
 
 %%
@@ -51,6 +53,16 @@ with_accept_error(Reason) ->
 
 %%
 %%
+with_accept_packet(Egress) ->
+   meck:expect(gen_tcp, accept, 
+      fun(LSock) ->
+         [self() ! {tcp, undefined, X} || X <- Egress],
+         accept(LSock)
+      end
+   ).
+
+%%
+%%
 with_packet_loopback(T) ->
    meck:expect(gen_tcp, send,
       fun(_Sock, Packet) ->
@@ -72,6 +84,27 @@ with_packet_echo() ->
       fun(_Sock, Packet) ->
          self() ! {tcp, undefined, Packet},
          self() ! {tcp_closed, undefined},
+         ok
+      end
+   ).
+
+%%
+%%
+with_packet(Fun) ->
+   meck:expect(gen_tcp, send,
+      fun(_Sock, Ingress) ->
+         Self = self(),
+         spawn(
+            fun() ->
+               timer:sleep(10),
+               case Fun(Ingress) of
+                  undefined -> 
+                     ok;
+                  Egress ->
+                     [Self ! {tcp, undefined, X} || X <- Egress]
+               end
+            end
+         ),
          ok
       end
    ).

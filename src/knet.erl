@@ -73,7 +73,8 @@
                         %% side-effect to receive protocol traces
                      ,  tracelog => pid() | undefined
 
-                     , shutdown  => true | false   %% ??? http
+                     ,  shutdown  => true | false   %% ??? http
+                     ,  headers   => _              %% ??? list of http headers
                      }.
 
 -type timeouts()  :: #{

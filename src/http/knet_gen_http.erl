@@ -86,7 +86,7 @@ encode_uri(Uri) ->
    end.
 
 encode_head(Uri, Head, SOpt) ->
-   HeadA = lens:get(lens:pair(headers, []), SOpt),
+   HeadA = lens:get(lens:at(headers, []), SOpt),
    {Host, Port} = uri:authority(Uri),
    HeadB = [{<<"Host">>, <<Host/binary, $:, (scalar:s(Port))/binary>>}],
    Head ++ HeadB ++ HeadA.

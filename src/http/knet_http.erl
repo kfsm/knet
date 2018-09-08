@@ -30,7 +30,8 @@
    free/2, 
    ioctl/2,
    'IDLE'/3, 
-   'LISTEN'/3, 
+   'LISTEN'/3,
+   'ATTACH'/3,
    'STREAM'/3
    % 'HIBERNATE'/3
 ]).
@@ -39,26 +40,26 @@
 %% @todo: rename to state
 -record(fsm, {
    socket   = undefined :: #socket{}    %% http i/o streams
-  ,queue    = undefined :: datum:q()    %% queue of in-flight request
-  ,shutdown = undefined :: false | true %%  
+,  queue    = undefined :: datum:q()    %% queue of in-flight request
+,  shutdown = undefined :: false | true %%  
 }).
 
 %%
 %% the data structure defines a category of http stream processing
 -record(http, {
    is    = undefined :: atom()           %% htstream:state()
-  ,http  = undefined :: _                %% htstream:request() | htstream:response()
-  ,pack  = undefined :: [_]              %% scheduled packet
-  ,state = undefined :: #fsm{}           %% 
+,  http  = undefined :: _                %% htstream:request() | htstream:response()
+,  pack  = undefined :: [_]              %% scheduled packet
+,  state = undefined :: #fsm{}           %% 
 }).
 
 %%
 %% annotates http request with aux (stats) data 
 -record(req, {
    http  = undefined :: _
-  ,code  = undefined :: _
-  ,treq  = undefined :: _
-  ,teoh  = undefined :: _
+,  code  = undefined :: _
+,  treq  = undefined :: _
+,  teoh  = undefined :: _
 }).
 
 
@@ -106,22 +107,32 @@ ioctl(_, _) ->
 %%%
 %%%------------------------------------------------------------------
 
-'IDLE'({listen,  Uri}, Pipe, State) ->
-   pipe:b(Pipe, {listen, Uri}),
+'IDLE'({Prot, _, {listen, _} = Listen}, Pipe, State)
+ when ?is_transport(Prot) ->
+   pipe:b(Pipe, {http, self(), Listen}),
    {next_state, 'LISTEN', State};
 
-'IDLE'({accept,  Uri}, Pipe, State) ->
-   pipe:b(Pipe, {accept, Uri}),
-   {next_state, 'STREAM', State#fsm{shutdown = true}};
+'IDLE'({Prot, _, {error, _} = Error}, Pipe, State)
+ when ?is_transport(Prot) ->
+   pipe:b(Pipe, {http, self(), Error}),
+   {stop, normal, State};
+
+'IDLE'({Prot, _, {established, Peer}}, _Pipe, #fsm{socket = Sock0} = State)
+ when ?is_transport(Prot) ->
+   {ok, Sock1} = knet_gen_http:peername(Peer, Sock0),
+   {next_state, 'STREAM',
+      State#fsm{
+         socket = Sock1
+      }
+   };
 
 'IDLE'({connect, {uri, _, _} = Uri}, Pipe, State) ->
    % connect is compatibility wrapper for knet socket interface (translated to http GET request)
    % @todo: htstream support HTTP/1.2 (see http://www.jmarshall.com/easy/http/)
-   pipe:b(Pipe, {connect, Uri}),
-   {next_state, 'STREAM',
+   {next_state, 'ATTACH',
       lists:foldl(
          fun(X, Acc) ->
-            lens:get(lens:t3(), 'STREAM'(X, Pipe, Acc))
+            lens:get(lens:ti(4), 'ATTACH'(X, Pipe, Acc))
          end,
          State,
          [
@@ -131,25 +142,12 @@ ioctl(_, _) ->
       )
    };
 
-'IDLE'({_Mthd, {uri, _, _}=Uri, _Head}=Req, Pipe, State) ->
-   pipe:b(Pipe, {connect, Uri}),
-   'STREAM'(Req, Pipe, State);
+'IDLE'({_Mthd, {uri, _, _} = Uri, _Head} = Req, Pipe, State) ->
+   'ATTACH'(Req, Pipe, State);
 
 'IDLE'({sidedown, _, _}, _, State) ->
-   {stop, normal, State};
+   {stop, normal, State}.
 
-'IDLE'({Prot, _, {established, Peer}}, _Pipe, #fsm{socket = Sock0, queue = Q} = State)
- when ?is_transport(Prot) ->
-   {ok, Sock1} = knet_gen_http:peername(Peer, Sock0),
-   {next_state, 'STREAM', 
-      State#fsm{
-         socket = Sock1, 
-         queue  = q_set_req_time(Q)
-      }
-   };
-
-'IDLE'({Prot, _, {listen, Peer}}, _, State) ->
-   {next_state, 'LISTEN', State}.
 
 %%%------------------------------------------------------------------
 %%%
@@ -160,6 +158,49 @@ ioctl(_, _) ->
 'LISTEN'(_Msg, _Pipe, State) ->
    %% Note: listen do not forward tcp messages to client
    {next_state, 'LISTEN', State}.
+
+
+%%%------------------------------------------------------------------
+%%%
+%%% ATTACH
+%%%
+%%%------------------------------------------------------------------   
+
+'ATTACH'({Prot, _, {established, Peer}}, _Pipe, #fsm{socket = Sock0, queue = Q} = State)
+ when ?is_transport(Prot) ->
+   {ok, Sock1} = knet_gen_http:peername(Peer, Sock0),
+   {next_state, 'STREAM',
+      State#fsm{
+         socket = Sock1,
+         queue  = q_set_req_time(Q)
+      }
+   };
+
+'ATTACH'({Prot, _, {error, _}}, Pipe, #fsm{shutdown = true} = State)
+ when ?is_transport(Prot) ->
+   {stop, normal, http_downstream_idle(Pipe, State)};
+
+'ATTACH'({Prot, _, {error, _}}, Pipe, #fsm{} = State)
+ when ?is_transport(Prot) ->
+   {next_state, 'IDLE', http_downstream_idle(Pipe, State)};
+
+%%
+%% egress message
+'ATTACH'({Mthd, Uri, _} = Request, Pipe, State)
+ when is_atom(Mthd) ->
+   pipe:b(Pipe, {connect, Uri}),
+   http_downstream_send('ATTACH', Request, Pipe, State);
+
+'ATTACH'({Code, _, _} = Response, Pipe, State)
+ when is_integer(Code) ->
+   http_downstream_send('ATTACH', Response, Pipe, State);
+
+'ATTACH'(eof, Pipe, State) ->
+   http_downstream_send('ATTACH', eof, Pipe, State);
+
+'ATTACH'({packet, Pckt}, Pipe, State) ->
+   http_downstream_send('ATTACH', Pckt, Pipe, State).
+
 
 
 %%%------------------------------------------------------------------
@@ -184,41 +225,23 @@ ioctl(_, _) ->
    {next_state, 'STREAM', State};
 
 %%
-%% peer connection
-'STREAM'({Prot, _, {established, Peer}}, _Pipe, #fsm{socket = Sock0, queue = Q} = State)
- when ?is_transport(Prot) ->
-   {ok, Sock1} = knet_gen_http:peername(Peer, Sock0),
-   {next_state, 'STREAM', 
-      State#fsm{
-         socket = Sock1, 
-         queue  = q_set_req_time(Q)
-      }
-   };
-
+%% ingress message
 'STREAM'({Prot, _, eof}, Pipe, #fsm{shutdown = true} = State)
  when ?is_transport(Prot) ->
-   {stop, normal, stream_reset(Pipe, State)};
+   {stop, normal, http_downstream_idle(Pipe, State)};
 
 'STREAM'({Prot, _, eof}, Pipe, #fsm{} = State)
  when ?is_transport(Prot) ->
-   {next_state, 'IDLE', stream_reset(Pipe, State)};
+   {next_state, 'IDLE', http_downstream_idle(Pipe, State)};
 
 'STREAM'({Prot, _, {error, _}}, Pipe, #fsm{shutdown = true} = State)
  when ?is_transport(Prot) ->
-   {stop, normal, stream_reset(Pipe, State)};
+   {stop, normal, http_downstream_idle(Pipe, State)};
 
 'STREAM'({Prot, _, {error, _}}, Pipe, #fsm{} = State)
  when ?is_transport(Prot) ->
-   {next_state, 'IDLE', stream_reset(Pipe, State)};
+   {next_state, 'IDLE', http_downstream_idle(Pipe, State)};
 
-%%
-%%
-% 'STREAM'(hibernate, _, State) ->
-%    ?DEBUG("knet [http]: suspend ~p", [(State#fsm.stream)#stream.peer]),
-%    {next_state, 'HIBERNATE', State, hibernate};
-
-%%
-%% ingress packet
 'STREAM'({Prot, _, Pckt}, Pipe, State0)
  when ?is_transport(Prot), is_binary(Pckt) ->
    try
@@ -229,46 +252,51 @@ ioctl(_, _) ->
             {next_state, 'STREAM', State1}
       end
    catch _:Reason ->
-      % error_logger:error_report([
-      %    {knet,  ingress},
-      %    {protocol, http},
-      %    {reason, Reason},
-      %    {stack, erlang:get_stacktrace()}
-      % ]),
-      {next_state, 'IDLE', stream_reset(Pipe, State0)}
+      error_logger:error_report([
+         {knet,  ingress},
+         {protocol, http},
+         {reason, Reason},
+         {stack, erlang:get_stacktrace()}
+      ]),
+      {next_state, 'IDLE', http_downstream_idle(Pipe, State0)}
    end;
+
+%%
+%%
+% 'STREAM'(hibernate, _, State) ->
+%    ?DEBUG("knet [http]: suspend ~p", [(State#fsm.stream)#stream.peer]),
+%    {next_state, 'HIBERNATE', State, hibernate};
+
 
 %%
 %% egress message
 'STREAM'({Mthd, _, _} = Request, Pipe, State)
  when is_atom(Mthd) ->
-   http_stream_send(Request, Pipe, State);
+   http_downstream_send('STREAM', Request, Pipe, State);
 
 'STREAM'({Code, _, _} = Response, Pipe, State)
  when is_integer(Code) ->
-   http_stream_send(Response, Pipe, State);
+   http_downstream_send('STREAM', Response, Pipe, State);
 
 'STREAM'(eof, Pipe, State) ->
-   http_stream_send(eof, Pipe, State);
+   http_downstream_send('STREAM', eof, Pipe, State);
 
 'STREAM'({packet, Pckt}, Pipe, State) ->
-   http_stream_send(Pckt, Pipe, State).
+   http_downstream_send('STREAM', Pckt, Pipe, State).
 
 %%
-http_stream_send(Msg, Pipe, State0) ->
+%%
+http_downstream_send(SID, Msg, Pipe, State) ->
    try
-      State1 = http_send(Msg, Pipe, State0),
-      pipe:ack(Pipe, ok),
-      {next_state, 'STREAM', State1}
+      {reply, ok, SID, http_send(Msg, Pipe, State)}
    catch _:Reason ->
-      % error_logger:error_report([
-      %    {knet,  ingress},
-      %    {protocol, http},
-      %    {reason, Reason},
-      %    {stack, erlang:get_stacktrace()}
-      % ]),
-      pipe:ack(Pipe, {error, Reason}),
-      {next_state, 'IDLE', stream_reset(Pipe, State0)}
+      error_logger:error_report([
+         {knet,  ingress},
+         {protocol, http},
+         {reason, Reason},
+         {stack, erlang:get_stacktrace()}
+      ]),
+      {reply, {error, Reason}, 'IDLE', http_downstream_idle(Pipe, State)}
    end.
 
 %%%------------------------------------------------------------------
@@ -329,7 +357,7 @@ http_send_return(_Pipe, #http{state = State}) ->
 -spec http_recv(_, pipe:pipe(), #fsm{}) -> #fsm{}.
 
 http_recv(Msg, Pipe, State) ->
-   [$. ||
+   [identity ||
       http_decode_packet(Msg, State),
       enq_http_request(_),
       http_ingress(Pipe, _),
@@ -394,10 +422,10 @@ http_recv_upgrade(Upgrade, _, _) ->
 
 %%
 %%
-stream_reset(_Pipe, #fsm{queue = {}} = State) ->
+http_downstream_idle(_Pipe, #fsm{queue = ?queue()} = State) ->
    state_new(State);
 
-stream_reset(Pipe,  #fsm{socket = #socket{in = Stream}, queue = Queue} = State) ->
+http_downstream_idle(Pipe,  #fsm{socket = #socket{in = Stream}, queue = Queue} = State) ->
    case htstream:state(Stream) of
       payload ->
          send_eof_to_side(Pipe, q:head(Queue)),
@@ -413,7 +441,7 @@ send_eof_to_side(Pipe, _) ->
 send_503_to_side(Pipe, Queue) ->
    lists:map(
       fun(_) -> 
-         pipe:b(Pipe, {http, self(), {503, <<"Service Unavailable">>, [], []}}),
+         pipe:b(Pipe, {http, self(), {503, <<"Service Unavailable">>, []}}),
          pipe:b(Pipe, {http, self(), eof})
       end,
       q:list(Queue)

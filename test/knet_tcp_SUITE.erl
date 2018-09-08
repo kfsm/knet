@@ -240,7 +240,7 @@ tcp_accept(_) ->
    }),
    {ioctl, b, Sock} = knet:recv(Sock),
    {tcp, Sock, {listen, _}} = knet:recv(Sock),
-   {tcp, _,  {established, Uri}} = receive X -> X end,
+   {tcp, _,  {established, Uri}} = knet_check:recv_any(),
    {<<"127.0.0.1">>, 65536} = uri:authority(Uri),
    %% Use timeout to allow accept spawn before LSocket is closed 
    %% This is needed to reduce number of crashes at test logs
@@ -263,7 +263,7 @@ tcp_accept_failure(_) ->
    }),
    {ioctl, b, Sock} = knet:recv(Sock),
    {tcp, Sock, {listen, _}} = knet:recv(Sock),
-   {tcp, _,  {error, enoent}} = receive X -> X end,
+   {tcp, _,  {error, enoent}} = knet_check:recv_any(),
    %% Use timeout to allow accept spawn before LSocket is closed 
    %% This is needed to reduce number of crashes at test logs
    timer:sleep(100),

@@ -41,11 +41,9 @@ init([]) ->
          [
             ?CHILD(supervisor, knet_acceptor_root_sup)
          ,  ?CHILD(supervisor, knet_socket_root_sup)
-         ,  ?CHILD(supervisor, knet_udp_sup)
-         ,  ?CHILD(supervisor, knet_tcp_sup)
-         ,  ?CHILD(supervisor, knet_ssl_sup)
-         ,  ?CHILD(supervisor, knet_http_sup)
-         ,  ?CHILD(supervisor, knet_ws_sup)
+         % ,  ?CHILD(supervisor, knet_udp_sup)
+         % ,  ?CHILD(supervisor, knet_ssl_sup)
+         % ,  ?CHILD(supervisor, knet_ws_sup)
          ]
       }
    }.

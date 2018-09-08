@@ -22,6 +22,8 @@
 -compile({parse_transform, category}).
 
 -include("knet.hrl").
+-include_lib("common_test/include/ct.hrl").
+
 
 -export([
    start_link/1, 
@@ -116,7 +118,7 @@ ioctl(socket, #state{socket = Sock}) ->
       {ok, State1} ->
          {next_state, 'LISTEN', State1};
       {error, Reason} ->
-         error_to_side_a(Pipe, Reason, State0),
+         error_to_side_b(Pipe, Reason, State0),
          {next_state, 'IDLE', State0}
    end;
 
@@ -139,11 +141,11 @@ ioctl(socket, #state{socket = Sock}) ->
       {error, closed} ->
          {stop, normal, State0};
       {error, enoent} ->
-         error_to_side_a(Pipe, enoent, State0),
+         error_to_side_b(Pipe, enoent, State0),
          {stop, normal, State0};
       {error, Reason} ->
          spawn_acceptor(Uri, State0),
-         error_to_side_a(Pipe, Reason, State0),
+         error_to_side_b(Pipe, Reason, State0),
          {stop, Reason, State0}
    end;
 
@@ -406,6 +408,9 @@ error_to_side_a(Pipe, Reason, #state{} = State) ->
    pipe:a(Pipe, {tcp, self(), {error, Reason}}),
    {ok, State}.
 
+error_to_side_b({pipe, _, undefined} = Pipe, Reason, State) ->
+   % this is required when pipe has single side
+   error_to_side_a(Pipe, Reason, State);
 error_to_side_b(Pipe, normal, #state{} = State) ->
    pipe:b(Pipe, {tcp, self(), eof}),
    {ok, State};
