@@ -39,13 +39,13 @@
 
 %% internal state
 -record(fsm, {
-   stream   = undefined :: #iostream{}  %% udp packet stream
-  ,dispatch = undefined :: atom()     %% acceptor dispatch algorithm
-  ,acceptor = undefined :: datum:q()  %% acceptor queue (worker process handling udp message) 
-  ,sock     = undefined :: port()     %% udp socket
-  ,active   = true      :: once | true | false  %% socket activity (pipe internally uses active once)  
-  ,backlog  = 0         :: integer()  %% socket acceptor pool size
-  ,so       = undefined :: any()      %% socket options
+   stream   = undefined :: #iostream{} %% udp packet stream
+,  dispatch = undefined :: atom()      %% acceptor dispatch algorithm
+,  acceptor = undefined :: datum:q()   %% acceptor queue (worker process handling udp message) 
+,  sock     = undefined :: port()      %% udp socket
+,  active   = true      :: once | true | false  %% socket activity (pipe internally uses active once)  
+,  backlog  = 0         :: integer()   %% socket acceptor pool size
+,  so       = undefined :: #{}         %% socket options
 }).
 
 
@@ -56,17 +56,16 @@
 %%%------------------------------------------------------------------   
 
 start_link(Opts) ->
-   pipe:start_link(?MODULE, Opts ++ ?SO_UDP,
-      [{acapacity, opts:val(queue, undefined, Opts)}]).
+   pipe:start_link(?MODULE, maps:merge(?SO_UDP, Opts), []).
 
 %%
 init(Opts) ->
    {ok, 'IDLE', 
       #fsm{      
          stream   = io_new(Opts)
-        ,backlog  = opts:val(backlog,  5, Opts)
-        ,active   = opts:val(active, Opts)
-        ,so       = Opts      
+      ,  backlog  = lens:get(lens:at(backlog, 5), Opts)
+      ,  active   = lens:get(lens:at(active), Opts)
+      ,  so       = Opts      
       }
    }.
 
