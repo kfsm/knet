@@ -8,10 +8,13 @@
 
 
 init(Uri, Opts) ->
-   knet:listen(Uri, maps:merge(Opts, #{
+   {ok, Sock} = knet:listen(Uri, maps:merge(Opts, #{
       backlog  =>  1, 
       acceptor => fun echo/1
-   })).
+   })),
+   {ioctl, b, _} = knet:recv(Sock),
+   {_, _, {listen, _}} = knet:recv(Sock),
+   {ok, Sock}.
 
 
 echo({_, _Sock, {established, _Uri}}) ->
@@ -22,6 +25,9 @@ echo({_, _Sock, eof}) ->
 
 echo({_, _Sock, {error, _Reason}}) ->
    stop;
+
+echo({_, _Sock, {Host, Port, <<$-, Pckt/binary>>}}) ->
+   {a, {packet, {Host, Port, <<$+, Pckt/binary>>}}};
 
 echo({_, _Sock,  <<$-, Pckt/binary>>}) ->
    {a, {packet, <<$+, Pckt/binary>>}};

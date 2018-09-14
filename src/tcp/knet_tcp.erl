@@ -147,19 +147,19 @@ ioctl(socket, #state{socket = Sock}) ->
          {stop, Reason, State0}
    end;
 
-'IDLE'({sidedown, a, _}, _Pipe, State) ->
+'IDLE'({sidedown, a, _}, _, State) ->
    {stop, normal, State};
 
-'IDLE'(tth, _Pipe, State) ->
+'IDLE'(tth, _, State) ->
    {next_state, 'IDLE', State};
 
-'IDLE'(ttl, _Pipe, State) ->
+'IDLE'(ttl, _, State) ->
    {next_state, 'IDLE', State};
 
-'IDLE'({ttp, _}, _Pipe, State) ->
+'IDLE'({ttp, _}, _, State) ->
    {next_state, 'IDLE', State};
 
-'IDLE'({packet, _}, Pipe, State) ->
+'IDLE'({packet, _}, _, State) ->
    {reply, {error, ecomm}, 'IDLE', State}.
 
 
@@ -225,10 +225,6 @@ ioctl(socket, #state{socket = Sock}) ->
 %%
 %%
 'ESTABLISHED'({tcp, Port, Pckt}, Pipe, #state{} = State0) ->
-   %% What one can do is to combine {active, once} with gen_tcp:recv().
-   %% Essentially, you will be served the first message, then read as many as you 
-   %% wish from the socket. When the socket is empty, you can again enable {active, once}. 
-   %% Note: release 17.x and later supports {active, n()}
    case stream_recv(Pipe, Pckt, State0) of
       {ok, State1} ->
          {next_state, 'ESTABLISHED', State1};
@@ -258,7 +254,6 @@ ioctl(socket, #state{socket = Sock}) ->
          {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
          pipe:ack(Pipe, {error, Reason}),
-         %% @todo: spawn pipe so that b is client
          'ESTABLISHED'({tcp_error, undefined, Reason}, Pipe, State0)
    end.
 
@@ -295,9 +290,9 @@ listen(Uri, #state{socket = Sock} = State) ->
       cats:unit(State#state{socket = Socket})
    ].
 
-accept(Uri, #state{so = #{listen := LSock} = SOpt} = State) ->
+accept(Uri, #state{so = #{listen := LSock}} = State) ->
    T    = os:timestamp(),
-   %% Note: this is a design decision to inject listen socket via socket options
+   %% Note: this is a design decision to inject listen socket pid via socket options
    Sock = pipe:ioctl(LSock, socket),
    [either ||
       Socket <- knet_gen_tcp:accept(Uri, Sock),

@@ -14,26 +14,30 @@
 %% default socket options
 %%
 %%-----------------------------------------------------------------------------
--define(SO_TCP, #{
-   active   => 1024
-,  nodelay  => true
-,  stream   => raw
-,  tracelog => undefined
-}).
-
-
--define(SO_UDP, 
-   [
-      binary
-     ,{active,  once}
-     ,{nodelay, true}
-   ]
+-define(SO_TCP, 
+   #{
+      active   => 1024
+   ,  nodelay  => true
+   ,  stream   => raw
+   ,  tracelog => undefined
+   }
 ).
 
--define(SO_HTTP, #{
-   'keep-alive' => 60000
-,  tracelog => undefined
-}).
+-define(SO_UDP, 
+   #{
+      active   => 1024
+   ,  nodelay  => true
+   ,  stream   => raw
+   ,  tracelog => undefined
+   }
+).
+
+-define(SO_HTTP,
+   #{
+      'keep-alive' => 60000
+   ,  tracelog => undefined
+   }
+).
 
 -define(SO_SSH,
    [
@@ -70,7 +74,7 @@
 ).
 
 -define(SO_SSL_ALLOWED, 
-    [
+   [
       verify
    ,  verify_fun
    ,  fail_if_no_peer_cert

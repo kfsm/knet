@@ -16,36 +16,30 @@
 %%   limitations under the License.
 %%
 %% @description
-%%   client-server udp konduit
-%%
-%% @todo
-%%   * should udp konduit be dual (connect also listen on port) 
-%%     e.g. connect udp://127.0.0.1:80 listen on port 80
+%%   udp konduit
 -module(knet_udp).
 -behaviour(pipe).
+-compile({parse_transform, category}).
 
 -include("knet.hrl").
 
 -export([
-   start_link/1, 
-   init/1, 
-   free/2, 
-   ioctl/2,
-   'IDLE'/3, 
-   'LISTEN'/3, 
-   'ESTABLISHED'/3,
-   'HIBERNATE'/3
+   start_link/1
+,  init/1
+,  free/2 
+,  ioctl/2
+,  'IDLE'/3 
+,  'LISTEN'/3 
+,  'ESTABLISHED'/3
+,  'HIBERNATE'/3
 ]).
 
 %% internal state
--record(fsm, {
-   stream   = undefined :: #iostream{} %% udp packet stream
-,  dispatch = undefined :: atom()      %% acceptor dispatch algorithm
-,  acceptor = undefined :: datum:q()   %% acceptor queue (worker process handling udp message) 
-,  sock     = undefined :: port()      %% udp socket
-,  active   = true      :: once | true | false  %% socket activity (pipe internally uses active once)  
-,  backlog  = 0         :: integer()   %% socket acceptor pool size
-,  so       = undefined :: #{}         %% socket options
+-record(state, {
+   socket   = undefined :: #socket{}
+,  flowctl  = true      :: once | true | false  %% socket activity (pipe internally uses active once)  
+,  so       = undefined :: #{}                  %% socket options
+,  acceptor = undefined :: datum:q()            %% acceptor queue (worker process handling udp message) 
 }).
 
 
@@ -59,24 +53,25 @@ start_link(Opts) ->
    pipe:start_link(?MODULE, maps:merge(?SO_UDP, Opts), []).
 
 %%
-init(Opts) ->
-   {ok, 'IDLE', 
-      #fsm{      
-         stream   = io_new(Opts)
-      ,  backlog  = lens:get(lens:at(backlog, 5), Opts)
-      ,  active   = lens:get(lens:at(active), Opts)
-      ,  so       = Opts      
-      }
-   }.
+init(SOpt) ->
+   [either ||
+      knet_gen_udp:socket(SOpt),
+      cats:unit('IDLE',
+         #state{
+            socket  = _
+         ,  flowctl = lens:get(lens:at(active), SOpt)
+         ,  so      = SOpt
+         }
+      )
+   ].
 
 %%
-free(_Reason, #fsm{sock=Sock}) ->
-   (catch gen_udp:close(Sock)),
+free(_Reason, _State) ->
    ok. 
 
 %% 
-ioctl(socket, State) -> 
-   State#fsm.sock.
+ioctl(socket, #state{socket = Sock}) -> 
+   Sock.
 
 %%%------------------------------------------------------------------
 %%%
@@ -86,41 +81,47 @@ ioctl(socket, State) ->
 
 %%
 %%
-'IDLE'({listen, Uri}, Pipe, State) ->
-   case udp_listen(Uri, State) of
-      {ok, Sock} ->
-         create_acceptor_pool(Uri, State),
-         _ = pipe:a(Pipe, {udp, self(), {listen, Uri}}),
-         {next_state, 'LISTEN', 
-            udp_ioctl(State#fsm{sock=Sock, acceptor=q:new()})
-         };
-
+'IDLE'({connect, Uri}, Pipe, #state{} = State0) ->
+   case
+      [either ||
+         connect(Uri, State0),
+         time_to_live(_),
+         time_to_hibernate(_),
+         time_to_packet(0, _),
+         pipe_to_side_a(Pipe, established, _),
+         config_flow_ctrl(_)
+      ]
+   of
+      {ok, State1} ->
+         {next_state, 'ESTABLISHED', State1};
       {error, Reason} ->
-         pipe:a(Pipe, {udp, self(), {terminated, Reason}}),
-         {stop, Reason, State}
+         error_to_side_a(Pipe, Reason, State0),
+         {next_state, 'IDLE', State0}
    end;
 
 %%
 %%
-'IDLE'({connect, Uri}, Pipe, #fsm{stream = Stream0} = State) ->
-   case udp_connect(Uri, State) of
-      {ok, Sock} ->
-         #iostream{addr = Addr} = Stream1 = 
-            io_ttl(io_tth(io_connect(Sock, Uri, Stream0))),
-         pipe:a(Pipe, {udp, self(), {listen, uri:authority(Addr, uri:new(udp))}}),
-         {next_state, 'ESTABLISHED', udp_ioctl(State#fsm{stream=Stream1, sock=Sock})};
-
+'IDLE'({listen, Uri}, Pipe, #state{} = State0) ->
+   case
+      [either ||
+         listen(Uri, State0#state{acceptor = q:new()}),
+         spawn_acceptor_pool(Uri, _),
+         pipe_to_side_b(Pipe, listen, _),
+         config_flow_ctrl(_)
+      ]
+   of
+      {ok, State1} ->
+         {next_state, 'LISTEN', State1};
       {error, Reason} ->
-         pipe:a(Pipe, {udp, self(), {terminated, Reason}}),
-         {stop, Reason, State}
+         error_to_side_b(Pipe, Reason, State0),
+         {next_state, 'IDLE', State0}
    end;
 
 %%
 %%
-'IDLE'({accept, _Uri}, _Pipe, #fsm{so = SOpt}=State) ->
-   Pid = opts:val(listen, SOpt), 
-   {ok, Sock} = pipe:call(Pid, accept, infinity),
-   {next_state, 'ESTABLISHED', State#fsm{sock = Sock}}.
+'IDLE'({accept, _Uri}, _Pipe, #state{so = #{listen := LSock}} = State) ->
+   {ok, Sock} = pipe:call(LSock, accept, infinity),
+   {next_state, 'ESTABLISHED', State#state{socket = Sock}}.
 
 %%%------------------------------------------------------------------
 %%%
@@ -128,21 +129,20 @@ ioctl(socket, State) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'LISTEN'(accept, Pipe, #fsm{sock = Sock, acceptor = Acceptor}=State) ->
-   pipe:ack(Pipe, {ok, Sock}),
-	{next_state, 'LISTEN', 
-      State#fsm{acceptor = q:enq(pipe:a(Pipe), Acceptor)}
+'LISTEN'(accept, Pipe, #state{socket = Sock, acceptor = Acceptor} = State) ->
+	{reply, {ok, Sock}, 
+      State#state{
+         acceptor = q:enq(pipe:a(Pipe), Acceptor)
+      }
    };
 
-'LISTEN'({udp, _, Host, Port, Pckt}, _Pipe, #fsm{acceptor = Acceptor}=State) ->
-   % ?DEBUG("knet udp ~p: recv ~p~n~p", [self(), {Host, Port}, Pckt]),
+'LISTEN'({udp, _, _Host, _Port, _Data} = Pckt, _Pipe, #state{acceptor = Acceptor} = State) ->
    {Pid, Queue} = q:deq(Acceptor),
-   pipe:send(Pid, {udp, self(), {{Host, Port}, Pckt}}),
-   {next_state, 'LISTEN', State#fsm{acceptor = q:enq(Pid, Queue)}};
+   pipe:send(Pid, Pckt),
+   {next_state, 'LISTEN', State#state{acceptor = q:enq(Pid, Queue)}};
 
-'LISTEN'({udp_passive, _} = Msg, _Pipe, #fsm{acceptor = Acceptor}=State) ->
-   {Pid, _} = q:deq(Acceptor),
-   pipe:send(Pid, Msg),
+'LISTEN'({udp_passive, _} = Msg, _Pipe, #state{acceptor = Acceptor}=State) ->
+   pipe:send(q:head(Acceptor), Msg),
    {next_state, 'LISTEN', State};
 
 'LISTEN'(_Msg, _Pipe, State) ->
@@ -155,61 +155,74 @@ ioctl(socket, State) ->
 %%%
 %%%------------------------------------------------------------------   
 
-%%
-%%
-'ESTABLISHED'({udp_passive, _}, _Pipe, #fsm{active = once} = State) ->
-   {next_state, 'ESTABLISHED', udp_ioctl(State)};
+'ESTABLISHED'({sidedown, a, _}, _, State0) ->
+   {stop, normal, State0};
 
-'ESTABLISHED'({udp_passive, _}, _Pipe, #fsm{active = true} = State) ->
-   {next_state, 'ESTABLISHED', udp_ioctl(State)};
-
-'ESTABLISHED'({udp_passive, _}, Pipe, State) ->
-   pipe:b(Pipe, {udp, self(), passive}),
-   {next_state, 'ESTABLISHED', State};
-
-'ESTABLISHED'(active, _Pipe, State) ->
-   {next_state, 'ESTABLISHED', udp_ioctl(State)};
-
-'ESTABLISHED'({active, N}, _Pipe, State) ->
-   {next_state, 'ESTABLISHED', udp_ioctl(State#fsm{active = N})};
-
-
-'ESTABLISHED'({udp, _, Host, Port, Pckt}, Pipe, State) ->
-   {_, Stream} = io_recv({{Host, Port}, Pckt}, Pipe, State#fsm.stream),
-   {next_state, 'ESTABLISHED', State#fsm{stream=Stream}};
-
-'ESTABLISHED'({udp, _, Msg}, Pipe, State) ->
-   %% Note: ingress packet is routed by "listen" socket to acceptor process
-   %%       destination client is attached to b
-   {_, Stream} = io_recv(Msg, Pipe, State#fsm.stream),
-   {next_state, 'ESTABLISHED', State#fsm{stream=Stream}};
-
-'ESTABLISHED'({ttl, Pack}, Pipe, State) ->
-   case io_ttl(Pack, State#fsm.stream) of
-      {eof, Stream} ->
-         pipe:b(Pipe, {udp, self(), {terminated, timeout}}),
-         {stop, normal, State#fsm{stream=Stream}};
-      {_,   Stream} ->
-         {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
+'ESTABLISHED'({udp_error, Reason}, Pipe, #state{} = State0) ->
+   case
+      [either ||
+         close(Reason, State0),
+         error_to_side_b(Pipe, Reason, _)
+      ]
+   of
+      {ok, State1} -> 
+         {next_state, 'IDLE', State1};
+      {error, Reason} -> 
+         {stop, Reason, State0}
    end;
 
-'ESTABLISHED'(hibernate, _, State) ->
-   % ?DEBUG("knet [udp]: suspend ~p", [self()]),
+%%
+%%
+'ESTABLISHED'({udp_passive, _}, Pipe, #state{} = State0) ->
+   case stream_flow_ctrl(Pipe, State0) of
+      {ok, State1} ->
+         {next_state, 'ESTABLISHED', State1};
+      {error, Reason} ->
+         'ESTABLISHED'({udp_error, Reason}, Pipe, State0)
+   end;
+
+'ESTABLISHED'({active, N}, Pipe, #state{} = State0) ->
+   case config_flow_ctrl(State0#state{flowctl = N}) of
+      {ok, State1} ->
+         {next_state, 'ESTABLISHED', State1};
+      {error, Reason} ->
+         'ESTABLISHED'({udp_error, Reason}, Pipe, State0)
+   end;
+
+%%
+%%
+'ESTABLISHED'({udp, _, Host, Port, Pckt}, Pipe, #state{} = State0) ->
+   case stream_recv(Pipe, {Host, Port, Pckt}, State0) of
+      {ok, State1} ->
+         {next_state, 'ESTABLISHED', State1};
+      {error, Reason} ->
+         'ESTABLISHED'({udp_error, Reason}, Pipe, State0)
+   end;
+
+'ESTABLISHED'({ttp, Pack}, Pipe, #state{} = State0) ->
+   case time_to_packet(Pack, State0) of
+      {ok, State1} ->
+         {next_state, 'ESTABLISHED', State1};
+      {error, Reason} ->
+         'ESTABLISHED'({udp_error, Reason}, Pipe, State0)
+   end;
+
+'ESTABLISHED'(tth, _, State) ->
    {next_state, 'HIBERNATE', State, hibernate};
 
-'ESTABLISHED'({{_Host, _Port}, Pckt} = Msg, Pipe, State)
- when ?is_iolist(Pckt) ->
-   try
-      {_, Stream} = io_send(Msg, State#fsm.sock, State#fsm.stream),
-      {next_state, 'ESTABLISHED', State#fsm{stream=Stream}}
-   catch _:{badmatch, {error, Reason}} ->
-      pipe:a(Pipe, {udp, self(), {terminated, Reason}}),
-      {stop, Reason, State}
-   end;
+'ESTABLISHED'(ttl, Pipe, State) ->
+   'ESTABLISHED'({udp_error, normal}, Pipe, State);
 
-'ESTABLISHED'(Pckt, Pipe, #fsm{stream=Stream}=State)
- when ?is_iolist(Pckt) ->
- 	'ESTABLISHED'({Stream#iostream.peer, Pckt}, Pipe, State).
+'ESTABLISHED'({packet, Pckt}, Pipe, #state{} = State0) ->
+   case stream_send(Pipe, Pckt, State0) of
+      {ok, State1} ->
+         pipe:ack(Pipe, ok),
+         {next_state, 'ESTABLISHED', State1};
+      {error, Reason} ->
+         pipe:ack(Pipe, {error, Reason}),
+         'ESTABLISHED'({udp_error, Reason}, Pipe, State0)
+   end.
+
 
 %%%------------------------------------------------------------------
 %%%
@@ -217,10 +230,10 @@ ioctl(socket, State) ->
 %%%
 %%%------------------------------------------------------------------   
 
-'HIBERNATE'(Msg, Pipe, #fsm{stream = Stream} = State) ->
-   % ?DEBUG("knet [tcp]: resume ~p", [Stream#iostream.peer]),
-   'ESTABLISHED'(Msg, Pipe, State#fsm{stream=io_tth(Stream)}).
-
+'HIBERNATE'(Msg, Pipe, #state{} = State0) ->
+   % ?DEBUG("knet [tcp]: resume ~p",[Stream#stream.peer]),
+   {ok, State1} = time_to_hibernate(State0),
+   'ESTABLISHED'(Msg, Pipe, State1).
 
 %%%------------------------------------------------------------------
 %%%
@@ -229,110 +242,159 @@ ioctl(socket, State) ->
 %%%------------------------------------------------------------------   
 
 %%
-%% new socket stream
-io_new(SOpt) ->
-   #iostream{
-      send = pstream:new(opts:val(pack, raw, SOpt))
-     ,recv = pstream:new(opts:val(pack, raw, SOpt))
-     ,ttl  = pair:lookup([timeout, ttl], ?SO_TTL, SOpt)
-     ,tth  = pair:lookup([timeout, tth], ?SO_TTH, SOpt)
-     ,ts   = os:timestamp()
-   }.
+%% 
+connect(Uri, #state{socket = Sock} = State) ->
+   T = os:timestamp(),
+   [either ||
+      Socket <- knet_gen_udp:connect(Uri, Sock),
+      knet_gen:trace(connect, tempus:diff(T), Socket),
+      cats:unit(State#state{socket = Socket})
+   ].
 
 %%
-%% socket connected
-io_connect(Port, Uri, #iostream{}=Sock) ->
-   Peer = case uri:host(Uri) of
-      <<$*>> ->
-         undefined;
-      Host   ->
-         Inet = case uri:schema(Uri) of
-            udp  -> inet;
-            udp6 -> inet6
-         end,
-         {ok, IP} = inet:getaddr(scalar:c(Host), Inet),
-         {IP, uri:port(Uri)}
-   end,
-   {ok, Addr} = inet:sockname(Port),
-   Sock#iostream{addr = Addr, peer = Peer, tss = os:timestamp(), ts = os:timestamp()}.
+%%
+close(_Reason, #state{socket = Sock} = State) ->
+   [either ||
+      knet_gen_udp:close(Sock),
+      cats:unit(State#state{socket = _})
+   ].
 
 %%
-%% set hibernate timeout
-io_tth(#iostream{}=Sock) ->
-   Sock#iostream{
-      tth = tempus:timer(Sock#iostream.tth, hibernate)
-   }.
+%%
+listen(Uri, #state{socket = Sock} = State) ->
+   [either ||
+      Socket <- knet_gen_udp:listen(Uri, Sock),
+      cats:unit(State#state{socket = Socket})
+   ].
+
 
 %%
-%% set time-to-live timeout
-io_ttl(#iostream{}=Sock) ->
-   erlang:element(2, io_ttl(-1, Sock)). 
+%% socket timeout
+time_to_live(#state{so = SOpt} = State) ->
+   [option || 
+      lens:get(lens:c(lens:at(timeout, #{}), lens:at(ttl)), SOpt), 
+      tempus:timer(_, ttl)
+   ],
+   {ok, State}.
 
-io_ttl(N, #iostream{}=Sock) ->
-   case pstream:packets(Sock#iostream.recv) + pstream:packets(Sock#iostream.send) of
-      %% stream activity
-      X when X > N ->
-         {active, Sock#iostream{ttl = tempus:timer(Sock#iostream.ttl, {ttl, X})}};
-      %% no stream activity
+time_to_hibernate(#state{so = SOpt} = State) ->
+   [option ||
+      lens:get(lens:c(lens:at(timeout, #{}), lens:at(tth)), SOpt), 
+      tempus:timer(_, tth)
+   ],
+   {ok, State}.
+
+time_to_packet(N, #state{socket = Sock, so = SOpt} = State) ->
+   case knet_gen_udp:getstat(Sock, packet) of
+      X when X > N orelse N =:= 0 ->
+         [option ||
+            lens:get(lens:c(lens:at(timeout, #{}), lens:at(ttp)), SOpt), 
+            tempus:timer(_, {ttp, X})
+         ],
+         {ok, State};
       _ ->
-         {eof, Sock}
+         {error, timeout}
    end.
 
 %%
-%% recv packet
-io_recv({{_Host, _Port}=Peer, Pckt}, Pipe, #iostream{}=Sock) ->
-   % ?DEBUG("knet [udp] ~p: recv ~p~n~p", [self(), Peer, Pckt]),
-   {Msg, Recv} = pstream:decode(Pckt, Sock#iostream.recv),
-   lists:foreach(fun(X) -> pipe:b(Pipe, {udp, self(), {Peer, X}}) end, Msg),
-   {active, Sock#iostream{recv=Recv}}.
+%%
+config_flow_ctrl(#state{flowctl = true, socket = Sock} = State) ->
+   knet_gen_udp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
+   {ok, State};
+config_flow_ctrl(#state{flowctl = once, socket = Sock} = State) ->
+   knet_gen_udp:setopts(Sock, [{active, once}]),
+   {ok, State};
+config_flow_ctrl(#state{flowctl = N, socket = Sock} = State) ->
+   knet_gen_udp:setopts(Sock, [{active, N}]),
+   {ok, State#state{flowctl = N}}.
 
 %%
-%% send packet
-io_send({{Host, Port} = _Peer, Msg}, Pipe, #iostream{}=Sock) ->
-   % ?DEBUG("knet [udp] ~p: send ~p~n~p", [self(), _Peer, Msg]),
-   {Pckt, Send} = pstream:encode(Msg, Sock#iostream.send),
-   lists:foreach(fun(X) -> ok = gen_udp:send(Pipe, Host, Port, X) end, Pckt),
-   {active, Sock#iostream{send=Send}}.
-
-%%
-%% set socket i/o control flags
-udp_ioctl(#fsm{sock = Sock, active = true} = State) ->
-   ok = inet:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
-   State;
-udp_ioctl(#fsm{sock = Sock, active = once} = State) ->
-   ok = inet:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
-   State;
-udp_ioctl(#fsm{sock = Sock, active = N} = State) ->
-   ok = inet:setopts(Sock, [{active, N}]),
-   State.
-
-
-%%
-%%
-udp_listen(Uri, #fsm{so = SOpt0}) ->
-   Port = uri:port(Uri),
-   SOpt = opts:filter(?SO_UDP_ALLOWED, SOpt0),
-   gen_udp:open(Port, SOpt).
+%% socket up/down link i/o
+stream_flow_ctrl(_Pipe, #state{flowctl = true, socket = Sock} = State) ->
+   % ?DEBUG("[tcp] flow control = ~p", [true]),
+   %% we need to ignore any error for i/o setup, otherwise
+   %% it will crash the process while data reside in mailbox
+   knet_gen_udp:setopts(Sock, [{active, ?CONFIG_IO_CREDIT}]),
+   {ok, State};
+stream_flow_ctrl(Pipe, #state{flowctl = once} = State) ->
+   % ?DEBUG("[tcp] flow control = ~p", [once]),
+   %% do nothing, client must send flow control message 
+   pipe:b(Pipe, {udp, self(), passive}),
+   {ok, State};
+stream_flow_ctrl(Pipe, #state{flowctl = _N} = State) ->
+   % ?DEBUG("[tcp] flow control = ~p", [_N]),
+   %% do nothing, client must send flow control message
+   pipe:b(Pipe, {udp, self(), passive}),
+   {ok, State}.
 
 %%
 %%
-udp_connect(_Uri, #fsm{so = SOpt0}) ->
-   {_Host, Port} = opts:val(addr, {any, 0}, SOpt0),
-   SOpt = opts:filter(?SO_UDP_ALLOWED, SOpt0),
-   gen_udp:open(Port, SOpt).
+pipe_to_side_a(Pipe, Event, #state{socket = Sock} = State) ->
+   [either ||
+      knet_gen_udp:peername(Sock),
+      cats:unit(pipe:a(Pipe, {udp, self(), {Event, _}})),
+      cats:unit(State)
+   ].
+
+pipe_to_side_b({pipe, _, undefined} = Pipe, Event, State) ->
+   % this is required when pipe has single side
+   pipe_to_side_a(Pipe, Event, State);
+pipe_to_side_b(Pipe, Event, #state{socket = Sock} = State) ->
+   [either ||
+      knet_gen_udp:peername(Sock),
+      cats:unit(pipe:b(Pipe, {udp, self(), {Event, _}})),
+      cats:unit(State)
+   ].
 
 
 %%
-%% create app acceptor pool
-create_acceptor_pool(Uri, #fsm{so = SOpt0, backlog = Backlog}) ->
-   Sup  = opts:val(acceptor,  SOpt0), 
-   SOpt = [{listen, self()} | SOpt0],
-   lists:map(
+%%
+error_to_side_a(Pipe, normal, #state{} = State) ->
+   pipe:a(Pipe, {udp, self(), eof}),
+   {ok, State};
+error_to_side_a(Pipe, Reason, #state{} = State) ->
+   pipe:a(Pipe, {udp, self(), {error, Reason}}),
+   {ok, State}.
+
+error_to_side_b({pipe, _, undefined} = Pipe, Reason, State) ->
+   % this is required when pipe has single side
+   error_to_side_a(Pipe, Reason, State);
+error_to_side_b(Pipe, normal, #state{} = State) ->
+   pipe:b(Pipe, {udp, self(), eof}),
+   {ok, State};
+error_to_side_b(Pipe, Reason, #state{} = State) ->
+   pipe:b(Pipe, {udp, self(), {error, Reason}}),
+   {ok, State}.
+
+%%
+stream_recv(Pipe, {_, _, Data} = Pckt, #state{socket = Sock} = State) ->
+   [either ||
+      knet_gen:trace(packet, byte_size(Data), Sock),
+      knet_gen_udp:recv(Sock, Pckt),
+      stream_uplink(Pipe, _, _),
+      cats:unit(State#state{socket = _})
+   ].
+
+stream_uplink(Pipe, Pckt, Socket) ->
+   lists:foreach(fun(X) -> pipe:b(Pipe, {udp, self(), X}) end, Pckt),
+   {ok, Socket}.
+
+%%
+stream_send(_Pipe, Pckt, #state{socket = Sock} = State) ->
+   [either ||
+      knet_gen_udp:send(Sock, Pckt),
+      cats:unit(State#state{socket = _})
+   ].
+
+%%
+spawn_acceptor_pool(Uri, #state{so = #{acceptor := Sup} = SOpt} = State) ->
+   Opts = SOpt#{listen => self()},
+   lists:foreach(
       fun(_) ->
-         {ok, _} = supervisor:start_child(Sup, [Uri, SOpt])
+         {ok, _} = supervisor:start_child(Sup, [Uri, Opts])
       end,
-      lists:seq(1, Backlog)
-   ).
-
+      lists:seq(1, lens:get(lens:at(backlog, 5), SOpt))
+   ),
+   {ok, State}.
 
 

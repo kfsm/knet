@@ -21,33 +21,32 @@
 -behaviour(pipe).
 
 -export([
-	start_link/2,
-	init/1,
-	free/2,
-	ioctl/2,
-	handle/3
+   start_link/2,
+   init/1,
+   free/2,
+   handle/3
 ]).
 
 %%
 %%
 start_link(Uri, Opts) ->
-	pipe:start_link(?MODULE, [Uri, Opts], []).
+   pipe:start_link(?MODULE, [Uri, Opts], []).
 
 init([Uri, Opts]) ->
-	{ok, handle, knet:bind(Uri, Opts)}.
+   {ok, handle, knet:bind(Uri, Opts)}.
 
 free(_, Sock) ->
-	knet:close(Sock).
-
-%%
-ioctl(_, _) ->
-	throw(not_implemented).
+   knet:close(Sock).
 
 %%
 %%
+handle({udp, _, passive}, Pipe, Sock) ->
+   pipe:a(Pipe, {active, 1024}),
+   {next_state, handle, Sock};
+
 handle({udp, _, Msg}, Pipe, Sock) ->
-	pipe:a(Pipe, Msg),
-	{next_state, handle, Sock}.
+   pipe:a(Pipe, {packet, Msg}),
+   {next_state, handle, Sock}.
 
 
 

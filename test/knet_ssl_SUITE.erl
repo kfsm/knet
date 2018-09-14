@@ -290,11 +290,11 @@ ssl_accept_failure(_) ->
 %%
 %%
 ssl_to_knet_server(_) ->
-   {ok, LSock} = knet_echo_sock:init("ssl://*:8443", #{
+   {ok, LSock} = knet_echo_sock:init("ssl://*:8440", #{
       certfile => filename:join([code:priv_dir(knet), "server.crt"]),
       keyfile => filename:join([code:priv_dir(knet), "server.key"])
    }),
-   {ok,  Sock} = ssl:connect("127.0.0.1", 8443, [binary, {active, false}, {server_name_indication, disable}]),
+   {ok,  Sock} = ssl:connect("127.0.0.1", 8440, [binary, {active, false}, {server_name_indication, disable}]),
    {ok, <<"hello">>} = ssl:recv(Sock, 0),
    ok = ssl:send(Sock, <<"-123456">>),
    {ok, <<"+123456">>} = ssl:recv(Sock, 0),
@@ -304,11 +304,11 @@ ssl_to_knet_server(_) ->
 %%
 %%
 knet_client_to_knet_server(_) ->
-   {ok, LSock} = knet_echo_sock:init("ssl://*:8443", #{
+   {ok, LSock} = knet_echo_sock:init("ssl://*:8441", #{
       certfile => filename:join([code:priv_dir(knet), "server.crt"]),
       keyfile => filename:join([code:priv_dir(knet), "server.key"])
    }),
-   {ok, Sock}  = knet:connect("ssl://127.0.0.1:8443"),
+   {ok, Sock}  = knet:connect("ssl://127.0.0.1:8441"),
    {ioctl, b, Sock} = knet:recv(Sock),
    {ssl, Sock, {established, _}} = knet:recv(Sock),
    {ssl, Sock, <<"hello">>} = knet:recv(Sock),
