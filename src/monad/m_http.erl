@@ -164,7 +164,7 @@ identity() ->
 -spec once(m(_)) -> _.
 
 once(Expr) ->
-   once(Expr, []).
+   once(Expr, #{}).
 
 once(Expr, SOpt) ->
    run(1, Expr, #{so => SOpt}).
@@ -174,7 +174,7 @@ once(Expr, SOpt) ->
 -spec eval(_, m(_)) -> _.
 
 eval(N, Expr) ->
-   eval(N, Expr, []).
+   eval(N, Expr, #{}).
 
 eval(N, Expr, SOpt) ->
    run(N, Expr, #{so => SOpt}).
@@ -210,7 +210,7 @@ new(Uri) ->
       Request = #'GET'{
          uri     = uri:new(Uri),
          headers = [
-            {<<"Connection">>, <<"close">>},
+            {<<"Connection">>, <<"keep-alive">>},
             {<<"Accept">>,     <<"*/*">>}
          ]
       },
@@ -377,7 +377,7 @@ http_io(Timeout, State0) ->
 %%
 %% create a new socket or re-use existed one
 socket(State) ->
-   SOpt      = lens:get(lens:at(so, []), State),
+   SOpt      = lens:get(lens:at(so, #{}), State),
    Uri       = lens:get(req_uri(), State),
    Authority = uri:authority(Uri),
    case State of

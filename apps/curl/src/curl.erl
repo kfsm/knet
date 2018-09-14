@@ -47,7 +47,6 @@ m(Url) ->
 m(Mthd, Url) ->
    [m_http ||
       cats:new(Url),
-      cats:so([{tracelog, self()}]),
       cats:method(Mthd),
       cats:header("Connection", "keep-alive"),
       cats:request()
