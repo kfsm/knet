@@ -121,7 +121,22 @@ ioctl(socket, #state{socket = Sock}) ->
 %%
 'IDLE'({accept, _Uri}, _Pipe, #state{so = #{listen := LSock}} = State) ->
    {ok, Sock} = pipe:call(LSock, accept, infinity),
-   {next_state, 'ESTABLISHED', State#state{socket = Sock}}.
+   {next_state, 'ESTABLISHED', State#state{socket = Sock}};
+
+'IDLE'({sidedown, a, _}, _, State) ->
+   {stop, normal, State};
+   
+'IDLE'(tth, _, State) ->
+   {next_state, 'IDLE', State};
+
+'IDLE'(ttl, _, State) ->
+   {next_state, 'IDLE', State};
+
+'IDLE'({ttp, _}, _, State) ->
+   {next_state, 'IDLE', State};
+
+'IDLE'({packet, _}, _, State) ->
+   {reply, {error, ecomm}, 'IDLE', State}.
 
 %%%------------------------------------------------------------------
 %%%
