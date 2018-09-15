@@ -21,30 +21,26 @@
 %% common test
 -export([
    all/0
-  ,groups/0
-  ,init_per_suite/1
-  ,end_per_suite/1
-  ,init_per_group/2
-  ,end_per_group/2
-  ,init_per_testcase/2
-  ,end_per_testcase/2
+,  groups/0
+,  init_per_suite/1
+,  end_per_suite/1
 ]).
 -export([
-   socket/1
-  ,connect/1
-  ,connect_econnrefused/1
-  ,send_recv/1
-  ,send_recv_timeout/1
-  ,listen/1
-  ,listen_eaddrinuse/1
-  ,accept/1
-  ,accept_enoent/1
-  ,knet_server/1
-  ,knet_client/1
+   socket_with_pipe_to_owner/1
+,  socket_without_pipe_to_owner/1
+,  tcp_connect/1
+,  tcp_connect_failure/1
+,  tcp_send_recv/1
+,  tcp_send_recv_with_close/1
+,  tcp_send_recv_with_timeout/1
+,  tcp_listen/1
+,  tcp_listen_failure/1
+,  tcp_accept/1
+,  tcp_accept_failure/1
+,  gen_tcp_client_to_knet_server/1
+,  knet_client_to_knet_server/1
 ]).
 
--define(HOST, "127.0.0.1").
--define(PORT,        8888).
 
 %%%----------------------------------------------------------------------------   
 %%%
@@ -59,11 +55,14 @@ all() ->
 
 groups() ->
    [
-      {tcp, [], [
-         socket, connect, connect_econnrefused, send_recv, send_recv_timeout,
-         listen, listen_eaddrinuse, accept, accept_enoent,
-         knet_server, knet_client
-      ]}
+      {tcp, [], 
+         [Test || {Test, NAry} <- ?MODULE:module_info(exports), 
+            Test =/= module_info,
+            Test =/= init_per_suite,
+            Test =/= end_per_suite,
+            NAry =:= 1
+         ]
+      }
    ].
 
 %%%----------------------------------------------------------------------------   
@@ -80,24 +79,6 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
    application:stop(knet).
 
-%%
-init_per_group(_, Config) ->
-   Config.
-
-%%
-end_per_group(_, _Config) ->
-   ok.
-
-%%
-init_per_testcase(_, Config) ->
-   meck:new(inet, [unstick, passthrough]),
-   meck:new(gen_tcp, [unstick, passthrough]),
-   Config.
-
-end_per_testcase(_, _Config) ->
-   meck:unload(gen_tcp),
-   meck:unload(inet),
-   ok. 
 
 %%%----------------------------------------------------------------------------   
 %%%
@@ -105,212 +86,194 @@ end_per_testcase(_, _Config) ->
 %%%
 %%%----------------------------------------------------------------------------   
 
+-define(URI, "tcp://example.com:4213").
+
 %%
 %%
-socket(_Config) ->
-   {ok, A} = knet:socket("tcp://example.com:80"),
-   {ioctl, b, A} = knet:recv(A),
-   ok = knet:close(A),
-   %% Note: knet:free message acks that sockets starts shutdown but process is still running
-   %%       we need to give a few milliseconds to VM to shutdown the process.
-   %%       This test ensures that socket is get killed eventually
-   timer:sleep(50),
-   false = erlang:is_process_alive(A),
+socket_with_pipe_to_owner(_) ->
+   {ok, Sock} = knet:socket(?URI),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   ok = knet:close(Sock),
 
-   {ok, B} = knet:socket("tcp://example.com:80", [nopipe]),
-   {error, _} = knet:recv(B, 100, [noexit]),
-   ok = knet:close(B),
-   timer:sleep(50),
-   false = erlang:is_process_alive(B),
+   ok = knet_check:is_shutdown(Sock).
 
-   {ok, C} = knet:socket("tcp://*:80"),
-   {ioctl, b, C} = knet:recv(C),
-   ok = knet:close(C),
-   timer:sleep(50),
-   false = erlang:is_process_alive(C).
+%%
+%%
+socket_without_pipe_to_owner(_) ->
+   {ok, Sock} = knet:socket(?URI, #{pipe => false}),
+   {error, _} = knet:recv(Sock, 100, [noexit]),
+   ok = knet:close(Sock),
+
+   ok = knet_check:is_shutdown(Sock).
 
 
 %%
-%%   
-connect(_Config) ->
-   meck_gen_tcp_connect(),
+%%
+tcp_connect(_) ->
+   knet_mock_tcp:init(),
 
-   {ok, Sock} = knet:connect("tcp://example.com:80"),
+   {ok, Sock} = knet:connect(?URI),
    {ioctl, b, Sock} = knet:recv(Sock),
    {tcp, Sock, {established, Uri}} = knet:recv(Sock),
-   {<<"example.com">>, 80} = uri:authority(Uri),
+   {<<"example.com">>, 4213} = uri:authority(Uri),
+   ok = knet:close(Sock),
+   ok = knet_check:is_shutdown(Sock),
 
-   true = meck:validate(gen_tcp),
-   true = meck:validate(inet).
+   knet_mock_tcp:free().
+
 
 %%
 %%
-connect_econnrefused(_Config) ->
-   meck:expect(gen_tcp, connect, 
-      fun(_Host, _Port, _Opts, _Timeout) -> {error, econnrefused} end
-   ),
+tcp_connect_failure(_) ->
+   knet_mock_tcp:init(),
+   knet_mock_tcp:with_setup_error(econnrefused),
 
-   {ok, Sock} = knet:connect("tcp://example.com:80", []),
+   {ok, Sock} = knet:connect(?URI),
    {ioctl, b, Sock} = knet:recv(Sock),
    {tcp, Sock, {error, econnrefused}} = knet:recv(Sock),
+   ok = knet:close(Sock),
+   ok = knet_check:is_shutdown(Sock),
 
-   true = meck:validate(gen_tcp).
+   knet_mock_tcp:free().
 
 %%
 %%
-send_recv(_Config) ->
-   meck_gen_tcp_connect(),
-   meck:expect(gen_tcp, send,
-      fun(_Sock, Packet) -> 
-         self() ! {tcp, undefined, Packet},
-         self() ! {tcp_closed, undefined},
-         ok 
-      end
-   ),
+tcp_send_recv(_) ->
+   knet_mock_tcp:init(),
+   knet_mock_tcp:with_packet_loopback(10),
 
-   {ok, Sock} = knet:connect("tcp://example.com:80"),
+   {ok, Sock} = knet:connect(?URI),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   {tcp, Sock, {established, _}} = knet:recv(Sock),
+   ok = knet:send(Sock, <<"abcdefgh">>),
+   {tcp, Sock, <<"abcdefgh">>} = knet:recv(Sock),
+   ok = knet:close(Sock),
+   ok = knet_check:is_shutdown(Sock),
+
+   knet_mock_tcp:free().
+
+%%
+%%
+tcp_send_recv_with_close(_) ->
+   knet_mock_tcp:init(),
+   knet_mock_tcp:with_packet_echo(),
+
+   {ok, Sock} = knet:connect(?URI),
    {ioctl, b, Sock} = knet:recv(Sock),
    {tcp, Sock, {established, _}} = knet:recv(Sock),
    ok = knet:send(Sock, <<"abcdefgh">>),
    {tcp, Sock, <<"abcdefgh">>} = knet:recv(Sock),
    {tcp, Sock, eof} = knet:recv(Sock),
    ok = knet:close(Sock),
+   ok = knet_check:is_shutdown(Sock),
 
-   true = meck:validate(gen_tcp),
-   true = meck:validate(inet).
-
+   knet_mock_tcp:free().
 
 %%
 %%
-send_recv_timeout(_Config) ->
-   meck_gen_tcp_connect(),
-   meck:expect(gen_tcp, send,
-      fun(_Sock, Packet) -> 
-         self() ! {tcp, undefined, Packet},
-         ok 
-      end
-   ),
+tcp_send_recv_with_timeout(_) ->
+   knet_mock_tcp:init(),
+   knet_mock_tcp:with_packet_loopback(500),
 
-   {ok, Sock} = knet:connect("tcp://example.com:80", [
-      {timeout, [{ttp, 200}, {tth, 100}]}
-   ]),
+   {ok, Sock} = knet:connect(?URI, #{
+      timeout => #{ttp => 200, tth => 100}
+   }),
    {ioctl, b, Sock} = knet:recv(Sock),
    {tcp, Sock, {established, _}} = knet:recv(Sock),
    ok = knet:send(Sock, <<"abcdefgh">>),
-   {tcp, Sock, <<"abcdefgh">>} = knet:recv(Sock),
-   timer:sleep(500),
-   {error, ecomm} = knet:send(Sock, <<"abcdefgh">>),
    {tcp, Sock, {error, timeout}} = knet:recv(Sock),
    ok = knet:close(Sock),
+   ok = knet_check:is_shutdown(Sock),
 
-   true = meck:validate(gen_tcp),
-   true = meck:validate(inet).
+   knet_mock_tcp:free().
 
 
 %%
 %%
-listen(_Config) ->
-   meck_gen_tcp_listen(),
+tcp_listen(_) ->
+   knet_mock_tcp:init(),
 
-   {ok, Sock} = knet:listen("tcp://*:8080", [
-      {backlog, 0}, 
-      {acceptor, fun(_) -> ok end}
-   ]),
+   {ok, Sock} = knet:listen("tcp://*:8080", #{
+      backlog  => 0,
+      acceptor => fun(_) -> ok end
+   }),
    {ioctl, b, Sock} = knet:recv(Sock),
    {tcp, Sock, {listen, Uri}} = knet:recv(Sock),
    {<<"*">>, 8080} = uri:authority(Uri),
    ok = knet:close(Sock),
+   ok = knet_check:is_shutdown(Sock),
 
-   true = meck:validate(gen_tcp).
+   knet_mock_tcp:free().
+
 
 %%
 %%
-listen_eaddrinuse(_Config) ->
-   meck:expect(gen_tcp, listen,
-      fun(Port, _) -> {error, eaddrinuse} end
-   ),
+tcp_listen_failure(_) ->
+   knet_mock_tcp:init(),
+   knet_mock_tcp:with_setup_error(eaddrinuse),
 
-   {ok, Sock} = knet:listen("tcp://*:8080", [
-      {backlog, 0}, 
-      {acceptor, fun(_) -> ok end}
-   ]),
+   {ok, Sock} = knet:listen("tcp://*:8080", #{
+      backlog  => 0,
+      acceptor => fun(_) -> ok end
+   }),
    {ioctl, b, Sock} = knet:recv(Sock),
    {tcp, Sock, {error, eaddrinuse}} = knet:recv(Sock),
    ok = knet:close(Sock),
+   ok = knet_check:is_shutdown(Sock),
 
-   true = meck:validate(gen_tcp).
+   knet_mock_tcp:free().
+
 
 %%
 %%
-accept(_Config) ->
-   meck_gen_tcp_listen(),
-   meck:expect(gen_tcp, accept, 
-      fun(#{peer := {_, Port}}) ->
-         meck:expect(gen_tcp, accept, fun(_) -> timer:sleep(100000) end),
-         {ok, #{peer => {{127,0,0,1}, 65536}, sock => {{127,0,0,1}, Port}}}
-      end
-   ),
+tcp_accept(_) ->
+   knet_mock_tcp:init(),
 
    Test = self(),
-   {ok, Sock} = knet:listen("tcp://*:8080", [
-      {backlog, 1},
-      {acceptor, 
-         fun(Tcp) -> 
-            Test ! Tcp, 
-            stop 
-         end
-      }
-   ]),
+   {ok, Sock} = knet:listen("tcp://*:8080", #{
+      backlog  => 1,
+      acceptor => fun(Tcp) -> Test ! Tcp end
+   }),
    {ioctl, b, Sock} = knet:recv(Sock),
    {tcp, Sock, {listen, _}} = knet:recv(Sock),
-   {tcp, _,  {established, Uri}} = receive X -> X end,
+   {tcp, _,  {established, Uri}} = knet_check:recv_any(),
    {<<"127.0.0.1">>, 65536} = uri:authority(Uri),
    %% Use timeout to allow accept spawn before LSocket is closed 
    %% This is needed to reduce number of crashes at test logs
    timer:sleep(100),
    ok = knet:close(Sock),
+   ok = knet_check:is_shutdown(Sock),
 
-   true = meck:validate(gen_tcp),
-   true = meck:validate(inet).
+   knet_mock_tcp:free().
 
 %%
 %%
-accept_enoent(_Config) ->
-   meck_gen_tcp_listen(),
-
-   meck:expect(gen_tcp, accept, 
-      fun(_) ->  
-         meck:expect(gen_tcp, accept, fun(_) -> timer:sleep(100000) end),
-         {error, enoent}
-      end
-   ),
+tcp_accept_failure(_) ->
+   knet_mock_tcp:init(),
+   knet_mock_tcp:with_accept_error(enoent),
 
    Test = self(),
-   {ok, Sock} = knet:listen("tcp://*:8080", [
-      {backlog, 1},
-      {acceptor, 
-         fun(Tcp) -> 
-            Test ! Tcp, 
-            stop 
-         end
-      }
-   ]),
+   {ok, Sock} = knet:listen("tcp://*:8080", #{
+      backlog  => 1,
+      acceptor => fun(Tcp) -> Test ! Tcp end
+   }),
    {ioctl, b, Sock} = knet:recv(Sock),
    {tcp, Sock, {listen, _}} = knet:recv(Sock),
-   {tcp, _,  {error, enoent}} = receive X -> X end,
+   {tcp, _,  {error, enoent}} = knet_check:recv_any(),
    %% Use timeout to allow accept spawn before LSocket is closed 
    %% This is needed to reduce number of crashes at test logs
    timer:sleep(100),
    ok = knet:close(Sock),
+   ok = knet_check:is_shutdown(Sock),
 
-   true = meck:validate(gen_tcp),
-   true = meck:validate(inet).
+   knet_mock_tcp:free().
+
 
 %%
 %%
-knet_server(_Config) ->
-   {ok, LSock} = knet:listen("tcp://*:8888", [{backlog, 1}, {acceptor, fun knet_echo/1}]),
-   {ok,  Sock} = gen_tcp:connect("127.0.0.1", 8888, [binary, {active, false}]),
+gen_tcp_client_to_knet_server(_) ->
+   {ok, LSock} = knet_echo_sock:init("tcp://*:8880", #{}),
+   {ok,  Sock} = gen_tcp:connect("127.0.0.1", 8880, [binary, {active, false}]),
    {ok, <<"hello">>} = gen_tcp:recv(Sock, 0),
    ok = gen_tcp:send(Sock, <<"-123456">>),
    {ok, <<"+123456">>} = gen_tcp:recv(Sock, 0),
@@ -319,9 +282,9 @@ knet_server(_Config) ->
 
 %%
 %%
-knet_client(_Config) ->
-   {ok, LSock} = knet:listen("tcp://*:8888", [{backlog, 1}, {acceptor, fun knet_echo/1}]),
-   {ok, Sock}  = knet:connect("tcp://127.0.0.1:8888"),
+knet_client_to_knet_server(_) ->
+   {ok, LSock} = knet_echo_sock:init("tcp://*:8881", #{}),
+   {ok, Sock}  = knet:connect("tcp://127.0.0.1:8881"),
    {ioctl, b, Sock} = knet:recv(Sock),
    {tcp, Sock, {established, _}} = knet:recv(Sock),
    {tcp, Sock, <<"hello">>} = knet:recv(Sock),
@@ -329,59 +292,3 @@ knet_client(_Config) ->
    {tcp, Sock, <<"+123456">>} = knet:recv(Sock),
    knet:close(Sock),
    knet:close(LSock).
-
-
-%%%----------------------------------------------------------------------------   
-%%%
-%%% utility
-%%%
-%%%----------------------------------------------------------------------------   
-
-%%
-%%
-meck_gen_tcp_connect() ->
-   meck:expect(gen_tcp, connect, 
-      fun(Host, Port, _Opts, _Timeout) -> 
-         {ok, #{peer => {Host, Port}, sock => {{127,0,0,1}, 65536}}}
-      end
-   ),
-   meck:expect(gen_tcp, close,  fun(_) -> ok end),
-   meck:expect(inet, setopts,  fun(_, _) -> ok end),
-   meck:expect(inet, peername, fun(#{peer := Peer}) -> {ok, Peer} end),
-   meck:expect(inet, sockname, fun(#{sock := Sock}) -> {ok, Sock} end).
-
-%%
-%%
-meck_gen_tcp_listen() ->
-   meck:expect(gen_tcp, listen,
-      fun(Port, _) -> {ok, #{peer => {<<"*">>, Port}}} end
-   ),
-   meck:expect(gen_tcp, close,  fun(_) -> ok end),
-   meck:expect(inet, setopts,  fun(_, _) -> ok end),
-   meck:expect(inet, peername, fun(#{peer := Peer}) -> {ok, Peer} end),
-   meck:expect(inet, sockname, fun(#{sock := Sock}) -> {ok, Sock} end).
-
-%%
-%%
-knet_echo({tcp, _Sock, {established, _Uri}}) ->
-   % ct:pal("[echo] ~p established ~s", [_Sock, uri:s(_Uri)]),
-   {a, {packet, <<"hello">>}};
-
-knet_echo({tcp, _Sock, eof}) ->
-   % ct:pal("[echo] ~p eof", [_Sock]),
-   stop;
-
-knet_echo({tcp, _Sock, {error, _Reason}}) ->
-   % ct:pal("[echo] ~p error", [_Reason]),
-   stop;
-
-knet_echo({tcp, _Sock,  <<$-, Pckt/binary>>}) ->
-   % ct:pal("[echo] ~p recv ~p", [_Sock, Pckt]),
-   {a, {packet, <<$+, Pckt/binary>>}};
-
-knet_echo({tcp, _Sock, _}) ->
-   ok;
-
-knet_echo({sidedown, _Side, _Reason}) ->
-   % ct:pal("[echo] ~p sidedown ~p", [_Side, _Reason]),
-   stop.

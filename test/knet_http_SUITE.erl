@@ -20,18 +20,20 @@
 
 %% common test
 -export([
-   all/0,
-   groups/0,
-   init_per_suite/1,
-   end_per_suite/1,
-   init_per_group/2,
-   end_per_group/2,
-   init_per_testcase/2,
-   end_per_testcase/2
+   all/0
+,  groups/0
+,  init_per_suite/1
+,  end_per_suite/1
 ]).
 -export([
-   connect/1,
-   send_recv/1
+   http_connect/1
+,  http_connect_failure/1
+,  http_request_response/1
+,  http_request_response_chunked/1
+,  http_listen/1
+,  http_listen_failure/1
+,  http_accept/1
+,  http_accept_failure/1
 ]).
 
 %%%----------------------------------------------------------------------------   
@@ -42,14 +44,19 @@
 
 all() ->
    [
-      {group, client}
+      {group, http}
    ].
 
 groups() ->
    [
-      {client, [], [
-         connect, send_recv
-      ]}
+      {http, [], 
+         [Test || {Test, NAry} <- ?MODULE:module_info(exports), 
+            Test =/= module_info,
+            Test =/= init_per_suite,
+            Test =/= end_per_suite,
+            NAry =:= 1
+         ]
+      }
    ].
 
 %%%----------------------------------------------------------------------------   
@@ -66,24 +73,6 @@ init_per_suite(Config) ->
 end_per_suite(_Config) ->
    application:stop(knet).
 
-%%
-init_per_group(_, Config) ->
-   Config.
-
-%%
-end_per_group(_, _Config) ->
-   ok.
-
-%%
-init_per_testcase(_, Config) ->
-   meck:new(inet, [unstick, passthrough]),
-   meck:new(gen_tcp, [unstick, passthrough]),
-   Config.
-
-end_per_testcase(_, _Config) ->
-   meck:unload(gen_tcp),
-   meck:unload(inet),
-   ok. 
 
 %%%----------------------------------------------------------------------------   
 %%%
@@ -91,46 +80,172 @@ end_per_testcase(_, _Config) ->
 %%%
 %%%----------------------------------------------------------------------------   
 
-connect(_Config) ->
-   meck_gen_http_echo(),
+-define(URI, <<"http://example.com:4213">>).
+-define(PEER, <<"tcp://example.com:4213">>).
 
-   {ok, Sock} = knet:connect("http://example.com:80"),
+%%
+%%
+http_connect(_) ->
+   knet_mock_tcp:init(),
+   knet_mock_tcp:with_packet(fun http_ok/1),
+
+   {ok, Sock} = knet:connect(?URI),
    {ioctl, b, Sock} = knet:recv(Sock),
    {http, Sock, 
       {200, <<"OK">>, [
-         {<<"X-Knet-Peer">>,<<"tcp://example.com:80">>},
-         {<<"Content-Length">>, <<"5">>},
+         {<<"X-Knet-Peer">>, ?PEER},
+         {<<"Content-Length">>, <<"0">>},
          {<<"Connection">>, <<"close">>}
       ]}
    } = knet:recv(Sock),
-   {http, Sock, <<"hello">>} = knet:recv(Sock),
    {http, Sock, eof} = knet:recv(Sock),
+   ok = knet:close(Sock),
+   ok = knet_check:is_shutdown(Sock),
 
-   true = meck:validate(gen_tcp),
-   true = meck:validate(inet).
+   knet_mock_tcp:free().
 
+%%
+%%
+http_connect_failure(_) ->
+   knet_mock_tcp:init(),
+   knet_mock_tcp:with_setup_error(econnrefused),
 
-
-send_recv(_Config) ->
-   meck_gen_http_echo(),
-
-   {ok, Sock} = knet:socket("http://example.com:80"),
+   {ok, Sock} = knet:connect(?URI),
    {ioctl, b, Sock} = knet:recv(Sock),
+   {http, Sock, 
+      {503, <<"Service Unavailable">>, []}
+   } = knet:recv(Sock),
+   {http, Sock, eof} = knet:recv(Sock),
+   ok = knet:close(Sock),
+   ok = knet_check:is_shutdown(Sock),
 
-   ok = knet:send(Sock, {'GET', uri:new("http://example.com:80/"), []}),
-   ok = knet:send(Sock, eof),
+   knet_mock_tcp:free().
+
+%%
+%%
+http_request_response(_) ->
+   knet_mock_tcp:init(),
+   knet_mock_tcp:with_packet(fun http_hw/1),
+
+   {ok, Sock} = knet:connect(?URI),
+   {ioctl, b, Sock} = knet:recv(Sock),
    {http, Sock, 
       {200, <<"OK">>, [
-         {<<"X-Knet-Peer">>,<<"tcp://example.com:80">>},
-         {<<"Content-Length">>, <<"5">>},
+         {<<"X-Knet-Peer">>, ?PEER},
+         {<<"Content-Length">>, <<"12">>},
          {<<"Connection">>, <<"close">>}
       ]}
    } = knet:recv(Sock),
-   {http, Sock, <<"hello">>} = knet:recv(Sock),
+   {http, Sock, <<"Hello World!">>} = knet:recv(Sock),
    {http, Sock, eof} = knet:recv(Sock),
+   ok = knet:close(Sock),
+   ok = knet_check:is_shutdown(Sock),
 
-   true = meck:validate(gen_tcp),
-   true = meck:validate(inet).
+   knet_mock_tcp:free().
+
+%%
+%%
+http_request_response_chunked(_) ->
+   knet_mock_tcp:init(),
+   knet_mock_tcp:with_packet(fun http_hw_chunked/1),
+
+   {ok, Sock} = knet:connect(?URI),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   {http, Sock, 
+      {200, <<"OK">>, [
+         {<<"X-Knet-Peer">>, ?PEER},
+         {<<"Transfer-Encoding">>,<<"chunked">>},
+         {<<"Connection">>, <<"close">>}
+      ]}
+   } = knet:recv(Sock),
+   {http, Sock, <<"Hello World!">>} = knet:recv(Sock),
+   {http, Sock, eof} = knet:recv(Sock),
+   ok = knet:close(Sock),
+   ok = knet_check:is_shutdown(Sock),
+
+   knet_mock_tcp:free().
+
+%%
+%%
+http_listen(_) ->
+   knet_mock_tcp:init(),
+
+   {ok, Sock} = knet:listen("http://*:8080", #{
+      backlog  => 0,
+      acceptor => fun(_) -> ok end
+   }),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   {http, Sock, {listen, Uri}} = knet:recv(Sock),
+   {<<"*">>, 8080} = uri:authority(Uri),
+   ok = knet:close(Sock),
+   ok = knet_check:is_shutdown(Sock),
+
+   knet_mock_tcp:free().
+
+%%
+%%
+http_listen_failure(_) ->
+   knet_mock_tcp:init(),
+   knet_mock_tcp:with_setup_error(eaddrinuse),
+
+   {ok, Sock} = knet:listen("http://*:8080", #{
+      backlog  => 0,
+      acceptor => fun(_) -> ok end
+   }),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   {http, Sock, {error, eaddrinuse}} = knet:recv(Sock),
+   ok = knet_check:is_shutdown(Sock),
+
+   knet_mock_tcp:free().
+
+%%
+%%
+http_accept(_) ->
+   knet_mock_tcp:init(),
+   knet_mock_tcp:with_accept_packet([<<"GET /a HTTP/1.1\r\nHost: localhost:80\r\n\r\n">>]),
+
+   Test = self(),
+   {ok, Sock} = knet:listen("http://*:8080", #{
+      backlog  => 1,
+      acceptor => fun(Http) -> Test ! Http end
+   }),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   {http, Sock, {listen, _}} = knet:recv(Sock),
+   {http, _, {'GET', Uri, Head}} = knet_check:recv_any(),
+   {<<"localhost">>, 80} = uri:authority(Uri),
+   <<"/a">> = uri:path(Uri),
+   <<"localhost:80">> = lens:get(lens:pair(<<"Host">>), Head),
+   %% Use timeout to allow accept spawn before LSocket is closed 
+   %% This is needed to reduce number of crashes at test logs
+   timer:sleep(100),
+   ok = knet:close(Sock),
+   ok = knet_check:is_shutdown(Sock),
+
+   knet_mock_tcp:free().
+
+%%
+%%
+http_accept_failure(_) ->
+   knet_mock_tcp:init(),
+   knet_mock_tcp:with_accept_error(enoent),
+
+   Test = self(),
+   {ok, Sock} = knet:listen("http://*:8080", #{
+      backlog  => 1,
+      acceptor => fun(Http) -> Test ! Http end
+   }),
+   {ioctl, b, Sock} = knet:recv(Sock),
+   {http, Sock, {listen, _}} = knet:recv(Sock),
+   {http, _,  {error, enoent}} = knet_check:recv_any(),
+   %% Use timeout to allow accept spawn before LSocket is closed 
+   %% This is needed to reduce number of crashes at test logs
+   timer:sleep(100),
+   ok = knet:close(Sock),
+   ok = knet_check:is_shutdown(Sock),
+
+   knet_mock_tcp:free().
+
+
 
 %%%----------------------------------------------------------------------------   
 %%%
@@ -139,22 +254,31 @@ send_recv(_Config) ->
 %%%----------------------------------------------------------------------------   
 
 %%
-%%
-meck_gen_http_echo() ->
-   meck:expect(gen_tcp, connect, 
-      fun(Host, Port, _Opts, _Timeout) -> 
-         {ok, #{peer => {Host, Port}, sock => {{127,0,0,1}, 65536}}}
-      end
-   ),
-   meck:expect(gen_tcp, close,  fun(_) -> ok end),
-   meck:expect(inet, setopts,  fun(_, _) -> ok end),
-   meck:expect(inet, peername, fun(#{peer := Peer}) -> {ok, Peer} end),
-   meck:expect(inet, sockname, fun(#{sock := Sock}) -> {ok, Sock} end),
+http_ok(<<"GET", _/binary>>) ->
+   [
+      <<"HTTP/1.1 200 OK\r\n">>, 
+      <<"Content-Length: 0\r\nConnection: close\r\n\r\n">>
+   ];
+http_ok(_) ->
+   undefined.
 
-   meck:expect(gen_tcp, send,
-      fun(_Sock, _Packet) -> 
-         self() ! {tcp, undefined, <<"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello">>},
-         ok 
-      end
-   ).
+%%
+http_hw(<<"GET", _/binary>>) ->
+   [
+      <<"HTTP/1.1 200 OK\r\n">>, 
+      <<"Content-Length: 12\r\nConnection: close\r\n\r\n">>, 
+      <<"Hello World!">>
+   ];
+http_hw(_) ->
+   undefined.
+
+%%
+http_hw_chunked(<<"GET", _/binary>>) ->
+   [
+      <<"HTTP/1.1 200 OK\r\n">>, 
+      <<"Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n">>, 
+      <<"c\r\nHello World!\r\n0\r\n\r\n">>
+   ];
+http_hw_chunked(_) ->
+   undefined.
 

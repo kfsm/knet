@@ -21,14 +21,14 @@
 %% new socket
 -spec socket([_]) -> datum:either( #socket{} ).
 
-socket(SOpt) ->
+socket(#{tracelog := Tracelog} = SOpt) ->
    {ok,
       #socket{
          family   = ?MODULE,
          in       = htstream:new(),
          eg       = htstream:new(),
          so       = SOpt,
-         tracelog = opts:val(tracelog, undefined, SOpt)
+         tracelog = Tracelog
       }
    }.
 
@@ -86,7 +86,7 @@ encode_uri(Uri) ->
    end.
 
 encode_head(Uri, Head, SOpt) ->
-   HeadA = lens:get(lens:pair(headers, []), SOpt),
+   HeadA = lens:get(lens:at(headers, []), SOpt),
    {Host, Port} = uri:authority(Uri),
    HeadB = [{<<"Host">>, <<Host/binary, $:, (scalar:s(Port))/binary>>}],
    Head ++ HeadB ++ HeadA.

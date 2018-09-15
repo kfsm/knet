@@ -8,8 +8,12 @@
 ## @doc
 ##   This makefile is the wrapper of rebar to build and ship erlang software
 ##
-## @version 1.0.1
+## @version 1.0.6
 .PHONY: all compile test unit clean distclean run console mock-up mock-rm benchmark release dist
+
+APP := $(strip $(APP))
+ORG := $(strip $(ORG))
+URI := $(strip $(URI))
 
 ##
 ## config
@@ -29,7 +33,7 @@ IID     = ${URI}${ORG}/${APP}
 ## required tools
 ##  - rebar version (no spaces at end)
 ##  - path to basho benchmark 
-REBAR  ?= 3.3.2
+REBAR  ?= 3.5.0
 BB      = ../basho_bench
 
 
@@ -40,6 +44,7 @@ EFLAGS = \
 	-name ${APP}@${ADDR} \
 	-setcookie ${COOKIE} \
 	-pa ${ROOT}/_build/default/lib/*/ebin \
+	-pa ${ROOT}/_build/default/lib/*/priv \
 	-pa ${ROOT}/rel \
 	-kernel inet_dist_listen_min 32100 \
 	-kernel inet_dist_listen_max 32199 \
@@ -53,11 +58,14 @@ BOOT_CT = \
    -export([run/1]). \
    run(Spec) -> \
       {ok, Test} = file:consult(Spec), \
-      Error = case lists:keyfind(node, 1, Test) of \
-         false -> element(2, ct:run_test([{spec, Spec}])); \
-         true  -> ct_master:run(Spec) \
-      end, \
-      erlang:halt(Error).
+      case lists:keymember(node, 1, Test) of \
+         false -> \
+            erlang:halt(element(2, ct:run_test([{spec, Spec}]))); \
+         true  -> \
+            ct_master:run(Spec), \
+            erlang:halt(0) \
+      end.
+
 
 ## 
 BUILDER = FROM ${DOCKER}\nARG VERSION=\nRUN mkdir ${APP}\nCOPY . ${APP}/\nRUN cd ${APP} && make VSN=\x24{VERSION} && make release VSN=\x24{VERSION}\n
@@ -116,8 +124,9 @@ clean: testclean dockerclean
 	@rm -f  *.tar.gz
 	@rm -f  *.bundle
 
-distclean: clean mock-rm node-rm
-	-@./rebar3 unlock
+distclean: clean
+	-@make mock-rm
+	-@make dist-rm
 	-@rm -Rf _build
 	-@rm rebar3
 
@@ -138,10 +147,10 @@ mock-up: test/mock/docker-compose.yml
 mock-rm: test/mock/docker-compose.yml
 	-@docker-compose -f $< down --rmi all -v --remove-orphans
 
-node-up: docker-compose.yml _build/spawner
+dist-up: docker-compose.yml _build/spawner
 	@docker-compose -f $< up
 
-node-rm: docker-compose.yml
+dist-rm: docker-compose.yml
 	-@rm -f _build/spawner
 	-@docker-compose -f $< down --rmi all -v --remove-orphans	
 

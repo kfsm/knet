@@ -1,6 +1,6 @@
 %% @doc
 %%   
--module(knet_gen_ssl).
+-module(knet_gen_tcp).
 -compile({parse_transform, category}).
 
 -include("knet.hrl").
@@ -8,13 +8,12 @@
 -export([
    socket/1,
    close/1,
-   setopts/2,
+   setopts/2, 
    peername/1,
    sockname/1,
    connect/2,
    listen/2,
-   accept/2,
-   handshake/1,
+   accept/2, 
    send/2,
    recv/1,
    recv/2,
@@ -25,14 +24,14 @@
 %% new socket
 -spec socket([_]) -> {ok, #socket{}} | {error, _}.
 
-socket(SOpt) ->
+socket(#{stream := Stream, tracelog := Tracelog} = SOpt) ->
    {ok,
       #socket{
          family   = ?MODULE,
-         in       = pstream:new(opts:val(stream, raw, SOpt)),
-         eg       = pstream:new(opts:val(stream, raw, SOpt)),
+         in       = pstream:new(Stream),
+         eg       = pstream:new(Stream),
          so       = SOpt,
-         tracelog = opts:val(tracelog, undefined, SOpt)
+         tracelog = Tracelog
       }
    }.
 
@@ -45,7 +44,7 @@ close(#socket{sock = undefined} = Socket) ->
 
 close(#socket{sock = Sock, so = SOpt}) ->
    [either ||
-      ssl:close(Sock),
+      gen_tcp:close(Sock),
       socket(SOpt)
    ].
 
@@ -57,15 +56,14 @@ setopts(#socket{sock = undefined}, _) ->
    {error, enotconn};
 setopts(#socket{sock = Sock} = Socket, Opts) ->
    [either ||
-      ssl:setopts(Sock, Opts),
+      inet:setopts(Sock, Opts),
       cats:unit(Socket)
    ].
 
 %%
 %% socket options
-so_tcp(SOpt) -> opts:filter(?SO_TCP_ALLOWED, SOpt).
-so_ssl(SOpt) -> opts:filter(?SO_SSL_ALLOWED, SOpt).
-so_ttc(SOpt) -> lens:get(lens:c(lens:pair(timeout, []), lens:pair(ttc, ?SO_TIMEOUT)), SOpt).
+so_tcp(SOpt) -> [binary | maps:to_list(maps:with(?SO_TCP_ALLOWED, SOpt))].
+so_ttc(SOpt) -> lens:get(lens:c(lens:at(timeout, #{}), lens:at(ttc, ?SO_TIMEOUT)), SOpt).
 
 %%
 %%
@@ -75,16 +73,11 @@ peername(#socket{sock = undefined}) ->
    {error, enotconn};
 peername(#socket{sock = Sock, peername = undefined}) ->
    [either ||
-      ssl_peername(Sock),
-      cats:unit(uri:authority(_, uri:new(ssl)))
+      inet:peername(Sock),
+      cats:unit(uri:authority(_, uri:new(tcp)))
    ];
 peername(#socket{peername = Peername}) ->
    {ok, Peername}.
-
-ssl_peername({tcp, Sock}) -> 
-   inet:peername(Sock);
-ssl_peername(Sock) -> 
-   ssl:peername(Sock).
 
 %%
 %%
@@ -93,7 +86,7 @@ ssl_peername(Sock) ->
 peername(Uri, #socket{} = Socket) ->
    {ok, [identity ||
       uri:authority(Uri),
-      uri:authority(_, uri:new(ssl)),
+      uri:authority(_, uri:new(tcp)),
       cats:unit(Socket#socket{peername = _})
    ]}.
 
@@ -105,17 +98,11 @@ sockname(#socket{sock = undefined}) ->
    {error, enotconn};
 sockname(#socket{sock = Sock, sockname = undefined}) ->
    [either ||
-      ssl_sockname(Sock),
-      cats:unit(uri:authority(_, uri:new(ssl)))
+      inet:sockname(Sock),
+      cats:unit(uri:authority(_, uri:new(tcp)))
    ];
 sockname(#socket{sockname = Sockname}) ->
    {ok, Sockname}.
-
-ssl_sockname({tcp, Sock}) -> 
-   inet:sockname(Sock);
-ssl_sockname(Sock) -> 
-   ssl:sockname(Sock).
-
 
 %%
 %%
@@ -124,7 +111,7 @@ ssl_sockname(Sock) ->
 sockname(Uri, #socket{} = Socket) ->
    {ok, [identity ||
       uri:authority(Uri),
-      uri:authority(_, uri:new(ssl)),
+      uri:authority(_, uri:new(tcp)),
       cats:unit(Socket#socket{sockname = _})
    ]}.
 
@@ -135,12 +122,9 @@ sockname(Uri, #socket{} = Socket) ->
 
 connect(Uri, #socket{so = SOpt} = Socket) ->
    {Host, Port} = uri:authority(Uri),
-   Opts  = lists:keydelete(active, 1, so_tcp(SOpt)),
    [either ||
-      %% Note: ssl crashes with {option, {active, 1024}} if tcp is open with {active, 1024}
-      %%       this version uses once for flow control
-      gen_tcp:connect(scalar:c(Host), Port, [{active, once} | Opts], so_ttc(SOpt)),
-      cats:unit(Socket#socket{sock = {tcp, _}}),
+      gen_tcp:connect(scalar:c(Host), Port, so_tcp(SOpt), so_ttc(SOpt)),
+      cats:unit(Socket#socket{sock = _}),
       peername(Uri, _)
    ].
 
@@ -150,13 +134,12 @@ connect(Uri, #socket{so = SOpt} = Socket) ->
 
 listen(Uri, #socket{so = SOpt} = Socket) ->
    {_Host, Port} = uri:authority(Uri),
-   Ciphers = opts:val(ciphers, cipher_suites(), SOpt),
-   Opts    = lists:keydelete(active, 1, so_tcp(SOpt) ++ so_ssl(SOpt)),
+   Opts = lists:keydelete(active, 1, so_tcp(SOpt)),
    [either ||
-      ssl:listen(Port, [{active, false}, {reuseaddr, true} ,{ciphers, Ciphers} | Opts]),
+      gen_tcp:listen(Port, [{active, false}, {reuseaddr, true} | Opts]),
       cats:unit(Socket#socket{sock = _}),
       sockname(Uri, _),
-      peername(Uri, _)  %% @todo: ???
+      peername(Uri, _)  %% peername = sockname in-case of listen socket
    ].
 
 %%
@@ -165,30 +148,10 @@ listen(Uri, #socket{so = SOpt} = Socket) ->
 
 accept(Uri, #socket{sock = LSock} = Socket) ->
    [either ||
-      ssl:transport_accept(LSock),
+      gen_tcp:accept(LSock),
       cats:unit(Socket#socket{sock = _}),
       sockname(Uri, _),
       cats:unit(_#socket{peername = undefined})
-   ].
-
-%%
-%% execute handshake protocol
--spec handshake(#socket{}) -> {ok, #socket{}} | {error, _}.
-
-handshake(#socket{sock = {tcp, Sock}, so = SOpt} = Socket) ->
-   [either ||
-      peername(Socket),
-      % Server Name Indication requires a host name 
-      % cats:unit({server_name_indication, scalar:c(uri:host(_))}),
-      cats:unit({server_name_indication, disable}),
-      ssl:connect(Sock, [_ | so_ssl(SOpt)], so_ttc(SOpt)),
-      cats:unit(Socket#socket{sock = _})
-   ];
-
-handshake(#socket{sock = Sock} = Socket) ->
-   [either ||
-      ssl:ssl_accept(Sock),
-      cats:unit(Socket)
    ].
 
 
@@ -207,7 +170,7 @@ either_send(_Sock, []) ->
    ok;
 either_send(Sock, [Pckt|Tail]) ->
    [either ||
-      ssl:send(Sock, Pckt),
+      gen_tcp:send(Sock, Pckt),
       either_send(Sock, Tail)
    ].
 
@@ -218,7 +181,7 @@ either_send(Sock, [Pckt|Tail]) ->
 
 recv(#socket{sock = Sock} = Socket) ->
    [either ||
-      ssl:recv(Sock, 0),
+      gen_tcp:recv(Sock, 0),
       recv(Socket, _)
    ].
 
@@ -237,17 +200,3 @@ getstat(#socket{in = In, eg = Eg}, octet) ->
    {ok, pstream:octets(In) + pstream:octets(Eg)}.
 
 
-%%
-%% list of valid cipher suites 
--ifdef(CONFIG_NO_ECDH).
-cipher_suites() ->
-   lists:filter(
-      fun(Suite) ->
-         string:left(scalar:c(element(1, Suite)), 4) =/= "ecdh"
-      end, 
-      ssl:cipher_suites()
-   ).
--else.
-cipher_suites() ->
-   ssl:cipher_suites().
--endif.

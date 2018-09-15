@@ -51,7 +51,11 @@ handle({tcp, _, eof}, _Pipe, Sock) ->
 
 handle({tcp, _, {error, Reason}}, _Pipe, Sock) ->
    {stop, Reason, Sock};
-   
+
+handle({tcp, _, passive}, Pipe, Sock) ->
+   pipe:a(Pipe, {active, 1024}),
+   {next_state, handle, Sock};
+
 handle({tcp, _, Msg}, Pipe, Sock) ->
    pipe:a(Pipe, {packet, Msg}),
    {next_state, handle, Sock};

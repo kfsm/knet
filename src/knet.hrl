@@ -14,26 +14,29 @@
 %% default socket options
 %%
 %%-----------------------------------------------------------------------------
--define(SO_TCP,  
-   [
-      binary
-     ,{active,  1024}
-     ,{nodelay, true}
-   ]
-). 
-
--define(SO_UDP, 
-   [
-      binary
-     ,{active,  once}
-     ,{nodelay, true}
-   ]
+-define(SO_TCP, 
+   #{
+      active   => 1024
+   ,  nodelay  => true
+   ,  stream   => raw
+   ,  tracelog => undefined
+   }
 ).
 
--define(SO_HTTP, 
-	[
-		{'keep-alive', 60000}
-	]
+-define(SO_UDP, 
+   #{
+      active   => 1024
+   ,  nodelay  => true
+   ,  stream   => raw
+   ,  tracelog => undefined
+   }
+).
+
+-define(SO_HTTP,
+   #{
+      'keep-alive' => 60000
+   ,  tracelog => undefined
+   }
 ).
 
 -define(SO_SSH,
@@ -51,41 +54,41 @@
 -define(SO_TCP_ALLOWED, 
    [
       delay_send
-     ,nodelay 
-     ,dontroute 
-     ,keepalive 
-     ,packet 
-     ,packet_size 
-     ,recbuf 
-     ,send_timeout 
-     ,sndbuf 
-     ,binary 
-     % ,active 
-     ,backlog
-     ,priority
-     ,tos
-     ,inet
-     ,inet6
-     ,ip
+   ,  nodelay 
+   ,  dontroute 
+   ,  keepalive 
+   ,  packet 
+   ,  packet_size 
+   ,  recbuf 
+   ,  send_timeout 
+   ,  sndbuf 
+%  ,  binary  -- option is explicitly defined by knet_tcp
+%  ,  active  -- option is explicitly defined be knet_tcp 
+   ,  backlog
+   ,  priority
+   ,  tos
+   ,  inet
+   ,  inet6
+   ,  ip
    ]
 ).
 
 -define(SO_SSL_ALLOWED, 
-    [
+   [
       verify
-     ,verify_fun
-     ,fail_if_no_peer_cert
-     ,depth
-     ,cert
-     ,certfile
-     ,key
-     ,keyfile
-     ,password
-     ,cacert
-     ,cacertfile
-     ,reuse_session
-     ,reuse_sessions
-     % ,ciphers -- option is explicitly defined by knet_ssl
+   ,  verify_fun
+   ,  fail_if_no_peer_cert
+   ,  depth
+   ,  cert
+   ,  certfile
+   ,  key
+   ,  keyfile
+   ,  password
+   ,  cacert
+   ,  cacertfile
+   ,  reuse_session
+   ,  reuse_sessions
+%  ,  ciphers -- option is explicitly defined by knet_ssl
    ]
 ).
 
@@ -93,23 +96,23 @@
 -define(SO_UDP_ALLOWED, 
    [
       broadcast
-     ,delay_send
-     ,dontroute
-     ,read_packets 
-     ,recbuf 
-     ,send_timeout 
-     ,sndbuf 
-     ,binary 
-     ,active 
-     ,priority
-     ,tos
+   ,  delay_send
+   ,  dontroute
+   ,  read_packets 
+   ,  recbuf 
+   ,  send_timeout 
+   ,  sndbuf 
+%  ,  binary -- option is explicitly defined by knet_udp
+   ,  active 
+   ,  priority
+   ,  tos
    ]
 ).
 
 -define(SO_SSH_ALLOWED,
    [
       nodelay
-     ,system_dir
+   ,  system_dir
    ]
 ).
 

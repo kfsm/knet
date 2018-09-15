@@ -1,34 +1,24 @@
 {"1.1.0",
-[{<<"datum">>,{pkg,<<"datum">>,<<"4.2.0">>},0},
+[{<<"datum">>,{pkg,<<"datum">>,<<"4.3.6">>},0},
  {<<"feta">>,
   {git,"https://github.com/fogfish/feta",
-       {ref,"13a4e7d7b1aa7d857ecc218077afac785346aff9"}},
+       {ref,"c5d251b3f995b96afd5e8ec7da61516842aa658c"}},
   0},
- {<<"goldrush">>,{pkg,<<"goldrush">>,<<"0.1.9">>},1},
  {<<"htcodec">>,
   {git,"https://github.com/kfsm/htcodec",
-       {ref,"e3cd6f34869a1eee76677dfd16b04aace4dfd1b0"}},
+       {ref,"2c9293e659fc1b000038862201b3dbd90ae6e308"}},
   0},
  {<<"htstream">>,
   {git,"https://github.com/kfsm/htstream",
-       {ref,"a6f07398ea15775a16b77e584d799e8baab76843"}},
+       {ref,"3a393c3595232bf9cfe4d7ae0a4e09acadb1deda"}},
   0},
  {<<"jsx">>,{pkg,<<"jsx">>,<<"2.9.0">>},1},
- {<<"lager">>,{pkg,<<"lager">>,<<"3.5.1">>},0},
- {<<"meck">>,{pkg,<<"meck">>,<<"0.8.9">>},0},
- {<<"pipe">>,
-  {git,"https://github.com/kfsm/pipe",
-       {ref,"a091f919659818cfe37e2d8c5d44d73962322ab9"}},
-  0},
- {<<"pns">>,
-  {git,"https://github.com/fogfish/pns",
-       {ref,"92bfcf925064227dad32568ec84172e9321ca761"}},
-  0}]}.
+ {<<"meck">>,{pkg,<<"meck">>,<<"0.8.12">>},0},
+ {<<"pipes">>,{pkg,<<"pipes">>,<<"2.0.0">>},0}]}.
 [
 {pkg_hash,[
- {<<"datum">>, <<"13354CDA48E54E12A2160632EF7270452E3147C8F17A4AE4BED106E55F146478">>},
- {<<"goldrush">>, <<"F06E5D5F1277DA5C413E84D5A2924174182FB108DABB39D5EC548B27424CD106">>},
+ {<<"datum">>, <<"07AA802EF8C68FC990164BB398890FBE03FF4FA30570C37BF6D836A4FDF27D54">>},
  {<<"jsx">>, <<"D2F6E5F069C00266CAD52FB15D87C428579EA4D7D73A33669E12679E203329DD">>},
- {<<"lager">>, <<"63897A61AF646C59BB928FEE9756CE8BDD02D5A1A2F3551D4A5E38386C2CC071">>},
- {<<"meck">>, <<"64C5C0BD8BCCA3A180B44196265C8ED7594E16BCC845D0698EC6B4E577F48188">>}]}
+ {<<"meck">>, <<"1F7B1A9F5D12C511848FEC26BBEFD09A21E1432EADB8982D9A8ACEB9891A3CF2">>},
+ {<<"pipes">>, <<"A10DF54F1EC80EAA491EE7BD689C794886E6E668A9F05436514695E9CF5370AE">>}]}
 ].
