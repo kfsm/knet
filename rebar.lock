@@ -14,13 +14,11 @@
   0},
  {<<"jsx">>,{pkg,<<"jsx">>,<<"2.9.0">>},1},
  {<<"meck">>,{pkg,<<"meck">>,<<"0.8.12">>},0},
- {<<"pipe">>,
-  {git,"https://github.com/fogfish/pipe",
-       {ref,"37adab4c405e18ea125cf2ddf5f89e082d49f8ee"}},
-  0}]}.
+ {<<"pipes">>,{pkg,<<"pipes">>,<<"2.0.0">>},0}]}.
 [
 {pkg_hash,[
  {<<"datum">>, <<"07AA802EF8C68FC990164BB398890FBE03FF4FA30570C37BF6D836A4FDF27D54">>},
  {<<"jsx">>, <<"D2F6E5F069C00266CAD52FB15D87C428579EA4D7D73A33669E12679E203329DD">>},
- {<<"meck">>, <<"1F7B1A9F5D12C511848FEC26BBEFD09A21E1432EADB8982D9A8ACEB9891A3CF2">>}]}
+ {<<"meck">>, <<"1F7B1A9F5D12C511848FEC26BBEFD09A21E1432EADB8982D9A8ACEB9891A3CF2">>},
+ {<<"pipes">>, <<"A10DF54F1EC80EAA491EE7BD689C794886E6E668A9F05436514695E9CF5370AE">>}]}
 ].
