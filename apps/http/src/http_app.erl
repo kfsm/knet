@@ -29,10 +29,12 @@ start(_Type, _Args) ->
    knet:listen("http://*:8888", #{
       acceptor => http_protocol
    ,  backlog  => 1
+   ,  shutdown => true
    }),
    knet:listen("https://*:8443", #{
       acceptor => http_protocol
    ,  backlog  => 256
+   ,  shutdown => true
    ,  certfile => filename:join([code:priv_dir(http), "server.crt"])
    ,  keyfile  => filename:join([code:priv_dir(http), "server.key"])
    }),
