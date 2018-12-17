@@ -24,6 +24,6 @@ is_shutdown(Pid) ->
 recv_any() ->
    receive
       X -> X
-   after 10000 ->
+   after 20000 ->
       {error, timeout}
    end.
