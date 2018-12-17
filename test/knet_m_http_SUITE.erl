@@ -32,6 +32,7 @@
 ,  m_http_with_header/1
 ,  m_http_with_payload/1
 ,  m_http_with_dsl/1
+,  m_http_with_dsl_list_payload/1
 ]).
 
 %%%----------------------------------------------------------------------------   
@@ -149,7 +150,7 @@ m_http_with_payload(_) ->
 
    {ok, 
       [
-         {200, <<"OK">>, Head},
+         {200, <<"OK">>, _Head},
          ?ECHO
       ]
    } = m_http:once([m_http ||
@@ -179,6 +180,22 @@ m_http_with_dsl(_) ->
 
    knet_mock_tcp:free().
 
+%%
+%%
+m_http_with_dsl_list_payload(_) ->
+   knet_mock_tcp:init(),
+   knet_mock_tcp:with_packet(fun postman/1),
+
+   {ok, ?ECHO} = m_http:once([m_http ||
+      _ > "POST http://example.com:4213",
+      _ > "Content-Type: application/json",
+      _ > [?ECHO],
+
+      _ < 200,
+      _ < '*'
+   ]),
+
+   knet_mock_tcp:free().
 
 
 %%%----------------------------------------------------------------------------   
@@ -206,6 +223,12 @@ postman(?ECHO) ->
       <<"HTTP/1.1 200 OK\r\n">>, 
       <<"Content-Length: 10\r\n\r\n">>,
       ?ECHO
-   ];   
+   ];
+postman(<<"[\"0123456789\"]">>) ->
+   [
+      <<"HTTP/1.1 200 OK\r\n">>, 
+      <<"Content-Length: 10\r\n\r\n">>,
+      ?ECHO
+   ];
 postman(_) ->
    undefined.
