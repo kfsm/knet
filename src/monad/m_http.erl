@@ -94,15 +94,21 @@ putT(Expr)
          ];
 
       {header, Head, Value} ->
-         header(Head, hv(scalar:s(Value)))
+         header(Head, hv(scalar:s(Value)));
+
+      {payload, Value} ->
+         payload(Value)
    end;
 
 putT(X) ->
    payload(X).
 
 
+parse_either_request_or_header([H | _] = Expr)
+ when is_integer(H) ->
+   parse_either_request_or_header(Expr, []);
 parse_either_request_or_header(Expr) ->
-   parse_either_request_or_header(Expr, []).
+   {payload, Expr}.
 
 parse_either_request_or_header([$  | Tail], Acc) ->
    {request, lists:reverse(Acc), Tail};
