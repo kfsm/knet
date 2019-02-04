@@ -121,12 +121,23 @@ sockname(Uri, #socket{} = Socket) ->
 -spec connect(uri:uri(), #socket{}) -> {ok, #socket{}} | {error, _}.
 
 connect(Uri, #socket{so = SOpt} = Socket) ->
-   {Host, Port} = uri:authority(Uri),
+   {Host, Port} = authority(Uri, SOpt),
    [either ||
-      gen_tcp:connect(scalar:c(Host), Port, so_tcp(SOpt), so_ttc(SOpt)),
+      gen_tcp:connect(Host, Port, so_tcp(SOpt), so_ttc(SOpt)),
       cats:unit(Socket#socket{sock = _}),
       peername(Uri, _)
    ].
+
+authority(Uri, SOpt) ->
+   case uri:schema(Uri) of
+      unix ->
+         {{local, uri:path(Uri)}, 0};
+      [_, unix] ->
+         {{local, maps:get(unix, SOpt)}, 0};
+      _    ->
+         {Host, Port} = uri:authority(Uri),
+         {scalar:c(Host), Port}
+   end.
 
 %%
 %%

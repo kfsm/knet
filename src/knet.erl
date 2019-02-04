@@ -111,11 +111,15 @@ layers(Schema, Opts) ->
 
 stack(udp)   -> [knet_udp];
 stack(tcp)   -> [knet_tcp];
+stack(unix)  -> [knet_tcp];
 stack(ssl)   -> [knet_ssl];
 stack(http)  -> [knet_http, knet_tcp];
 stack(https) -> [knet_http, knet_ssl];
+stack([http, unix]) -> [knet_http, knet_tcp];
 stack(ws)    -> [knet_ws, knet_tcp];
-stack(wss)   -> [knet_ws, knet_ssl].
+stack(wss)   -> [knet_ws, knet_ssl];
+stack([ws, unix]) -> [knet_ws, knet_tcp].
+
 
 %%
 %% spawn new socket
